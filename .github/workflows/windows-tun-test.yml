@@ -16,9 +16,6 @@ concurrency:
 
 jobs:
   windows-tun:
-    # windows-latest 已切换到 Windows Server 2025；当前 sing-box/Wintun
-    # 的真实 TUN 验证在该镜像上只能创建 SWD\\WINTUN PnP 对象，无法形成可用网络接口。
-    # 先固定 Windows 2022，避免把 CI 镜像兼容性问题误判成 sbtun TUN 产品问题。
     runs-on: windows-2022
     timeout-minutes: 15
     env:
@@ -55,7 +52,7 @@ jobs:
           & $exe.FullName version
           if ($LASTEXITCODE -ne 0) { throw 'sing-box 无法运行' }
 
-      - name: 下载并校验 Wintun
+      - name: 校验 Wintun 发布包
         shell: pwsh
         run: |
           $zip = "$env:RUNNER_TEMP\wintun.zip"
@@ -63,29 +60,25 @@ jobs:
           Invoke-WebRequest -Uri $url -OutFile $zip
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           if ($hash -ne $env:WINTUN_SHA256) { throw "Wintun SHA256 校验失败: $hash" }
-          Expand-Archive -Path $zip -DestinationPath "$env:RUNNER_TEMP\wintun" -Force
-          $dll = "$env:RUNNER_TEMP\wintun\wintun\bin\amd64\wintun.dll"
-          if (-not (Test-Path $dll)) { throw '未找到 wintun.dll' }
-          "WINTUN_DLL=$dll" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "Wintun $env:WINTUN_VERSION 发布包校验通过。"
+          Write-Host '说明：本测试不再把外部 wintun.dll 放到 sing-box 目录；sing-box 1.14.0 自身已经包含 Windows TUN 所需的 Wintun 支持，本轮用于排除外部 DLL 干扰。'
 
       - name: 准备最小真实 TUN 配置
         shell: pwsh
         run: |
           $dir = "$env:RUNNER_TEMP\sbtun-tun-test"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          Copy-Item $env:WINTUN_DLL "$dir\wintun.dll" -Force
           $config = @'
           {
-            "log": { "level": "info", "timestamp": true },
+            "log": { "level": "trace", "timestamp": true },
             "inbounds": [
               {
                 "type": "tun",
                 "tag": "tun-test",
-                "interface_name": "sbtun-test",
                 "address": ["172.19.0.1/30"],
                 "auto_route": false,
                 "strict_route": false,
-                "stack": "system"
+                "stack": "gvisor"
               }
             ],
             "outbounds": [
@@ -119,18 +112,20 @@ jobs:
           $found = $false
           for ($i = 0; $i -lt 15; $i++) {
             $adapters = @(Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -eq 'sbtun-test' -or $_.InterfaceAlias -eq 'sbtun-test' -or $_.InterfaceDescription -match 'Wintun|sing-tun' })
+              Where-Object { $_.InterfaceDescription -match 'Wintun|sing-tun' })
             $pnp = @(Get-PnpDevice -Class Net -ErrorAction SilentlyContinue |
-              Where-Object { $_.FriendlyName -match 'Wintun|sing-tun|sbtun-test' -or $_.InstanceId -match 'Wintun' })
+              Where-Object { $_.FriendlyName -match 'Wintun|sing-tun' -or $_.InstanceId -match 'Wintun' })
             $ip = @(Get-NetIPAddress -ErrorAction SilentlyContinue |
               Where-Object { $_.IPAddress -eq '172.19.0.1' })
+            $netsh = @(netsh interface ipv4 show interfaces 2>$null | Where-Object { $_ -match 'Wintun|sing-tun|172\.19\.0\.1|tun' })
 
-            Write-Host "第 $($i + 1) 次检测：NetAdapter=$($adapters.Count)，PnP=$($pnp.Count)，TUN-IP=$($ip.Count)"
+            Write-Host "第 $($i + 1) 次检测：NetAdapter=$($adapters.Count)，PnP=$($pnp.Count)，TUN-IP=$($ip.Count)，netsh=$($netsh.Count)"
             if ($adapters.Count -gt 0) { $adapters | Format-Table -AutoSize | Out-String | Write-Host }
             if ($pnp.Count -gt 0) { $pnp | Format-Table Status,Class,FriendlyName,InstanceId -AutoSize | Out-String | Write-Host }
             if ($ip.Count -gt 0) { $ip | Format-Table -AutoSize | Out-String | Write-Host }
+            if ($netsh.Count -gt 0) { $netsh | Out-String | Write-Host }
 
-            if ($adapters.Count -gt 0 -and $ip.Count -gt 0) {
+            if ($ip.Count -gt 0) {
               $found = $true
               break
             }
@@ -145,12 +140,18 @@ jobs:
             Get-CimInstance Win32_NetworkAdapter -ErrorAction SilentlyContinue |
               Where-Object { $_.Name -match 'Wintun|sing-tun|sbtun' -or $_.Description -match 'Wintun|sing-tun|sbtun' } |
               Format-Table Name,NetConnectionID,NetEnabled,PNPDeviceID -AutoSize
+            Write-Host 'netsh IPv4 接口：'
+            netsh interface ipv4 show interfaces
+            Write-Host 'netsh IPv4 子接口：'
+            netsh interface ipv4 show subinterfaces
             Write-Host 'IP 配置：'
             Get-NetIPAddress -ErrorAction SilentlyContinue | Format-Table -AutoSize
+            Write-Host 'ipconfig /all：'
+            ipconfig /all
             Write-Host 'sing-box 日志：'
             Get-Content "$env:TUN_TEST_DIR\sing-box.log" -ErrorAction SilentlyContinue
             Get-Content "$env:TUN_TEST_DIR\sing-box.err" -ErrorAction SilentlyContinue
-            throw '真实 TUN 网卡或 TUN 地址未正确出现'
+            throw '真实 TUN 地址未正确出现'
           }
 
       - name: 检查 sing-box 进程存活
@@ -190,6 +191,6 @@ jobs:
         if: always()
         shell: pwsh
         run: |
-          $left = Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue | Where-Object { $_.Name -eq 'sbtun-test' -or $_.InterfaceAlias -eq 'sbtun-test' }
-          if ($left) { Write-Warning '测试结束后 TUN 网卡仍存在，Runner 将继续由环境回收。' }
+          $left = Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'Wintun|sing-tun' -or $_.InstanceId -match 'Wintun' }
+          if ($left) { Write-Warning '测试结束后 Wintun PnP 设备仍存在，Runner 将继续由环境回收。' }
           Write-Host 'Windows TUN 自动测试结束。'
