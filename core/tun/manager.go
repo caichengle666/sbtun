@@ -1,26 +1,30 @@
 package tun
 
-import "fmt"
+import "sync"
 
-// Manager 是 TUN 生命周期的抽象边界。
-// Windows 具体实现后续接入 sing-box TUN 与系统权限/网络恢复逻辑。
+// Manager 只记录 TUN 的已验证状态。
+// 真正的 TUN 创建/销毁由 sing-box TUN inbound 完成；这里绝不伪造“启动成功”。
 type Manager struct {
+	mu      sync.RWMutex
 	running bool
 }
 
 func NewManager() *Manager { return &Manager{} }
 
-func (m *Manager) Start() error {
-	if m.running {
-		return fmt.Errorf("TUN 已经在运行")
-	}
+func (m *Manager) MarkRunning() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.running = true
-	return nil
 }
 
-func (m *Manager) Stop() error {
+func (m *Manager) MarkStopped() {
+	m.mu.Lock()
+	defer m.mu.Unlock()
 	m.running = false
-	return nil
 }
 
-func (m *Manager) Running() bool { return m.running }
+func (m *Manager) Running() bool {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.running
+}
