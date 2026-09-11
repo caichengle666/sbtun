@@ -16,7 +16,10 @@ concurrency:
 
 jobs:
   windows-tun:
-    runs-on: windows-latest
+    # windows-latest 已切换到 Windows Server 2025；当前 sing-box/Wintun
+    # 的真实 TUN 验证在该镜像上只能创建 SWD\\WINTUN PnP 对象，无法形成可用网络接口。
+    # 先固定 Windows 2022，避免把 CI 镜像兼容性问题误判成 sbtun TUN 产品问题。
+    runs-on: windows-2022
     timeout-minutes: 15
     env:
       SING_BOX_VERSION: 1.14.0
