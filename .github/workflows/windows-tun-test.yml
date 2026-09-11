@@ -82,7 +82,7 @@ jobs:
                 "address": ["172.19.0.1/30"],
                 "auto_route": false,
                 "strict_route": false,
-                "stack": "gvisor"
+                "stack": "system"
               }
             ],
             "outbounds": [
@@ -110,7 +110,7 @@ jobs:
           }
           Write-Host "sing-box PID: $($proc.Id)"
 
-      - name: 检测真实 TUN 网卡
+      - name: 检测真实 TUN 网卡和地址
         shell: pwsh
         run: |
           $found = $false
@@ -123,19 +123,11 @@ jobs:
               Where-Object { $_.IPAddress -eq '172.19.0.1' })
 
             Write-Host "第 $($i + 1) 次检测：NetAdapter=$($adapters.Count)，PnP=$($pnp.Count)，TUN-IP=$($ip.Count)"
-            if ($adapters.Count -gt 0 -or $pnp.Count -gt 0 -or $ip.Count -gt 0) {
-              if ($adapters.Count -gt 0) {
-                Write-Host '检测到 Windows 网络适配器：'
-                $adapters | Format-Table -AutoSize | Out-String | Write-Host
-              }
-              if ($pnp.Count -gt 0) {
-                Write-Host '检测到 PnP 网络设备：'
-                $pnp | Format-Table Status,Class,FriendlyName,InstanceId -AutoSize | Out-String | Write-Host
-              }
-              if ($ip.Count -gt 0) {
-                Write-Host '检测到 TUN 地址：'
-                $ip | Format-Table -AutoSize | Out-String | Write-Host
-              }
+            if ($adapters.Count -gt 0) { $adapters | Format-Table -AutoSize | Out-String | Write-Host }
+            if ($pnp.Count -gt 0) { $pnp | Format-Table Status,Class,FriendlyName,InstanceId -AutoSize | Out-String | Write-Host }
+            if ($ip.Count -gt 0) { $ip | Format-Table -AutoSize | Out-String | Write-Host }
+
+            if ($adapters.Count -gt 0 -and $ip.Count -gt 0) {
               $found = $true
               break
             }
@@ -150,23 +142,13 @@ jobs:
             Get-CimInstance Win32_NetworkAdapter -ErrorAction SilentlyContinue |
               Where-Object { $_.Name -match 'Wintun|sing-tun|sbtun' -or $_.Description -match 'Wintun|sing-tun|sbtun' } |
               Format-Table Name,NetConnectionID,NetEnabled,PNPDeviceID -AutoSize
-            Write-Host 'ipconfig /all：'
-            ipconfig /all
+            Write-Host 'IP 配置：'
+            Get-NetIPAddress -ErrorAction SilentlyContinue | Format-Table -AutoSize
             Write-Host 'sing-box 日志：'
             Get-Content "$env:TUN_TEST_DIR\sing-box.log" -ErrorAction SilentlyContinue
             Get-Content "$env:TUN_TEST_DIR\sing-box.err" -ErrorAction SilentlyContinue
-            throw '真实 TUN 网卡未出现'
+            throw '真实 TUN 网卡或 TUN 地址未正确出现'
           }
-
-      - name: 检查 TUN 地址
-        shell: pwsh
-        run: |
-          $ip = Get-NetIPAddress -ErrorAction SilentlyContinue | Where-Object { $_.IPAddress -eq '172.19.0.1' }
-          if (-not $ip) {
-            Get-NetIPAddress -ErrorAction SilentlyContinue | Format-Table -AutoSize
-            throw 'TUN 地址 172.19.0.1 未出现'
-          }
-          $ip | Format-Table -AutoSize
 
       - name: 检查 sing-box 进程存活
         shell: pwsh
