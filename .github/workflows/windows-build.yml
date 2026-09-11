@@ -3,6 +3,7 @@ name: Windows 构建
 on:
   push:
     branches: [main]
+    tags: ['v*']
   workflow_dispatch:
   release:
     types: [published]
@@ -32,8 +33,6 @@ jobs:
         uses: actions/setup-node@v4
         with:
           node-version: '22.x'
-          cache: npm
-          cache-dependency-path: frontend/package.json
 
       - name: 安装 Wails
         shell: pwsh
@@ -87,6 +86,9 @@ jobs:
           foreach ($item in $items.GetEnumerator()) {
             Invoke-WebRequest -Uri $item.Value -OutFile (Join-Path $rules $item.Key)
           }
+          Get-ChildItem $rules | ForEach-Object {
+            (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + '  ' + $_.Name
+          } | Set-Content dist\rules\SHA256SUMS.txt -Encoding ASCII
 
       - name: 组装便携版目录
         shell: pwsh
@@ -98,17 +100,20 @@ jobs:
           Copy-Item "$env:RUNNER_TEMP\wintun\wintun\bin\amd64\wintun.dll" dist\sbtun\wintun.dll -Force
           Copy-Item dist\rules dist\sbtun\rules -Recurse -Force
           Copy-Item VERSION dist\sbtun\VERSION -Force
-          @'
+          @"
           sbtun Windows 便携版
 
           运行 sbtun.exe 即可启动桌面程序。
           TUN 模式需要管理员权限。
 
           内置组件：
-          - sing-box 1.14.0
-          - Wintun 0.14.1
+          - sing-box $env:SING_BOX_VERSION
+          - Wintun $env:WINTUN_VERSION
           - sing-box SRS 分流规则集
-          '@ | Set-Content dist\sbtun\README.txt -Encoding UTF8
+          "@ | Set-Content dist\sbtun\README.txt -Encoding UTF8
+          (Get-FileHash dist\sbtun\sbtun.exe -Algorithm SHA256).Hash.ToLower() + '  sbtun.exe' | Set-Content dist\sbtun\SHA256SUMS.txt -Encoding ASCII
+          (Get-FileHash dist\sbtun\sing-box.exe -Algorithm SHA256).Hash.ToLower() + '  sing-box.exe' | Add-Content dist\sbtun\SHA256SUMS.txt -Encoding ASCII
+          (Get-FileHash dist\sbtun\wintun.dll -Algorithm SHA256).Hash.ToLower() + '  wintun.dll' | Add-Content dist\sbtun\SHA256SUMS.txt -Encoding ASCII
 
       - name: 打包 ZIP
         shell: pwsh
@@ -121,9 +126,16 @@ jobs:
           path: dist/sbtun-windows-amd64.zip
           if-no-files-found: error
 
-      - name: 发布 GitHub Release
+      - name: 创建并上传 GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
         shell: pwsh
         env:
           GH_TOKEN: ${{ github.token }}
-        run: gh release upload "$env:GITHUB_REF_NAME" dist\sbtun-windows-amd64.zip --clobber
+        run: |
+          $tag = "$env:GITHUB_REF_NAME"
+          gh release view $tag *> $null
+          if ($LASTEXITCODE -ne 0) {
+            gh release create $tag dist\sbtun-windows-amd64.zip --title "sbtun $tag" --generate-notes
+          } else {
+            gh release upload $tag dist\sbtun-windows-amd64.zip --clobber
+          }
