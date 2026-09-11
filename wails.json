@@ -1,0 +1,20 @@
+{
+  "$schema": "https://wails.io/schemas/config.v2.json",
+  "name": "sbtun",
+  "outputfilename": "sbtun",
+  "frontend:dir": "frontend",
+  "frontend:install": "npm ci",
+  "frontend:build": "npm run build",
+  "frontend:dev": "npm run dev",
+  "assetdir": "frontend/dist",
+  "author": {
+    "name": "caichengle666",
+    "email": ""
+  },
+  "info": {
+    "companyName": "sbtun",
+    "productName": "sbtun",
+    "productVersion": "0.1.0",
+    "copyright": "Copyright © 2026 sbtun"
+  }
+}
