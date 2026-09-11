@@ -1,0 +1,27 @@
+package config
+
+import (
+	"path/filepath"
+	"testing"
+)
+
+func TestManagerSaveLoad(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	m := NewManager(path)
+	cfg := Default()
+	cfg.Nodes = []Node{{ID: "n1", Name: "测试节点", Protocol: "vless", Server: "example.com", Port: 443}}
+	cfg.CurrentNodeID = "n1"
+	if err := m.Save(cfg); err != nil { t.Fatal(err) }
+	got, err := m.Load()
+	if err != nil { t.Fatal(err) }
+	if got.CurrentNodeID != "n1" || len(got.Nodes) != 1 { t.Fatalf("配置加载结果异常: %+v", got) }
+}
+
+func TestValidateRejectsDuplicateID(t *testing.T) {
+	cfg := Default()
+	cfg.Nodes = []Node{
+		{ID: "same", Server: "a", Port: 443, Protocol: "vless"},
+		{ID: "same", Server: "b", Port: 443, Protocol: "vless"},
+	}
+	if err := Validate(cfg); err == nil { t.Fatal("重复节点 ID 应该校验失败") }
+}
