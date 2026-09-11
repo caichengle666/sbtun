@@ -27,11 +27,7 @@ func TestWatchSingBoxExitSynchronizesState(t *testing.T) {
 
 	// Exited 通道由 sing-box Manager 暴露；这里通过真实 Manager 的事件通道注入
 	// 一个异常退出事件，验证协调器不会继续保持 Running。
-	select {
-	case r.SingBox.Exited() <- singbox.ExitEvent{Err: os.ErrProcessDone}:
-	case <-time.After(time.Second):
-		t.Fatal("无法注入 sing-box 退出事件")
-	}
+	r.SingBox.InjectExit(os.ErrProcessDone)
 
 	deadline := time.After(time.Second)
 	for {
@@ -53,7 +49,6 @@ func TestWatchSingBoxExitSynchronizesState(t *testing.T) {
 		}
 	}
 
-	_ = done
 }
 
 func TestWatchSingBoxExitDoesNotOverrideStopped(t *testing.T) {
@@ -65,7 +60,7 @@ func TestWatchSingBoxExitDoesNotOverrideStopped(t *testing.T) {
 	r.State.Set(core.StateStopped, "")
 
 	go r.watchSingBoxExit()
-	r.SingBox.Exited() <- singbox.ExitEvent{Err: os.ErrProcessDone}
+	r.SingBox.InjectExit(os.ErrProcessDone)
 	time.Sleep(50 * time.Millisecond)
 
 	state, message := r.State.Get()

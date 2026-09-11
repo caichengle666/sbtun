@@ -17,21 +17,23 @@ func main() {
 	application := app.New()
 
 	err := wails.Run(&options.App{
-		Title:            "sbtun",
-		Width:            980,
-		Height:           680,
-		MinWidth:         760,
-		MinHeight:        520,
-		BackgroundColour: &options.RGBA{R: 13, G: 14, B: 21, A: 255},
+		Title:             "sbtun",
+		Width:             980,
+		Height:            680,
+		MinWidth:          760,
+		MinHeight:         520,
+		BackgroundColour:  &options.RGBA{R: 13, G: 14, B: 21, A: 255},
+		HideWindowOnClose: false,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},
-		OnStartup: application.Startup,
-		Bind:      []interface{}{application},
+		OnStartup:  application.Startup,
+		OnShutdown: application.Shutdown,
+		Bind:       []interface{}{application},
 		Windows: &windows.Options{
 			WebviewIsTransparent: false,
 			WindowIsTranslucent:  false,
-			DisableWindowIcon:   false,
+			DisableWindowIcon:    false,
 		},
 	})
 	if err != nil {

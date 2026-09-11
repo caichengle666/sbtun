@@ -1,36 +1,335 @@
+
 import './style.css'
 
 const app = document.querySelector('#app')
-app.innerHTML = `
-  <main class="shell">
-    <section class="card hero">
-      <div>
-        <div class="eyebrow">sbtun · 轻量级 TUN</div>
-        <h1>网络代理，一键开启</h1>
-        <p>节点、DNS、路由和 TUN 将由程序自动管理。</p>
-      </div>
-      <button id="tun" class="switch">开启 TUN</button>
-    </section>
-    <section class="grid">
-      <div class="card">
-        <h2>当前节点</h2>
-        <div class="empty">尚未导入节点</div>
-      </div>
-      <div class="card">
-        <h2>分流模式</h2>
-        <div class="mode">智能分流</div>
-        <small>国内直连，其余流量自动代理</small>
-      </div>
-    </section>
-    <section class="card status">
-      <span class="dot"></span>
-      <span id="status">TUN 未运行</span>
-    </section>
-  </main>
-`
 
-document.querySelector('#tun').addEventListener('click', (event) => {
-  const enabled = event.currentTarget.classList.toggle('active')
-  event.currentTarget.textContent = enabled ? '关闭 TUN' : '开启 TUN'
-  document.querySelector('#status').textContent = enabled ? '正在准备 TUN…' : 'TUN 未运行'
+const state = {
+  running: false,
+  statusState: 'stopped',
+  statusMessage: '',
+  config: null,
+  selectedNode: '',
+  rules: null,
+  traffic: { up: 0, down: 0 },
+}
+
+const MODES = [
+  { id: 'smart', name: '智能分流', desc: '国内直连，其余自动代理' },
+  { id: 'global', name: '全局代理', desc: '所有非本机流量走代理' },
+  { id: 'direct', name: '全局直连', desc: '所有流量直接连接' },
+  { id: 'custom', name: '自定义', desc: '按用户规则精细控制' },
+]
+
+app.innerHTML = render()
+
+function render() {
+  return `
+    <main class="shell">
+      <section class="card hero">
+        <div>
+          <div class="eyebrow">sbtun</div>
+          <h1>网络代理，一键开启</h1>
+          <p class="muted">节点、DNS、路由和 TUN 由程序自动管理。</p>
+        </div>
+        <button id="power" class="switch ${state.running ? 'on' : ''}">${state.running ? '关闭 TUN' : '开启 TUN'}</button>
+      </section>
+
+      <section class="card status">
+        <span class="dot ${dotClass(state.statusState)}"></span>
+        <span id="statusText">${statusLabel(state.statusState, state.statusMessage)}</span>
+        <span id="trafficText" class="muted">${formatTraffic(state.traffic)}</span>
+      </section>
+
+      <section class="grid">
+        <div class="card">
+          <h2>节点</h2>
+          <div id="nodePanel">${renderNodes()}</div>
+          <div style="margin-top:12px;border-top:1px solid #25284a;padding-top:12px">
+            <div class="row">
+              <input id="nodeUrl" class="input" placeholder="节点链接 vmess:// vless:// ss:// 或订阅" />
+              <button id="importBtn" class="btn btn-primary">导入</button>
+            </div>
+            <div class="row">
+              <input id="nodeName" class="input" placeholder="节点名称" style="flex:1" />
+            </div>
+            <div class="row">
+              <input id="nodeServer" class="input" placeholder="服务器地址" />
+              <input id="nodePort" class="input" placeholder="端口" style="max-width:80px" />
+            </div>
+            <div class="row">
+              <select id="nodeProtocol" class="select">
+                <option value="vless">VLESS</option>
+                <option value="vmess">VMess</option>
+                <option value="trojan">Trojan</option>
+                <option value="shadowsocks">Shadowsocks</option>
+                <option value="socks">SOCKS</option>
+                <option value="http">HTTP</option>
+                <option value="hysteria2">Hysteria2</option>
+              </select>
+              <input id="nodePassword" class="input" placeholder="UUID/密码" />
+            </div>
+            <div class="row">
+              <button id="addNodeBtn" class="btn btn-ghost">手动添加节点</button>
+            </div>
+          </div>
+        </div>
+
+        <div class="card">
+          <h2>路由模式</h2>
+          <div class="mode-grid">
+            ${MODES.map(m => `
+              <button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">
+                ${m.name}
+                <span class="mode-desc">${m.desc}</span>
+              </button>
+            `).join('')}
+          </div>
+        </div>
+      </section>
+
+      <section class="card">
+        <h2>智能分流规则集</h2>
+        <div id="rulesPanel">${renderRules()}</div>
+        <div style="margin-top:12px">
+          <button id="updateAllRules" class="btn btn-primary">更新全部规则集</button>
+        </div>
+      </section>
+    </main>
+    <div id="toast" class="toast" style="display:none"></div>
+  `
+}
+
+function dotClass(s) {
+  if (s === 'running') return 'running'
+  if (s === 'error') return 'error'
+  if (s === 'starting' || s === 'stopping') return 'starting'
+  return ''
+}
+
+function statusLabel(s, msg) {
+  const labels = { stopped: '已停止', starting: '正在启动...', running: '运行中', stopping: '正在停止...', error: '错误' }
+  if (s === 'error' && msg) return '错误: ' + msg
+  return labels[s] || s
+}
+
+function formatTraffic(t) {
+  const fmt = n => {
+    n = Number(n) || 0
+    if (n < 1024) return n + ' B'
+    if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+    if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB'
+    return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB'
+  }
+  return '实时 ↑ ' + fmt(t?.up) + '/s  ↓ ' + fmt(t?.down) + '/s'
+}
+
+function renderRules() {
+  if (!state.rules?.length) {
+    return '<div class="empty">正在加载规则集信息...</div>'
+  }
+  return state.rules.map(r => `
+    <div class="node-item">
+      <span class="badge ${r.exists ? 'proxy' : ''}">${r.exists ? '已下载' : '未下载'}</span>
+      <span style="flex:1">
+        <span class="node-name">${r.name}</span>
+        <span class="node-server">${r.exists ? r.size + ' bytes · ' + r.updated_at : '点击更新下载'}</span>
+      </span>
+      <span class="node-actions">
+        <button class="btn btn-ghost update-rule" data-id="${r.id}">更新</button>
+      </span>
+    </div>
+  `).join('')
+}
+
+function renderNodes() {
+  if (!state.config?.nodes?.length) {
+    return '<div class="empty">尚未导入节点</div>'
+  }
+  return `<ul class="node-list">${state.config.nodes.map(n => `
+    <li class="node-item ${state.config.current_node_id === n.id ? 'active' : ''}">
+      <span class="badge ${n.id.startsWith('direct') ? 'direct' : 'proxy'}">${n.protocol}</span>
+      <span style="flex:1">
+        <span class="node-name">${escapeHtml(n.name)}</span>
+        <span class="node-server">${escapeHtml(n.server)}:${n.port}</span>
+      </span>
+      <span class="node-actions">
+        <button class="btn btn-ghost select-node" data-id="${n.id}">${state.config.current_node_id === n.id ? '当前' : '选择'}</button>
+        <button class="btn btn-danger rm-node" data-id="${n.id}">删除</button>
+      </span>
+    </li>
+  `).join('')}</ul>`
+}
+
+function escapeHtml(s) {
+  return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+}
+
+function showToast(msg, type = '') {
+  const t = document.querySelector('#toast')
+  t.textContent = msg
+  t.className = 'toast ' + type
+  t.style.display = 'block'
+  clearTimeout(t._timer)
+  t._timer = setTimeout(() => { t.style.display = 'none' }, 3000)
+}
+
+async function refreshStatus() {
+  try {
+    const s = await window.go.app.App.GetStatus()
+    state.running = s.running
+    state.statusState = s.state
+    state.statusMessage = s.message
+    state.traffic = { up: s.upload_bytes || 0, down: s.download_bytes || 0 }
+    renderApp()
+  } catch (e) {
+    showToast('获取状态失败: ' + e.message, 'error')
+  }
+}
+
+async function refreshConfig() {
+  try {
+    state.config = await window.go.app.App.GetConfig()
+    renderApp()
+  } catch (e) {
+    showToast('获取配置失败: ' + e.message, 'error')
+  }
+}
+
+async function refreshRules() {
+  try {
+    state.rules = await window.go.app.App.ListRules()
+    renderApp()
+  } catch (e) {
+    console.error('list rules failed:', e)
+  }
+}
+
+function renderApp() {
+  app.innerHTML = render()
+  bindEvents()
+}
+
+function bindEvents() {
+  const power = document.querySelector('#power')
+  if (power) {
+    power.addEventListener('click', async () => {
+      power.disabled = true
+      try {
+        if (state.running) {
+          await window.go.app.App.Stop()
+        } else {
+          await window.go.app.App.Start()
+        }
+        await refreshStatus()
+      } catch (e) {
+        showToast(e.message || String(e), 'error')
+        await refreshStatus()
+      } finally {
+        power.disabled = false
+      }
+    })
+  }
+
+  document.querySelectorAll('.mode-btn').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const mode = btn.dataset.mode
+      try {
+        await window.go.app.App.SetRoutingMode(mode)
+        await refreshConfig()
+    await refreshRules()
+        showToast('路由模式已切换', 'success')
+      } catch (e) {
+        showToast(e.message, 'error')
+      }
+    })
+  })
+
+  document.querySelectorAll('.select-node').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        await window.go.app.App.SelectNode(btn.dataset.id)
+        await refreshConfig()
+    await refreshRules()
+        showToast('节点已选择', 'success')
+      } catch (e) {
+        showToast(e.message, 'error')
+      }
+    })
+  })
+
+  document.querySelectorAll('.rm-node').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      try {
+        await window.go.app.App.RemoveNode(btn.dataset.id)
+        await refreshConfig()
+    await refreshRules()
+        showToast('节点已删除', 'success')
+      } catch (e) {
+        showToast(e.message, 'error')
+      }
+    })
+  })
+
+  const importBtn = document.querySelector('#importBtn')
+  if (importBtn) {
+    importBtn.addEventListener('click', async () => {
+      const url = document.querySelector('#nodeUrl').value.trim()
+      if (!url) { showToast('请输入节点或订阅链接', 'error'); return }
+      importBtn.disabled = true
+      try {
+        const added = await window.go.app.App.ImportSubscription(url)
+        await refreshConfig()
+    await refreshRules()
+        showToast('导入成功，新增 ' + added + ' 个节点', 'success')
+        document.querySelector('#nodeUrl').value = ''
+      } catch (e) {
+        showToast(e.message, 'error')
+      } finally {
+        importBtn.disabled = false
+      }
+    })
+  }
+
+  const addNodeBtn = document.querySelector('#addNodeBtn')
+  if (addNodeBtn) {
+    addNodeBtn.addEventListener('click', async () => {
+      const name = document.querySelector('#nodeName').value.trim()
+      const server = document.querySelector('#nodeServer').value.trim()
+      const port = parseInt(document.querySelector('#nodePort').value.trim(), 10)
+      const protocol = document.querySelector('#nodeProtocol').value
+      const password = document.querySelector('#nodePassword').value.trim()
+      if (!name || !server || !port) {
+        showToast('请填写名称、服务器和端口', 'error'); return
+      }
+      try {
+        await window.go.app.App.AddNode({
+          id: 'manual-' + Date.now(),
+          name, server, port, protocol,
+          settings: password ? { uuid: password, password } : {},
+        })
+        await refreshConfig()
+    await refreshRules()
+        showToast('节点已添加', 'success')
+        document.querySelector('#nodeName').value = ''
+        document.querySelector('#nodeServer').value = ''
+        document.querySelector('#nodePort').value = ''
+        document.querySelector('#nodePassword').value = ''
+      } catch (e) {
+        showToast(e.message, 'error')
+      }
+    })
+  }
+}
+
+// Wails runtime ready
+window.addEventListener('DOMContentLoaded', async () => {
+  if (window.go?.app?.App) {
+    await refreshStatus()
+    await refreshConfig()
+    await refreshRules()
+    setInterval(refreshStatus, 2000)
+  } else {
+    showToast('Wails 运行时未加载', 'error')
+    renderApp()
+  }
 })

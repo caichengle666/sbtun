@@ -36,3 +36,8 @@ func (s *StateStore) Get() (RuntimeState, string) {
 	defer s.mu.RUnlock()
 	return s.state, s.err
 }
+
+func (s *StateStore) IsRunning() bool {
+	state, _ := s.Get()
+	return state == StateRunning
+}

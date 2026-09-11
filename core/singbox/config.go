@@ -3,6 +3,7 @@ package singbox
 import (
 	"encoding/json"
 	"fmt"
+	"path/filepath"
 	"strings"
 
 	"github.com/caichengle666/sbtun/config"
@@ -20,7 +21,7 @@ type RuntimeConfig struct {
 
 // BuildConfig 将用户配置转换为 sing-box 运行配置。
 // 四种模式在这里形成明确、可验证的路由闭环：智能分流、全局代理、全局直连、自定义规则。
-func BuildConfig(cfg config.Config) ([]byte, error) {
+func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 	if err := config.Validate(cfg); err != nil {
 		return nil, err
 	}
@@ -38,17 +39,19 @@ func BuildConfig(cfg config.Config) ([]byte, error) {
 
 	result := RuntimeConfig{
 		Schema: "https://sing-box.sagernet.org/schema.json",
-		Log: map[string]any{"level": "info", "timestamp": true},
-		DNS: buildDNS(cfg.DNSMode),
+		Log:    map[string]any{"level": "info", "timestamp": true},
+		DNS:    buildDNS(cfg.DNSMode, cfg.RoutingMode),
 		Inbounds: []map[string]any{{
 			"type": "tun", "tag": "tun-in",
-			"address": []string{"172.18.0.1/30"},
-			"auto_route": true, "strict_route": true, "stack": "system",
-			"dns_mode": "hijack", "dns_address": "172.18.0.2",
+			"address":    []string{"172.18.0.1/30"},
+			"auto_route": true, "strict_route": false, "stack": "system",
 		}},
-		Outbounds: []map[string]any{proxy, {"type": "direct", "tag": "direct"}, {"type": "block", "tag": "block"}},
-		Route: routeForMode(cfg.RoutingMode, cfg.CustomRules),
-		Experimental: map[string]any{"cache_file": map[string]any{"enabled": true}},
+		Outbounds: []map[string]any{proxy, {"type": "direct", "tag": "direct", "domain_resolver": "dns-local"}, {"type": "block", "tag": "block"}},
+		Route:     routeForMode(cfg.RoutingMode, cfg.CustomRules, exeDir),
+		Experimental: map[string]any{
+			"cache_file": map[string]any{"enabled": true},
+			"clash_api":  map[string]any{"external_controller": "127.0.0.1:9090"},
+		},
 	}
 	data, err := json.MarshalIndent(result, "", "  ")
 	if err != nil {
@@ -66,20 +69,36 @@ func findNode(nodes []config.Node, id string) (config.Node, bool) {
 	return config.Node{}, false
 }
 
-func buildDNS(mode config.DNSMode) map[string]any {
-	server := map[string]any{"type": "local", "tag": "dns-direct", "detour": "direct"}
-	if mode == config.DNSCustom {
-		server = map[string]any{
-			"type": "https", "tag": "dns-remote", "server": "1.1.1.1", "server_port": 443,
-			"path": "/dns-query", "detour": "proxy",
-		}
+func buildDNS(mode config.DNSMode, routeMode config.RoutingMode) map[string]any {
+	servers := []map[string]any{
+		{"type": "local", "tag": "dns-local", "detour": "direct"},
+		{
+			"type": "https", "tag": "dns-remote", "server": "cloudflare-dns.com", "server_port": 443,
+			"path": "/dns-query", "domain_resolver": "dns-local", "detour": "proxy",
+			"tls": map[string]any{"enabled": true, "server_name": "cloudflare-dns.com"},
+		},
 	}
-	return map[string]any{"servers": []map[string]any{server}, "final": server["tag"]}
+	final := "dns-remote"
+	if mode == config.DNSSystem || routeMode == config.RoutingDirect {
+		final = "dns-local"
+	}
+	rules := []map[string]any{}
+	if mode == config.DNSAuto && routeMode == config.RoutingSmart {
+		rules = append(rules,
+			map[string]any{"rule_set": []string{"geosite-cn"}, "server": "dns-local"},
+			map[string]any{"ip_is_private": true, "server": "dns-local"},
+		)
+	}
+	if mode == config.DNSCustom {
+		final = "dns-remote"
+	}
+	return map[string]any{"servers": servers, "rules": rules, "final": final, "strategy": "prefer_ipv4"}
 }
 
-func routeForMode(mode config.RoutingMode, custom []config.Rule) map[string]any {
+func routeForMode(mode config.RoutingMode, custom []config.Rule, exeDir string) map[string]any {
 	private := map[string]any{"ip_is_private": true, "outbound": "direct"}
-	base := []map[string]any{private}
+	dns := map[string]any{"protocol": "dns", "action": "hijack-dns"}
+	base := []map[string]any{dns, private}
 	final := "proxy"
 
 	switch mode {
@@ -108,15 +127,16 @@ func routeForMode(mode config.RoutingMode, custom []config.Rule) map[string]any 
 	ruleSets := []map[string]any{}
 	if mode == config.RoutingSmart {
 		ruleSets = []map[string]any{
-			{"type": "local", "tag": "geosite-cn", "format": "binary", "path": "rules/geosite-geolocation-cn.srs"},
-			{"type": "local", "tag": "geoip-cn", "format": "binary", "path": "rules/geoip-cn.srs"},
+			{"type": "local", "tag": "geosite-cn", "format": "binary", "path": filepath.Join(exeDir, "rules", "geosite-geolocation-cn.srs")},
+			{"type": "local", "tag": "geoip-cn", "format": "binary", "path": filepath.Join(exeDir, "rules", "geoip-cn.srs")},
 		}
 	}
 	return map[string]any{
-		"auto_detect_interface": true,
-		"rule_set": ruleSets,
-		"rules": base,
-		"final": final,
+		"auto_detect_interface":   true,
+		"default_domain_resolver": "dns-local",
+		"rule_set":                ruleSets,
+		"rules":                   base,
+		"final":                   final,
 	}
 }
 
@@ -161,16 +181,55 @@ func parsePort(s string) int {
 
 func buildOutbound(n config.Node) (map[string]any, error) {
 	protocol := strings.ToLower(strings.TrimSpace(n.Protocol))
-	out := map[string]any{"type": protocol, "tag": "proxy", "server": n.Server, "server_port": n.Port}
+	if protocol == "hysteria2" {
+		return buildHysteria2(map[string]any{"tag": "proxy"}, n), nil
+	}
+	out := map[string]any{"type": protocol, "tag": "proxy", "server": n.Server, "server_port": n.Port, "domain_resolver": "dns-local"}
 	for k, v := range n.Settings {
 		addSetting(out, k, v)
 	}
 	switch protocol {
-	case "vless", "vmess", "trojan", "shadowsocks", "socks", "http":
+	case "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria2":
 		return out, nil
 	default:
 		return nil, fmt.Errorf("暂不支持的节点协议: %s", n.Protocol)
 	}
+}
+
+func buildHysteria2(out map[string]any, n config.Node) map[string]any {
+	out["type"] = "hysteria2"
+	out["server"] = n.Server
+	out["server_port"] = n.Port
+	if n.Settings != nil {
+		if v := n.Settings["password"]; v != "" {
+			out["password"] = v
+		}
+		if v := n.Settings["up_mbps"]; v != "" {
+			out["up_mbps"] = parseBandwidth(v)
+		}
+		if v := n.Settings["down_mbps"]; v != "" {
+			out["down_mbps"] = parseBandwidth(v)
+		}
+	}
+	tls := map[string]any{"enabled": true}
+	if v := n.Settings["sni"]; v != "" {
+		tls["server_name"] = v
+	} else {
+		tls["server_name"] = n.Server
+	}
+	if v := n.Settings["insecure"]; strings.EqualFold(v, "true") || v == "1" {
+		tls["insecure"] = true
+	}
+	out["tls"] = tls
+	return out
+}
+
+func parseBandwidth(s string) int {
+	var n int
+	if _, err := fmt.Sscanf(strings.TrimSpace(s), "%d", &n); err == nil {
+		return n
+	}
+	return 0
 }
 
 func addSetting(out map[string]any, key, value string) {

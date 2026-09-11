@@ -1,0 +1,9 @@
+build/bin/
+cache.db
+dist/
+test_config.json
+frontend/node_modules/
+frontend/dist/
+frontend/wailsjs/
+frontend/package-lock.json
+frontend/package.json.md5
