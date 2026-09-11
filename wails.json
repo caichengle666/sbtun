@@ -3,7 +3,7 @@
   "name": "sbtun",
   "outputfilename": "sbtun",
   "frontend:dir": "frontend",
-  "frontend:install": "npm ci",
+  "frontend:install": "npm install",
   "frontend:build": "npm run build",
   "frontend:dev": "npm run dev",
   "assetdir": "frontend/dist",
@@ -14,7 +14,7 @@
   "info": {
     "companyName": "sbtun",
     "productName": "sbtun",
-    "productVersion": "0.1.0",
+    "productVersion": "0.1.1",
     "copyright": "Copyright © 2026 sbtun"
   }
 }
