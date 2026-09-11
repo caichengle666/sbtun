@@ -29,12 +29,13 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version: '1.23.x'
-          cache: true
+          cache: false
 
       - name: 安装 Node.js
         uses: actions/setup-node@v4
         with:
           node-version: '22.x'
+          cache: ''
 
       - name: 安装 Wails
         shell: pwsh
@@ -118,13 +119,6 @@ jobs:
       - name: 打包 ZIP
         shell: pwsh
         run: Compress-Archive -Path dist\sbtun\* -DestinationPath "dist\sbtun-windows-amd64.zip" -Force
-
-      - name: 上传构建产物
-        uses: actions/upload-artifact@v4
-        with:
-          name: sbtun-windows-amd64
-          path: dist/sbtun-windows-amd64.zip
-          if-no-files-found: error
 
       - name: 创建并上传 GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
