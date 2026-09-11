@@ -17,59 +17,55 @@ const (
 	ErrConfigInvalid      = "CONFIG_INVALID"
 	ErrSingBoxStartFailed = "SINGBOX_START_FAILED"
 	ErrTunNotReady        = "TUN_NOT_READY"
+	ErrSingBoxExited      = "SINGBOX_EXITED"
 )
 
-// RuntimeCoordinator 串起“生成配置 -> 校验 -> 启动 -> 验证 TUN -> 运行”的完整状态机。
-// readiness 检查失败时绝不会把状态标记为 Running。
 type RuntimeCoordinator struct {
-	State    *core.StateStore
-	SingBox  *singbox.Manager
-	TUN      *tun.Manager
-	WorkDir  string
-	Binary   string
+	State      *core.StateStore
+	SingBox    *singbox.Manager
+	TUN        *tun.Manager
+	WorkDir    string
+	Binary     string
 	ReadyCheck func(context.Context) error
 }
 
 func NewRuntimeCoordinator(workDir, binary string) *RuntimeCoordinator {
-	return &RuntimeCoordinator{
-		State: core.NewStateStore(),
-		SingBox: singbox.NewManager(),
-		TUN: tun.NewManager(),
-		WorkDir: workDir,
-		Binary: binary,
+	r := &RuntimeCoordinator{State: core.NewStateStore(), SingBox: singbox.NewManager(), TUN: tun.NewManager(), WorkDir: workDir, Binary: binary}
+	go r.watchSingBoxExit()
+	return r
+}
+
+// watchSingBoxExit 将 sing-box 的非预期退出同步到 sbtun 状态，避免界面继续显示“运行中”。
+func (r *RuntimeCoordinator) watchSingBoxExit() {
+	for event := range r.SingBox.Exited() {
+		state, _ := r.State.Get()
+		if state == core.StateStopping || state == core.StateStopped {
+			continue
+		}
+		r.TUN.MarkStopped()
+		message := ErrSingBoxExited
+		if event.Err != nil {
+			message += ": " + event.Err.Error()
+		}
+		r.State.Set(core.StateError, message)
 	}
 }
 
 func (r *RuntimeCoordinator) Start(ctx context.Context, cfg config.Config) error {
 	r.State.Set(core.StateStarting, "")
-	if err := config.Validate(cfg); err != nil {
-		return r.fail(ErrConfigInvalid, err)
-	}
+	if err := config.Validate(cfg); err != nil { return r.fail(ErrConfigInvalid, err) }
 	data, err := singbox.BuildConfig(cfg)
-	if err != nil {
-		return r.fail(ErrConfigInvalid, err)
-	}
-	if err := os.MkdirAll(r.WorkDir, 0o755); err != nil {
-		return r.fail(ErrConfigInvalid, fmt.Errorf("创建运行目录失败: %w", err))
-	}
+	if err != nil { return r.fail(ErrConfigInvalid, err) }
+	if err := os.MkdirAll(r.WorkDir, 0o755); err != nil { return r.fail(ErrConfigInvalid, fmt.Errorf("创建运行目录失败: %w", err)) }
 	configPath := filepath.Join(r.WorkDir, "runtime.json")
-	if err := atomicWrite(configPath, data); err != nil {
-		return r.fail(ErrConfigInvalid, err)
-	}
-	if err := singbox.ValidateConfig(ctx, r.Binary, configPath); err != nil {
-		return r.fail(ErrConfigInvalid, err)
-	}
-	if err := r.SingBox.Start(ctx, r.Binary, configPath); err != nil {
-		return r.fail(ErrSingBoxStartFailed, err)
-	}
+	if err := atomicWrite(configPath, data); err != nil { return r.fail(ErrConfigInvalid, err) }
+	if err := singbox.ValidateConfig(ctx, r.Binary, configPath); err != nil { return r.fail(ErrConfigInvalid, err) }
+	if err := r.SingBox.Start(ctx, r.Binary, configPath); err != nil { return r.fail(ErrSingBoxStartFailed, err) }
 	if r.ReadyCheck != nil {
 		readyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
 		err = r.ReadyCheck(readyCtx)
 		cancel()
-		if err != nil {
-			_ = r.SingBox.Stop()
-			return r.fail(ErrTunNotReady, err)
-		}
+		if err != nil { _ = r.SingBox.Stop(); return r.fail(ErrTunNotReady, err) }
 	}
 	r.TUN.MarkRunning()
 	r.State.Set(core.StateRunning, "")
@@ -80,10 +76,7 @@ func (r *RuntimeCoordinator) Stop() error {
 	r.State.Set(core.StateStopping, "")
 	err := r.SingBox.Stop()
 	r.TUN.MarkStopped()
-	if err != nil {
-		r.State.Set(core.StateError, err.Error())
-		return err
-	}
+	if err != nil { r.State.Set(core.StateError, err.Error()); return err }
 	r.State.Set(core.StateStopped, "")
 	return nil
 }
