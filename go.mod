@@ -1,3 +1,3 @@
 module github.com/caichengle666/sbtun
 
-go 1.24
+go 1.23
