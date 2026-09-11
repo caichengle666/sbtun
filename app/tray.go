@@ -38,17 +38,24 @@ func (a *App) StartTray() {
 			systray.SetTitle("sbtun")
 			systray.SetTooltip("sbtun")
 
-			showItem := systray.AddMenuItem("Show sbtun", "Show main window")
+			showItem := systray.AddMenuItem("显示主窗口", "显示 sbtun 主窗口")
 			systray.AddSeparator()
-			startItem := systray.AddMenuItem("Start TUN", "Start TUN proxy")
-			stopItem := systray.AddMenuItem("Stop TUN", "Stop TUN proxy")
+			startItem := systray.AddMenuItem("开启 TUN", "开启 TUN 代理")
+			stopItem := systray.AddMenuItem("关闭 TUN", "关闭 TUN 代理")
 			stopItem.Disable()
 			systray.AddSeparator()
-			nodeMenu := systray.AddMenuItem("Switch node", "Switch proxy node")
+			nodeMenu := systray.AddMenuItem("切换节点", "选择当前代理节点")
+			runningNodeItem := nodeMenu.AddSubMenuItem("当前运行节点：未启动", "当前实际运行的代理节点")
+			runningNodeItem.Disable()
+			nodeMenu.AddSeparator()
+			nodeItems := make(map[string]*systray.MenuItem)
+			nodeNames := make(map[string]string)
 			if cfg, err := a.manager.Load(); err == nil {
 				for _, node := range cfg.Nodes {
 					nodeID := node.ID
-					item := nodeMenu.AddSubMenuItem(node.Name, node.Server)
+					item := nodeMenu.AddSubMenuItemCheckbox(node.Name, node.Server, node.ID == cfg.CurrentNodeID)
+					nodeItems[nodeID] = item
+					nodeNames[nodeID] = node.Name
 					go func() {
 						for range item.ClickedCh {
 							a.runTrayAction(func() { _ = a.SelectNode(nodeID) })
@@ -57,7 +64,7 @@ func (a *App) StartTray() {
 				}
 			}
 			systray.AddSeparator()
-			quitItem := systray.AddMenuItem("Quit", "Quit sbtun")
+			quitItem := systray.AddMenuItem("退出", "退出 sbtun 并关闭代理")
 
 			// 菜单事件处理
 			go func() {
@@ -89,19 +96,33 @@ func (a *App) StartTray() {
 				for {
 					state, _ := a.runtime.State.Get()
 					up, down := a.refreshTraffic()
+					currentNodeID := ""
+					if cfg, err := a.manager.Load(); err == nil {
+						currentNodeID = cfg.CurrentNodeID
+						for nodeID, item := range nodeItems {
+							if nodeID == currentNodeID {
+								item.Check()
+							} else {
+								item.Uncheck()
+							}
+						}
+					}
 					switch state {
 					case core.StateRunning:
 						startItem.Disable()
 						stopItem.Enable()
-						systray.SetTooltip(fmt.Sprintf("sbtun - running | Up %s/s Down %s/s", formatTraffic(up), formatTraffic(down)))
+						runningNodeItem.SetTitle(fmt.Sprintf("当前运行节点：%s", trayNodeName(nodeNames, currentNodeID)))
+						systray.SetTooltip(fmt.Sprintf("sbtun | 运行中 | 上行 %s/s | 下行 %s/s", formatTraffic(up), formatTraffic(down)))
 					case core.StateError:
 						startItem.Enable()
 						stopItem.Disable()
-						systray.SetTooltip("sbtun - error")
+						runningNodeItem.SetTitle("当前运行节点：异常停止")
+						systray.SetTooltip("sbtun | 代理异常")
 					default:
 						startItem.Enable()
 						stopItem.Disable()
-						systray.SetTooltip("sbtun - stopped")
+						runningNodeItem.SetTitle("当前运行节点：未启动")
+						systray.SetTooltip("sbtun | 已停止")
 					}
 					select {
 					case <-time.After(time.Second):
@@ -110,6 +131,13 @@ func (a *App) StartTray() {
 			}()
 		}, func() {})
 	})
+}
+
+func trayNodeName(nodes map[string]string, id string) string {
+	if name := nodes[id]; name != "" {
+		return name
+	}
+	return "未选择"
 }
 
 func formatTraffic(value uint64) string {
