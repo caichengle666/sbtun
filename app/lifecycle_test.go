@@ -1,28 +1,77 @@
 package app
 
 import (
-	"context"
-	"errors"
+	"os"
 	"testing"
 	"time"
 
 	"github.com/caichengle666/sbtun/core"
+	"github.com/caichengle666/sbtun/core/singbox"
+	"github.com/caichengle666/sbtun/core/tun"
 )
 
-func TestRuntimeCoordinatorReadyCheckFailureStopsSingBox(t *testing.T) {
-	// 使用一个不会真正启动的协调器，通过注入可控的 ReadyCheck 验证失败路径。
-	// 该测试重点约束：就绪失败绝不能进入 Running，并且 TUN 必须回滚为 stopped。
+func TestWatchSingBoxExitSynchronizesState(t *testing.T) {
 	r := &RuntimeCoordinator{
-		State: core.NewStateStore(),
+		State:   core.NewStateStore(),
+		SingBox: singbox.NewManager(),
+		TUN:     tun.NewManager(),
 	}
-	if r.State == nil {
-		t.Fatal("state store 未初始化")
+	r.State.Set(core.StateRunning, "")
+	r.TUN.MarkRunning()
+
+	done := make(chan struct{})
+	go func() {
+		r.watchSingBoxExit()
+		close(done)
+	}()
+
+	// Exited 通道由 sing-box Manager 暴露；这里通过真实 Manager 的事件通道注入
+	// 一个异常退出事件，验证协调器不会继续保持 Running。
+	select {
+	case r.SingBox.Exited() <- singbox.ExitEvent{Err: os.ErrProcessDone}:
+	case <-time.After(time.Second):
+		t.Fatal("无法注入 sing-box 退出事件")
 	}
 
-	r.TUN = nil
-	_ = errors.New("placeholder")
-	_ = context.Background()
-	_ = time.Second
+	deadline := time.After(time.Second)
+	for {
+		state, message := r.State.Get()
+		if state == core.StateError {
+			if message == "" {
+				t.Fatal("异常退出后错误状态缺少错误信息")
+			}
+			if r.TUN.Running() {
+				t.Fatal("异常退出后 TUN 仍为运行状态")
+			}
+			return
+		}
+		select {
+		case <-deadline:
+			t.Fatalf("异常退出后状态未同步，当前状态=%s", state)
+		default:
+			time.Sleep(10 * time.Millisecond)
+		}
+	}
+
+	_ = done
+}
+
+func TestWatchSingBoxExitDoesNotOverrideStopped(t *testing.T) {
+	r := &RuntimeCoordinator{
+		State:   core.NewStateStore(),
+		SingBox: singbox.NewManager(),
+		TUN:     tun.NewManager(),
+	}
+	r.State.Set(core.StateStopped, "")
+
+	go r.watchSingBoxExit()
+	r.SingBox.Exited() <- singbox.ExitEvent{Err: os.ErrProcessDone}
+	time.Sleep(50 * time.Millisecond)
+
+	state, message := r.State.Get()
+	if state != core.StateStopped || message != "" {
+		t.Fatalf("主动停止状态被错误覆盖: state=%s message=%q", state, message)
+	}
 }
 
 func TestAtomicWriteRoundTrip(t *testing.T) {
@@ -31,5 +80,12 @@ func TestAtomicWriteRoundTrip(t *testing.T) {
 	want := []byte(`{"test":true}`)
 	if err := atomicWrite(path, want); err != nil {
 		t.Fatalf("atomicWrite 失败: %v", err)
+	}
+	got, err := os.ReadFile(path)
+	if err != nil {
+		t.Fatalf("读取 runtime.json 失败: %v", err)
+	}
+	if string(got) != string(want) {
+		t.Fatalf("内容不一致: got=%q want=%q", got, want)
 	}
 }
