@@ -4,10 +4,10 @@ package config
 type RoutingMode string
 
 const (
-	RoutingSmart    RoutingMode = "smart"
-	RoutingGlobal   RoutingMode = "global"
-	RoutingDirect   RoutingMode = "direct"
-	RoutingCustom   RoutingMode = "custom"
+	RoutingSmart  RoutingMode = "smart"
+	RoutingGlobal RoutingMode = "global"
+	RoutingDirect RoutingMode = "direct"
+	RoutingCustom RoutingMode = "custom"
 )
 
 // DNSMode 定义 DNS 管理策略。
@@ -19,6 +19,13 @@ const (
 	DNSCustom DNSMode = "custom"
 )
 
+// Rule 定义用户可理解的自定义分流规则。
+type Rule struct {
+	MatchType string `json:"match_type"`
+	Value     string `json:"value"`
+	Action    string `json:"action"`
+}
+
 // Config 是 sbtun 的用户配置模型。
 // 它刻意与 sing-box runtime JSON 解耦，普通用户无需接触 sing-box 配置。
 type Config struct {
@@ -28,6 +35,7 @@ type Config struct {
 	TUNEnabled    bool        `json:"tun_enabled"`
 	CurrentNodeID string      `json:"current_node_id"`
 	Nodes         []Node      `json:"nodes"`
+	CustomRules   []Rule      `json:"custom_rules,omitempty"`
 }
 
 // Node 是统一的用户节点模型。
@@ -46,5 +54,6 @@ func Default() Config {
 		RoutingMode: RoutingSmart,
 		DNSMode:     DNSAuto,
 		Nodes:       []Node{},
+		CustomRules: []Rule{},
 	}
 }
