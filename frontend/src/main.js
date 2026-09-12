@@ -12,6 +12,7 @@ const state = {
   manualProtocol: 'vless',
   manualForm: { url: '', name: '', server: '', port: '', password: '' },
   customRuleForm: { match_type: 'domain_suffix', value: '', action: 'proxy' },
+  customRuleImport: '',
   rules: null,
   ruleUpdating: '',
   allRulesUpdating: false,
@@ -112,6 +113,10 @@ function render() {
             <option value="block">阻断</option>
           </select>
           <button id="addRuleBtn" class="btn btn-primary">添加规则</button>
+        </div>
+        <div class="row">
+          <textarea id="ruleImport" class="input" rows="3" placeholder="粘贴规则链接、文件路径或文本；每行：proxy,domain_suffix,example.com"></textarea>
+          <button id="importRuleBtn" class="btn btn-ghost">导入规则</button>
         </div>
       </section>
       ` : ''}
@@ -331,6 +336,26 @@ function bindEvents() {
         renderApp()
         showToast('规则已添加', 'success')
       } catch (e) { showToast(e.message || String(e), 'error') }
+    })
+  }
+  const ruleImport = document.querySelector('#ruleImport')
+  if (ruleImport) {
+    ruleImport.value = state.customRuleImport
+    ruleImport.addEventListener('input', () => { state.customRuleImport = ruleImport.value })
+  }
+  const importRuleBtn = document.querySelector('#importRuleBtn')
+  if (importRuleBtn) {
+    importRuleBtn.addEventListener('click', async () => {
+      const source = state.customRuleImport.trim()
+      if (!source) { showToast('请输入规则链接、文件路径或文本', 'error'); return }
+      importRuleBtn.disabled = true
+      try {
+        const count = await window.go.app.App.ImportCustomRules(source)
+        state.customRuleImport = ''
+        await refreshConfig()
+        showToast('已导入 ' + count + ' 条规则', 'success')
+      } catch (e) { showToast(e.message || String(e), 'error') }
+      finally { importRuleBtn.disabled = false }
     })
   }
   document.querySelectorAll('.remove-custom-rule').forEach(btn => {
