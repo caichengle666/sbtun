@@ -65,7 +65,11 @@ func buildSelector(nodes []config.Node, currentID string) ([]map[string]any, err
 	for _, node := range nodes {
 		outbound, err := buildOutbound(node)
 		if err != nil {
-			return nil, err
+			if node.ID == currentID {
+				return nil, fmt.Errorf("当前节点配置无效: %w", err)
+			}
+			// 备用节点损坏时跳过，不能阻止当前健康节点启动。
+			continue
 		}
 		tag := nodeTag(node.ID)
 		outbound["tag"] = tag

@@ -283,6 +283,7 @@ func (a *App) selectNodeLocked(id string) error {
 	if !found {
 		return fmt.Errorf("节点不存在: %s", id)
 	}
+	previousID := cfg.CurrentNodeID
 	if a.runtime.State.IsRunning() {
 		if err := switchSelector(id); err != nil {
 			return err
@@ -290,6 +291,9 @@ func (a *App) selectNodeLocked(id string) error {
 	}
 	cfg.CurrentNodeID = id
 	if err := a.manager.Save(cfg); err != nil {
+		if a.runtime.State.IsRunning() && previousID != "" {
+			_ = switchSelector(previousID)
+		}
 		return err
 	}
 	return nil

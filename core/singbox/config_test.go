@@ -147,3 +147,23 @@ func TestTUNKeepsWindowsCompatibleRouteMode(t *testing.T) {
 		t.Fatalf("strict_route=%v want=false", runtime.Inbounds[0]["strict_route"])
 	}
 }
+
+func TestBuildConfigSkipsInvalidBackupNode(t *testing.T) {
+	cfg := testConfig(config.RoutingGlobal)
+	cfg.Nodes = append(cfg.Nodes, config.Node{ID: "bad", Name: "坏节点", Protocol: "unsupported", Server: "bad.example", Port: 443})
+	data, err := BuildConfig(cfg, "D:\\test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runtime RuntimeConfig
+	if err := json.Unmarshal(data, &runtime); err != nil {
+		t.Fatal(err)
+	}
+	selector := runtime.Outbounds[len(runtime.Outbounds)-3]
+	if selector["type"] != "selector" {
+		t.Fatalf("selector outbound missing: %+v", selector)
+	}
+	if len(selector["outbounds"].([]any)) != 1 {
+		t.Fatalf("invalid backup node was not skipped: %+v", selector["outbounds"])
+	}
+}
