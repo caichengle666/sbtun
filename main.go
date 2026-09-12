@@ -23,7 +23,7 @@ func main() {
 		MinWidth:          760,
 		MinHeight:         520,
 		BackgroundColour:  &options.RGBA{R: 13, G: 14, B: 21, A: 255},
-		HideWindowOnClose: false,
+		HideWindowOnClose: true,
 		AssetServer: &assetserver.Options{
 			Assets: assets,
 		},

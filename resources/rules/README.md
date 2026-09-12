@@ -1,6 +1,6 @@
 # 内置分流规则
 
-sbtun 使用 sing-box 1.14 的二进制规则集（`.srs`），不再使用已经废弃的旧 `geoip.db/geosite.db` 路线。
+sbtun 使用构建时获取的最新 sing-box 兼容二进制规则集（`.srs`），不再使用已经废弃的旧 `geoip.db/geosite.db` 路线。
 
 构建时由 GitHub Actions 下载并校验以下规则集：
 

@@ -1,7 +1,6 @@
 package app
 
 import (
-	"encoding/base64"
 	"fmt"
 	"os"
 	"path/filepath"
@@ -14,9 +13,6 @@ import (
 	"github.com/wailsapp/wails/v2/pkg/runtime"
 )
 
-// trayIconBase64 is a Windows ICO file encoded as base64.
-const trayIconBase64 = "AAABAAEAQEAAAAEAIABkAgAAFgAAAIlQTkcNChoKAAAADUlIRFIAAABAAAAAQAgGAAAAqmlx3gAAAitJREFUeJztk9tHpGEcx/s7IiKii4iIiOgiIiIiuliWZVli6SIiIiK6iIiIiC5iiaU222HVbplmmmqa6TCdptN0mg47NZ3zzRMva+dp5u2d932f9/k9ffjc/z5ffmlp77wjlMF0F0TfYDlDGTMwqujbDfMj0w2zFd2UlOEsD+xSdGscP7NnYbeim18YyfFCtELCR3O9cJq2xY/lzcGpWh4/nj8Pp2tZ/K+CBcii6fEThT7Ipmnxk0WLkNWU438X+yG7KQ3wp8QP2TUcP1UaABUNDTBdtgQqvjneVb4MauqOn6lYAVV1DeCuXAVVdQ3gqQqCqknjZ6uDoG7CAbw1a6BuwgHmP6yDuq/GL3zcgCpyB/B92oQqcgdY/LwFVeQO4P8SgipyBwjUhqCK3AGWv25DFbkDrNTtQBXj4lfrd6GacSMEG/agitwXWGvchypyB9hoCkMVuQNsNoehitwBtloOoIrcAUKth1BF7gDbbUdQRe4AjJ32Y1D31XjGXscJqJtwgP3OCKibcABGuCsCqiaNZxx0n4KqugY47DkDVXUNwDjqPQc1dcdrnPRdgIpvjmdE+v+CioYGYJx+i0J2DcczzgaikN2UBmCcf7+ErKYcr3ExeAXZNC1eIzocgyyaHq9xOXINp2tZvMbV+A2cquXxGrHJWzhN2+L/5XrqFqIVEv4/N6472K3o5jjuPPewS9GtSbmfe4DZim4yzIPvEUYVfbvlPAae6Ec6mWdkkz46WDxBsQAAAABJRU5ErkJggg=="
-
 var (
 	trayOnce     sync.Once
 	trayActionMu sync.Mutex
@@ -28,12 +24,9 @@ func (a *App) StartTray() {
 		defer goruntime.UnlockOSThread()
 		a.trayEnd = systray.Quit
 		systray.Run(func() {
-			icon, err := base64.StdEncoding.DecodeString(trayIconBase64)
-			if err == nil {
-				iconPath := filepath.Join(os.TempDir(), "sbtun-tray.ico")
-				if os.WriteFile(iconPath, icon, 0o600) == nil {
-					_ = systray.SetIconFromFilePath(iconPath)
-				}
+			iconPath := filepath.Join(filepath.Dir(a.binary), "resources", "sbtun.ico")
+			if _, err := os.Stat(iconPath); err == nil {
+				_ = systray.SetIconFromFilePath(iconPath)
 			}
 			systray.SetTitle("sbtun")
 			systray.SetTooltip("sbtun")

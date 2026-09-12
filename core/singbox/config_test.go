@@ -53,8 +53,15 @@ func TestSmartRoutingUsesChinaRuleSets(t *testing.T) {
 	if !ok {
 		t.Fatalf("rule_set type=%T", runtime.Route["rule_set"])
 	}
-	if len(sets) != 2 {
-		t.Fatalf("rule_set count=%d want=2", len(sets))
+	if len(sets) != 3 {
+		t.Fatalf("rule_set count=%d want=3", len(sets))
+	}
+	routeRules := runtime.Route["rules"].([]any)
+	if len(routeRules) != 5 {
+		t.Fatalf("smart route rules=%d want=5", len(routeRules))
+	}
+	if routeRules[4].(map[string]any)["outbound"] != "proxy" {
+		t.Fatalf("non-China rule outbound=%v want=proxy", routeRules[4].(map[string]any)["outbound"])
 	}
 }
 

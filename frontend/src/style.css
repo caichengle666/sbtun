@@ -63,8 +63,14 @@ body { margin: 0; min-height: 100vh; background: #0d0e15; }
   background: #0d0e15; border: 1px solid #25284a;
 }
 .node-item.active { border-color: #22d3ee; }
+.rule-item { min-height: 58px; }
+.rules-summary { color: #64748b; font-size: 11px; padding-top: 8px; }
 .node-name { flex: 1; font-size: 13px; }
 .node-server { color: #64748b; font-size: 11px; }
+.node-health { display: block; font-size: 11px; margin-top: 3px; }
+.health-check { display: block; }
+.health-check.ok { color: #86efac; }
+.health-check.bad { color: #fda4af; }
 .node-actions { display: flex; gap: 6px; }
 .badge {
   display: inline-block; padding: 2px 8px; border-radius: 6px;

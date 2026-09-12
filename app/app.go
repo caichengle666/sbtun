@@ -147,7 +147,37 @@ func (a *App) Start() error {
 	if a.binary == "" || !fileExists(a.binary) {
 		return errors.New("未找到 sing-box.exe，请把它放在 sbtun.exe 同目录下")
 	}
+	node, ok := currentNode(cfg)
+	if !ok {
+		return errors.New("尚未选择节点")
+	}
+	health := testNodeWithBinary(a.ctx, node, a.binary)
+	if !health.Healthy {
+		return fmt.Errorf("节点不可用: %s", health.Message)
+	}
 	return a.runtime.Start(a.ctx, cfg)
+}
+
+func (a *App) TestNode(id string) NodeHealthDTO {
+	cfg, err := a.manager.Load()
+	if err != nil {
+		return NodeHealthDTO{NodeID: id, Message: err.Error()}
+	}
+	for _, node := range cfg.Nodes {
+		if node.ID == id {
+			return testNodeWithBinary(a.ctx, node, a.binary)
+		}
+	}
+	return NodeHealthDTO{NodeID: id, Message: "节点不存在"}
+}
+
+func currentNode(cfg config.Config) (config.Node, bool) {
+	for _, node := range cfg.Nodes {
+		if node.ID == cfg.CurrentNodeID {
+			return node, true
+		}
+	}
+	return config.Node{}, false
 }
 
 func (a *App) Stop() error { return a.runtime.Stop() }

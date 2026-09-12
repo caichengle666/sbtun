@@ -109,10 +109,11 @@ func routeForMode(mode config.RoutingMode, custom []config.Rule, exeDir string) 
 		// 所有流量直连，不允许 proxy 成为默认兜底。
 		final = "direct"
 	case config.RoutingSmart:
-		// 中国域名/IP 直连；非中国流量代理。规则集由发布包中的 rules/ 提供。
+		// 中国域名/IP 直连；非中国域名和其余流量代理。
 		base = append(base,
 			map[string]any{"rule_set": []string{"geosite-cn"}, "outbound": "direct"},
 			map[string]any{"rule_set": []string{"geoip-cn"}, "outbound": "direct"},
+			map[string]any{"rule_set": []string{"geosite-non-cn"}, "outbound": "proxy"},
 		)
 		final = "proxy"
 	case config.RoutingCustom:
@@ -129,6 +130,7 @@ func routeForMode(mode config.RoutingMode, custom []config.Rule, exeDir string) 
 		ruleSets = []map[string]any{
 			{"type": "local", "tag": "geosite-cn", "format": "binary", "path": filepath.Join(exeDir, "rules", "geosite-geolocation-cn.srs")},
 			{"type": "local", "tag": "geoip-cn", "format": "binary", "path": filepath.Join(exeDir, "rules", "geoip-cn.srs")},
+			{"type": "local", "tag": "geosite-non-cn", "format": "binary", "path": filepath.Join(exeDir, "rules", "geosite-geolocation-!cn.srs")},
 		}
 	}
 	return map[string]any{

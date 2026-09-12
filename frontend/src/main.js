@@ -10,6 +10,9 @@ const state = {
   config: null,
   selectedNode: '',
   rules: null,
+  ruleUpdating: '',
+  allRulesUpdating: false,
+  nodeHealth: {},
   traffic: { up: 0, down: 0 },
 }
 
@@ -127,18 +130,26 @@ function renderRules() {
   if (!state.rules?.length) {
     return '<div class="empty">正在加载规则集信息...</div>'
   }
+  const downloaded = state.rules.filter(r => r.exists).length
   return state.rules.map(r => `
-    <div class="node-item">
+    <div class="node-item rule-item">
       <span class="badge ${r.exists ? 'proxy' : ''}">${r.exists ? '已下载' : '未下载'}</span>
       <span style="flex:1">
         <span class="node-name">${r.name}</span>
-        <span class="node-server">${r.exists ? r.size + ' bytes · ' + r.updated_at : '点击更新下载'}</span>
+        <span class="node-server">${r.exists ? formatRuleInfo(r) : '点击更新下载'}</span>
       </span>
       <span class="node-actions">
-        <button class="btn btn-ghost update-rule" data-id="${r.id}">更新</button>
+        <button class="btn btn-ghost update-rule" data-id="${r.id}" ${state.ruleUpdating || state.allRulesUpdating ? 'disabled' : ''}>${state.ruleUpdating === r.id ? '更新中...' : '更新'}</button>
       </span>
     </div>
-  `).join('')
+  `).join('') + `<div class="rules-summary">已准备 ${downloaded}/${state.rules.length} 个规则集 · 智能分流会使用全部规则集</div>`
+}
+
+function formatRuleInfo(rule) {
+  const size = Number(rule.size || 0).toLocaleString('zh-CN') + ' bytes'
+  const updated = rule.updated_at ? new Date(rule.updated_at).toLocaleString('zh-CN') : '时间未知'
+  const sha = rule.sha256 ? ' · SHA256 ' + rule.sha256 : ''
+  return size + ' · ' + updated + sha
 }
 
 function renderNodes() {
@@ -151,13 +162,29 @@ function renderNodes() {
       <span style="flex:1">
         <span class="node-name">${escapeHtml(n.name)}</span>
         <span class="node-server">${escapeHtml(n.server)}:${n.port}</span>
+        ${renderNodeHealth(n.id)}
       </span>
       <span class="node-actions">
         <button class="btn btn-ghost select-node" data-id="${n.id}">${state.config.current_node_id === n.id ? '当前' : '选择'}</button>
+        <button class="btn btn-ghost test-node" data-id="${n.id}">测试</button>
         <button class="btn btn-danger rm-node" data-id="${n.id}">删除</button>
       </span>
     </li>
   `).join('')}</ul>`
+}
+
+function renderNodeHealth(id) {
+  const health = state.nodeHealth[id]
+  if (!health) return ''
+  const check = (label, result) => {
+    const suffix = result?.latency_ms ? ` · ${result.latency_ms} ms` : ''
+    return `<span class="health-check ${result?.ok ? 'ok' : 'bad'}">${label}: ${escapeHtml(result?.message || '未测试')}${suffix}</span>`
+  }
+  return `<span class="node-health">
+    ${check('Ping', health.ping)}
+    ${check(health.transport === 'udp' ? 'UDP' : 'TCPing', health.port)}
+    ${check('URL', health.url)}
+  </span>`
 }
 
 function escapeHtml(s) {
@@ -269,6 +296,65 @@ function bindEvents() {
       }
     })
   })
+
+  document.querySelectorAll('.test-node').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true
+      try {
+        const result = await window.go.app.App.TestNode(btn.dataset.id)
+        state.nodeHealth[btn.dataset.id] = result
+        renderApp()
+        showToast(result.message, result.healthy ? 'success' : 'error')
+      } catch (e) {
+        showToast(e.message || String(e), 'error')
+      }
+    })
+  })
+
+  document.querySelectorAll('.update-rule').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      state.ruleUpdating = btn.dataset.id
+      renderApp()
+      try {
+        await window.go.app.App.UpdateRule(btn.dataset.id)
+        state.ruleUpdating = ''
+        await refreshRules()
+        showToast('规则集更新成功', 'success')
+      } catch (e) {
+        state.ruleUpdating = ''
+        showToast(e.message || String(e), 'error')
+        await refreshRules()
+      } finally {
+        state.ruleUpdating = ''
+      }
+    })
+  })
+
+  const updateAllRules = document.querySelector('#updateAllRules')
+  if (updateAllRules) {
+    updateAllRules.disabled = Boolean(state.ruleUpdating || state.allRulesUpdating)
+    updateAllRules.textContent = state.allRulesUpdating ? '更新中...' : '更新全部规则集'
+    updateAllRules.addEventListener('click', async () => {
+      state.allRulesUpdating = true
+      renderApp()
+      try {
+        const errors = await window.go.app.App.UpdateAllRules()
+        state.allRulesUpdating = false
+        await refreshRules()
+        if (errors?.length) {
+          showToast('部分规则集更新失败: ' + errors.join('; '), 'error')
+        } else {
+          showToast('全部规则集更新成功', 'success')
+        }
+      } catch (e) {
+        state.allRulesUpdating = false
+        showToast(e.message || String(e), 'error')
+        await refreshRules()
+      } finally {
+        state.allRulesUpdating = false
+      }
+    })
+  }
 
   const importBtn = document.querySelector('#importBtn')
   if (importBtn) {

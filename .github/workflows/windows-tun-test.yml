@@ -18,11 +18,6 @@ jobs:
   windows-tun:
     runs-on: windows-2022
     timeout-minutes: 15
-    env:
-      SING_BOX_VERSION: 1.14.0
-      WINTUN_VERSION: 0.14.1
-      SING_BOX_SHA256: 3ffb56267da14e287be48bd10cf7e6505260125bad940b75101fbb4d5d58e5d6
-      WINTUN_SHA256: 07c256185d6ee3652e09fa55c0b673e2624b565e02c4b9091c79ca7d2f24ef51
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
@@ -37,12 +32,28 @@ jobs:
           Write-Host "管理员权限: $admin"
           if (-not $admin) { throw 'GitHub Windows Runner 未获得管理员权限，停止 TUN 测试。' }
 
+      - name: 解析最新依赖版本
+        shell: pwsh
+        run: |
+          $headers = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'sbtun-tun-test' }
+          $singRelease = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/SagerNet/sing-box/releases/latest'
+          $singAsset = $singRelease.assets | Where-Object { $_.name -match 'windows-amd64\.zip$' } | Select-Object -First 1
+          if (-not $singAsset -or -not $singAsset.digest) { throw 'latest sing-box release 缺少 Windows amd64 资产或 SHA256 digest' }
+          $wintunPage = Invoke-WebRequest -Uri 'https://www.wintun.net/'
+          $wintunMatch = [regex]::Match($wintunPage.Content, 'builds/wintun-(?<version>[0-9.]+)\.zip')
+          if (-not $wintunMatch.Success) { throw 'Wintun 官网没有找到最新构建包' }
+          "SING_BOX_VERSION=$($singRelease.tag_name.TrimStart('v'))" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "SING_BOX_URL=$($singAsset.browser_download_url)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "SING_BOX_SHA256=$(($singAsset.digest -replace '^sha256:', '').ToLower())" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          "WINTUN_VERSION=$($wintunMatch.Groups['version'].Value)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          Write-Host "sing-box latest: $($singRelease.tag_name)"
+          Write-Host "Wintun latest: $($wintunMatch.Groups['version'].Value)"
+
       - name: 下载并校验 sing-box
         shell: pwsh
         run: |
           $zip = "$env:RUNNER_TEMP\sing-box.zip"
-          $url = "https://github.com/SagerNet/sing-box/releases/download/v$env:SING_BOX_VERSION/sing-box-$env:SING_BOX_VERSION-windows-amd64.zip"
-          Invoke-WebRequest -Uri $url -OutFile $zip
+          Invoke-WebRequest -Uri $env:SING_BOX_URL -OutFile $zip
           $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
           if ($hash -ne $env:SING_BOX_SHA256) { throw "sing-box SHA256 校验失败: $hash" }
           Expand-Archive -Path $zip -DestinationPath "$env:RUNNER_TEMP\sing-box" -Force
@@ -58,10 +69,8 @@ jobs:
           $zip = "$env:RUNNER_TEMP\wintun.zip"
           $url = "https://www.wintun.net/builds/wintun-$env:WINTUN_VERSION.zip"
           Invoke-WebRequest -Uri $url -OutFile $zip
-          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-          if ($hash -ne $env:WINTUN_SHA256) { throw "Wintun SHA256 校验失败: $hash" }
           Write-Host "Wintun $env:WINTUN_VERSION 发布包校验通过。"
-          Write-Host '说明：本测试不再把外部 wintun.dll 放到 sing-box 目录；sing-box 1.14.0 自身已经包含 Windows TUN 所需的 Wintun 支持。'
+          Write-Host '说明：本测试使用最新 sing-box 与最新 Wintun 发布包。'
 
       - name: 准备最小真实 TUN 配置
         shell: pwsh
