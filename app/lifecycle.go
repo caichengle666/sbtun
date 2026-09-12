@@ -45,6 +45,7 @@ func (r *RuntimeCoordinator) watchSingBoxExit() {
 		// Windows reports externally terminated GUI child processes as 0xffffffff.
 		// This is not a useful configuration error and should not poison the UI state.
 		if exitErr, ok := event.Err.(*exec.ExitError); ok && exitErr.ExitCode() == -1 {
+			r.cleanupTUN()
 			r.TUN.MarkStopped()
 			r.State.Set(core.StateStopped, "")
 			continue
@@ -53,6 +54,7 @@ func (r *RuntimeCoordinator) watchSingBoxExit() {
 		if state == core.StateStopping || state == core.StateStopped {
 			continue
 		}
+		r.cleanupTUN()
 		r.TUN.MarkStopped()
 		message := ErrSingBoxExited
 		if event.Err != nil {
@@ -94,6 +96,7 @@ func (r *RuntimeCoordinator) Start(ctx context.Context, cfg config.Config) error
 		cancel()
 		if err != nil {
 			_ = r.SingBox.Stop()
+			r.cleanupTUN()
 			return r.fail(ErrTunNotReady, err)
 		}
 	}
@@ -102,13 +105,17 @@ func (r *RuntimeCoordinator) Start(ctx context.Context, cfg config.Config) error
 	return nil
 }
 
+func (r *RuntimeCoordinator) cleanupTUN() {
+	if err := r.TUN.Cleanup(); err != nil {
+		fmt.Printf("清理 TUN 路由失败: %v\n", err)
+	}
+}
+
 func (r *RuntimeCoordinator) Stop() error {
 	r.State.Set(core.StateStopping, "")
 	err := r.SingBox.Stop()
 	// sing-box 被 kill 后不会自己清理路由和 TUN 网卡，必须由我们来做
-	if cleanupErr := r.TUN.Cleanup(); cleanupErr != nil {
-		fmt.Printf("清理 TUN 路由失败: %v\n", cleanupErr)
-	}
+	r.cleanupTUN()
 	r.TUN.MarkStopped()
 	if err != nil {
 		r.State.Set(core.StateError, err.Error())
