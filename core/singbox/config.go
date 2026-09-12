@@ -44,7 +44,7 @@ func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 		Inbounds: []map[string]any{{
 			"type": "tun", "tag": "tun-in",
 			"address":    []string{"172.18.0.1/30"},
-			"auto_route": true, "strict_route": false, "stack": "system", "sniff": true,
+			"auto_route": true, "strict_route": false, "stack": "system",
 		}},
 		Outbounds: append(proxy, map[string]any{"type": "direct", "tag": "direct", "domain_resolver": "dns-local"}, map[string]any{"type": "block", "tag": "block"}),
 		Route:     routeForMode(cfg.RoutingMode, cfg.CustomRules, exeDir),
@@ -118,13 +118,18 @@ func buildDNS(mode config.DNSMode, routeMode config.RoutingMode) map[string]any 
 	if mode == config.DNSCustom {
 		final = "dns-remote"
 	}
-	return map[string]any{"servers": servers, "rules": rules, "final": final, "strategy": "prefer_ipv4", "independent_cache": true}
+	return map[string]any{"servers": servers, "rules": rules, "final": final, "strategy": "prefer_ipv4"}
 }
 
 func routeForMode(mode config.RoutingMode, custom []config.Rule, exeDir string) map[string]any {
 	private := map[string]any{"ip_is_private": true, "outbound": "direct"}
 	dns := map[string]any{"protocol": "dns", "action": "hijack-dns"}
-	base := []map[string]any{dns, private}
+	base := []map[string]any{
+		{"inbound": []string{"tun-in"}, "action": "sniff", "timeout": "1s"},
+		{"inbound": []string{"tun-in"}, "action": "resolve", "strategy": "prefer_ipv4"},
+		dns,
+		private,
+	}
 	final := "proxy"
 
 	switch mode {

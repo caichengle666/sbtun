@@ -68,8 +68,11 @@ func TestSmartRoutingUsesChinaRuleSets(t *testing.T) {
 		t.Fatalf("rule_set count=%d want=2", len(sets))
 	}
 	routeRules := runtime.Route["rules"].([]any)
-	if len(routeRules) != 4 {
-		t.Fatalf("smart route rules=%d want=4", len(routeRules))
+	if len(routeRules) != 6 {
+		t.Fatalf("smart route rules=%d want=6", len(routeRules))
+	}
+	if routeRules[0].(map[string]any)["action"] != "sniff" || routeRules[1].(map[string]any)["action"] != "resolve" {
+		t.Fatalf("smart route metadata rules missing: %+v", routeRules[:2])
 	}
 }
 
@@ -85,8 +88,8 @@ func TestCustomRoutingRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	rules := runtime.Route["rules"].([]any)
-	if len(rules) != 4 {
-		t.Fatalf("rules count=%d want=4", len(rules))
+	if len(rules) != 6 {
+		t.Fatalf("rules count=%d want=6", len(rules))
 	}
 }
 
@@ -137,7 +140,7 @@ func TestSmartDNSUsesLocalRulesAndRemoteFallback(t *testing.T) {
 		t.Fatalf("dns rules=%d want=2", len(rules))
 	}
 	routeRules := runtime.Route["rules"].([]any)
-	if routeRules[0].(map[string]any)["action"] != "hijack-dns" {
+	if routeRules[2].(map[string]any)["action"] != "hijack-dns" {
 		t.Fatalf("dns interception rule missing")
 	}
 }
@@ -154,8 +157,9 @@ func TestTUNKeepsWindowsCompatibleRouteMode(t *testing.T) {
 	if runtime.Inbounds[0]["strict_route"] != false {
 		t.Fatalf("strict_route=%v want=false", runtime.Inbounds[0]["strict_route"])
 	}
-	if runtime.Inbounds[0]["sniff"] != true {
-		t.Fatalf("sniff=%v want=true", runtime.Inbounds[0]["sniff"])
+	rules := runtime.Route["rules"].([]any)
+	if rules[0].(map[string]any)["action"] != "sniff" || rules[1].(map[string]any)["action"] != "resolve" {
+		t.Fatalf("route sniff/resolve actions missing: %+v", rules[:2])
 	}
 }
 
