@@ -256,6 +256,9 @@ func buildHysteria2(out map[string]any, n config.Node) map[string]any {
 		if v := n.Settings["down_mbps"]; v != "" {
 			out["down_mbps"] = parseBandwidth(v)
 		}
+		if v := n.Settings["obfs_type"]; v != "" {
+			out["obfs"] = map[string]any{"type": v, "password": n.Settings["obfs_password"]}
+		}
 	}
 	tls := map[string]any{"enabled": true}
 	if v := n.Settings["sni"]; v != "" {
@@ -280,7 +283,7 @@ func parseBandwidth(s string) int {
 
 func addSetting(out map[string]any, key, value string) {
 	switch key {
-	case "uuid", "password", "method", "flow", "security", "network", "alter_id", "username":
+	case "uuid", "password", "method", "flow", "security", "network", "alter_id", "username", "version", "packet_encoding", "plugin", "plugin_opts":
 		out[key] = value
 	case "tls":
 		if strings.EqualFold(value, "true") {
@@ -295,5 +298,23 @@ func addSetting(out map[string]any, key, value string) {
 		tls["server_name"] = value
 	case "transport":
 		out["transport"] = map[string]any{"type": value}
+	case "transport_type":
+		out["transport"] = map[string]any{"type": value}
+	case "transport_path", "transport_host", "transport_service_name":
+		transport, _ := out["transport"].(map[string]any)
+		if transport == nil {
+			transport = map[string]any{}
+			out["transport"] = transport
+		}
+		transport[strings.TrimPrefix(key, "transport_")] = value
+	case "obfs_type":
+		out["obfs"] = map[string]any{"type": value}
+	case "obfs_password":
+		obfs, _ := out["obfs"].(map[string]any)
+		if obfs == nil {
+			obfs = map[string]any{}
+			out["obfs"] = obfs
+		}
+		obfs["password"] = value
 	}
 }

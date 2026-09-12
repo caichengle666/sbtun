@@ -10,7 +10,7 @@ const state = {
   config: null,
   selectedNode: '',
   manualProtocol: 'vless',
-  manualForm: { url: '', name: '', server: '', port: '', password: '' },
+  manualForm: { url: '', name: '', server: '', port: '', password: '', username: '', method: '', network: '', server_name: '', flow: '', alter_id: '', security: '', packet_encoding: '', transport_type: '', transport_path: '', transport_host: '', transport_service_name: '', plugin: '', plugin_opts: '', version: '5', up_mbps: '', down_mbps: '', obfs_type: '', obfs_password: '', insecure: false, tls: false },
   customRuleForm: { match_type: 'domain_suffix', value: '', action: 'proxy' },
   customRuleImport: '',
   rules: null,
@@ -19,6 +19,7 @@ const state = {
   nodeSwitching: false,
   nodeHealth: {},
   traffic: { up: 0, down: 0 },
+  view: 'overview',
 }
 
 const MODES = [
@@ -28,110 +29,214 @@ const MODES = [
   { id: 'custom', name: '自定义', desc: '按用户规则精细控制' },
 ]
 
+const NODE_FIELDS = {
+  vless: [
+    { key: 'password', label: 'UUID', type: 'password', placeholder: 'VLESS 用户 UUID', required: true },
+    { key: 'flow', label: 'Flow', type: 'select', options: [['', '无'], ['xtls-rprx-vision', 'xtls-rprx-vision']] },
+    { key: 'network', label: '网络', type: 'select', options: [['', 'TCP + UDP'], ['tcp', 'TCP'], ['udp', 'UDP']] },
+    { key: 'tls', label: 'TLS', type: 'checkbox' },
+    { key: 'server_name', label: 'TLS SNI', placeholder: '可选，默认服务器地址' },
+    { key: 'transport_type', label: '传输', type: 'select', options: [['', '无'], ['ws', 'WebSocket'], ['http', 'HTTP'], ['grpc', 'gRPC'], ['httpupgrade', 'HTTPUpgrade']] },
+  ],
+  vmess: [
+    { key: 'password', label: 'UUID', type: 'password', placeholder: 'VMess 用户 UUID', required: true },
+    { key: 'security', label: '加密', type: 'select', options: [['auto', 'auto'], ['none', 'none'], ['zero', 'zero'], ['aes-128-gcm', 'aes-128-gcm'], ['chacha20-poly1305', 'chacha20-poly1305']] },
+    { key: 'alter_id', label: 'Alter ID', type: 'number', placeholder: '默认 0' },
+    { key: 'network', label: '网络', type: 'select', options: [['', 'TCP + UDP'], ['tcp', 'TCP'], ['udp', 'UDP']] },
+    { key: 'tls', label: 'TLS', type: 'checkbox' },
+    { key: 'server_name', label: 'TLS SNI', placeholder: '可选，默认服务器地址' },
+    { key: 'transport_type', label: '传输', type: 'select', options: [['', '无'], ['ws', 'WebSocket'], ['http', 'HTTP'], ['grpc', 'gRPC'], ['httpupgrade', 'HTTPUpgrade']] },
+  ],
+  trojan: [
+    { key: 'password', label: '密码', type: 'password', placeholder: 'Trojan 密码', required: true },
+    { key: 'network', label: '网络', type: 'select', options: [['', 'TCP + UDP'], ['tcp', 'TCP'], ['udp', 'UDP']] },
+    { key: 'tls', label: 'TLS', type: 'checkbox' },
+    { key: 'server_name', label: 'TLS SNI', placeholder: '可选，默认服务器地址' },
+    { key: 'transport_type', label: '传输', type: 'select', options: [['', '无'], ['ws', 'WebSocket'], ['http', 'HTTP'], ['grpc', 'gRPC'], ['httpupgrade', 'HTTPUpgrade']] },
+  ],
+  shadowsocks: [
+    { key: 'method', label: '加密方式', placeholder: '例如 aes-128-gcm', required: true },
+    { key: 'password', label: '密码', type: 'password', placeholder: 'Shadowsocks 密码', required: true },
+    { key: 'network', label: '网络', type: 'select', options: [['', 'TCP + UDP'], ['tcp', 'TCP'], ['udp', 'UDP']] },
+    { key: 'plugin', label: '插件', placeholder: '可选：obfs-local / v2ray-plugin' },
+    { key: 'plugin_opts', label: '插件参数', placeholder: '可选' },
+  ],
+  socks: [
+    { key: 'version', label: '版本', type: 'select', options: [['5', 'SOCKS5'], ['4', 'SOCKS4'], ['4a', 'SOCKS4a']] },
+    { key: 'username', label: '用户名', placeholder: '可选' },
+    { key: 'password', label: '密码', type: 'password', placeholder: '可选' },
+    { key: 'network', label: '网络', type: 'select', options: [['', 'TCP + UDP'], ['tcp', 'TCP'], ['udp', 'UDP']] },
+  ],
+  http: [
+    { key: 'username', label: '用户名', placeholder: '可选' },
+    { key: 'password', label: '密码', type: 'password', placeholder: '可选' },
+    { key: 'tls', label: 'TLS', type: 'checkbox' },
+  ],
+  hysteria2: [
+    { key: 'password', label: '密码', type: 'password', placeholder: 'Hysteria2 密码', required: true },
+    { key: 'server_name', label: 'TLS SNI', placeholder: '可选，默认服务器地址' },
+    { key: 'up_mbps', label: '上行 Mbps', type: 'number', placeholder: '可选' },
+    { key: 'down_mbps', label: '下行 Mbps', type: 'number', placeholder: '可选' },
+    { key: 'obfs_type', label: 'Obfs 类型', type: 'select', options: [['', '关闭'], ['salamander', 'salamander']] },
+    { key: 'obfs_password', label: 'Obfs 密码', type: 'password', placeholder: '启用 obfs 时填写' },
+    { key: 'insecure', label: '跳过证书校验', type: 'checkbox' },
+  ],
+}
+
 app.innerHTML = render()
 
 function render() {
   return `
     <main class="shell">
-      <section class="card hero">
-        <div>
-          <div class="eyebrow">sbtun</div>
-          <h1>网络代理，一键开启</h1>
-          <p class="muted">节点、DNS、路由和 TUN 由程序自动管理。</p>
+      <aside class="sidebar">
+        <div class="brand"><span class="brand-mark">s</span><span>sbtun</span></div>
+        <nav class="nav-list">
+          ${[
+            ['overview', '概览'],
+            ['nodes', '节点'],
+            ['routing', '路由模式'],
+            ['rules', '规则集'],
+          ].map(([id, label]) => `<button class="nav-item ${state.view === id ? 'active' : ''}" data-view="${id}">${label}</button>`).join('')}
+        </nav>
+        <div class="sidebar-status">
+          <span class="dot ${dotClass(state.statusState)}"></span>
+          <span>${statusLabel(state.statusState, state.statusMessage)}</span>
         </div>
-        <button id="power" class="switch ${state.running ? 'on' : ''}">${state.running ? '关闭 TUN' : '开启 TUN'}</button>
-      </section>
+      </aside>
 
-      <section class="card status">
-        <span class="dot ${dotClass(state.statusState)}"></span>
-        <span id="statusText">${statusLabel(state.statusState, state.statusMessage)}</span>
-        <span id="trafficText" class="muted">${formatTraffic(state.traffic)}</span>
-      </section>
-
-      <section class="grid">
-        <div class="card">
-          <h2>节点</h2>
-          <div id="nodePanel">${renderNodes()}</div>
-          <div style="margin-top:12px;border-top:1px solid #25284a;padding-top:12px">
-            <div class="row">
-              <input id="nodeUrl" class="input" value="${escapeHtml(state.manualForm.url)}" placeholder="节点链接 vmess:// vless:// ss:// 或订阅" />
-              <button id="importBtn" class="btn btn-primary">导入</button>
-            </div>
-            <div class="row">
-              <input id="nodeName" class="input" value="${escapeHtml(state.manualForm.name)}" placeholder="节点名称" style="flex:1" />
-            </div>
-            <div class="row">
-              <input id="nodeServer" class="input" value="${escapeHtml(state.manualForm.server)}" placeholder="服务器地址" />
-              <input id="nodePort" class="input" value="${escapeHtml(state.manualForm.port)}" placeholder="端口" style="max-width:80px" />
-            </div>
-            <div class="row">
-              <select id="nodeProtocol" class="select">
-                <option value="vless" ${state.manualProtocol === 'vless' ? 'selected' : ''}>VLESS</option>
-                <option value="vmess" ${state.manualProtocol === 'vmess' ? 'selected' : ''}>VMess</option>
-                <option value="trojan" ${state.manualProtocol === 'trojan' ? 'selected' : ''}>Trojan</option>
-                <option value="shadowsocks" ${state.manualProtocol === 'shadowsocks' ? 'selected' : ''}>Shadowsocks</option>
-                <option value="socks" ${state.manualProtocol === 'socks' ? 'selected' : ''}>SOCKS</option>
-                <option value="http" ${state.manualProtocol === 'http' ? 'selected' : ''}>HTTP</option>
-                <option value="hysteria2" ${state.manualProtocol === 'hysteria2' ? 'selected' : ''}>Hysteria2</option>
-              </select>
-              <input id="nodePassword" class="input" value="${escapeHtml(state.manualForm.password)}" placeholder="UUID/密码" />
-            </div>
-            <div class="row">
-              <button id="addNodeBtn" class="btn btn-ghost">手动添加节点</button>
-            </div>
+      <section class="workspace">
+        <header class="topbar">
+          <div>
+            <div class="eyebrow">sbtun / ${viewLabel(state.view)}</div>
+            <h1>${viewTitle(state.view)}</h1>
           </div>
-        </div>
-
-        <div class="card">
-          <h2>路由模式</h2>
-          <div class="mode-grid">
-            ${MODES.map(m => `
-              <button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">
-                ${m.name}
-                <span class="mode-desc">${m.desc}</span>
-              </button>
-            `).join('')}
+          <div class="topbar-actions">
+            <span class="traffic-chip" id="trafficText">${formatTraffic(state.traffic)}</span>
+            <button id="power" class="switch ${state.running ? 'on' : ''}">${state.running ? '关闭 TUN' : '开启 TUN'}</button>
           </div>
-        </div>
-      </section>
-
-      ${state.config?.routing_mode === 'custom' ? `
-      <section class="card">
-        <h2>自定义分流规则</h2>
-        <div id="customRulesPanel">${renderCustomRules()}</div>
-        <div class="row">
-          <select id="ruleMatchType" class="select">
-            <option value="domain_suffix">域名后缀</option>
-            <option value="domain_keyword">域名关键词</option>
-            <option value="domain">完整域名</option>
-            <option value="ip_cidr">IP 网段</option>
-            <option value="port">端口</option>
-          </select>
-          <input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="例如 example.com 或 443" />
-          <select id="ruleAction" class="select">
-            <option value="proxy">代理</option>
-            <option value="direct">直连</option>
-            <option value="block">阻断</option>
-          </select>
-          <button id="addRuleBtn" class="btn btn-primary">添加规则</button>
-        </div>
-        <div class="row">
-          <textarea id="ruleImport" class="input" rows="3" placeholder="粘贴规则链接、文件路径或文本；每行：proxy,domain_suffix,example.com"></textarea>
-          <button id="importRuleBtn" class="btn btn-ghost">导入规则</button>
-        </div>
-      </section>
-      ` : ''}
-
-      <section class="card">
-        <h2>智能分流规则集</h2>
-        <div id="rulesPanel">${renderRules()}</div>
-        <div style="margin-top:12px">
-          <button id="updateAllRules" class="btn btn-primary">更新全部规则集</button>
-        </div>
+        </header>
+        <section class="status-bar">
+          <span class="dot ${dotClass(state.statusState)}"></span>
+          <strong id="statusText">${statusLabel(state.statusState, state.statusMessage)}</strong>
+          <span class="muted">节点、DNS、路由和 TUN 由程序自动管理。</span>
+        </section>
+        ${renderView()}
       </section>
     </main>
     <div id="toast" class="toast" style="display:none"></div>
   `
+}
+
+function viewLabel(view) {
+  return { overview: '概览', nodes: '节点', routing: '路由模式', rules: '规则集' }[view] || '概览'
+}
+
+function viewTitle(view) {
+  return { overview: '运行概览', nodes: '节点管理', routing: '路由模式', rules: '智能分流规则集' }[view] || '运行概览'
+}
+
+function renderView() {
+  if (state.view === 'nodes') return renderNodesPage()
+  if (state.view === 'routing') return renderRoutingPage()
+  if (state.view === 'rules') return renderRulesPage()
+  return renderOverview()
+}
+
+function renderOverview() {
+  const current = state.config?.nodes?.find(n => n.id === state.config.current_node_id)
+  return `<div class="overview-grid">
+    <section class="card focus-card">
+      <div class="section-kicker">当前节点</div>
+      <h2>${escapeHtml(current?.name || '未选择节点')}</h2>
+      <p class="muted">${current ? escapeHtml(current.server) + ':' + current.port : '请先在节点页导入或添加节点'}</p>
+      ${current ? renderNodeHealth(current.id) : '<div class="empty">暂无健康检测结果</div>'}
+      <button class="btn btn-primary" data-view="nodes">管理节点</button>
+    </section>
+    <section class="card metric-card">
+      <div class="section-kicker">连接状态</div>
+      <div class="metric-value"><span class="dot ${dotClass(state.statusState)}"></span>${statusLabel(state.statusState, state.statusMessage)}</div>
+      <span class="muted">${formatTraffic(state.traffic)}</span>
+    </section>
+    <section class="card overview-wide">
+      <div class="section-heading"><h2>路由模式</h2><button class="btn btn-ghost" data-view="routing">调整</button></div>
+      <div class="mode-summary"><strong>${MODES.find(m => m.id === state.config?.routing_mode)?.name || '未设置'}</strong><span class="muted">${MODES.find(m => m.id === state.config?.routing_mode)?.desc || ''}</span></div>
+    </section>
+  </div>`
+}
+
+function renderNodesPage() {
+  return `<section class="page-stack">
+      <div class="section-heading"><div><h2>节点列表</h2><p class="muted">选择可用节点，或运行三项健康测试。</p></div><button class="btn btn-primary" data-scroll="node-import">导入节点</button></div>
+    <div id="nodePanel">${renderNodes()}</div>
+    <div class="card node-import" id="node-import"><h2>添加节点</h2>
+      <div class="row"><input id="nodeUrl" class="input" value="${escapeHtml(state.manualForm.url)}" placeholder="节点链接 vmess:// vless:// ss:// 或订阅" /><button id="importBtn" class="btn btn-primary">导入</button></div>
+      <div class="row"><select id="nodeProtocol" class="select"><option value="vless" ${state.manualProtocol === 'vless' ? 'selected' : ''}>VLESS</option><option value="vmess" ${state.manualProtocol === 'vmess' ? 'selected' : ''}>VMess</option><option value="trojan" ${state.manualProtocol === 'trojan' ? 'selected' : ''}>Trojan</option><option value="shadowsocks" ${state.manualProtocol === 'shadowsocks' ? 'selected' : ''}>Shadowsocks</option><option value="socks" ${state.manualProtocol === 'socks' ? 'selected' : ''}>SOCKS</option><option value="http" ${state.manualProtocol === 'http' ? 'selected' : ''}>HTTP</option><option value="hysteria2" ${state.manualProtocol === 'hysteria2' ? 'selected' : ''}>Hysteria2</option></select></div>
+      <div class="row"><input id="nodeName" class="input" value="${escapeHtml(state.manualForm.name)}" placeholder="节点名称" /></div>
+      <div class="row"><input id="nodeServer" class="input" value="${escapeHtml(state.manualForm.server)}" placeholder="服务器地址" /><input id="nodePort" class="input port-input" value="${escapeHtml(state.manualForm.port)}" placeholder="端口" /></div>
+      ${renderManualAdvancedFields()}
+      <button id="addNodeBtn" class="btn btn-ghost">手动添加节点</button>
+    </div>
+  </section>`
+}
+
+function renderManualAdvancedFields() {
+  const fields = NODE_FIELDS[state.manualProtocol] || []
+  return `<div class="advanced-fields"><div class="field-hint">${state.manualProtocol.toUpperCase()} 专用参数</div>${fields.map(renderNodeField).join('')}${renderTransportFields()}</div>`
+}
+
+function renderTransportFields() {
+  const type = state.manualForm.transport_type
+  if (!type || state.manualProtocol === 'hysteria2') return ''
+  if (type === 'grpc') return `<div class="transport-fields"><div class="field-hint">gRPC 参数</div>${renderSettingInput('transport_service_name', 'Service Name', '可选')}</div>`
+  if (type === 'ws' || type === 'http' || type === 'httpupgrade') return `<div class="transport-fields"><div class="field-hint">${type === 'ws' ? 'WebSocket' : type === 'httpupgrade' ? 'HTTPUpgrade' : 'HTTP'} 参数</div>${renderSettingInput('transport_host', 'Host', '可选')}${renderSettingInput('transport_path', 'Path', '例如 /ws')}</div>`
+  return ''
+}
+
+function renderSettingInput(key, label, placeholder) {
+  return `<label class="setting-field"><span>${label}</span><input data-setting="${key}" class="input" value="${escapeHtml(state.manualForm[key] || '')}" placeholder="${placeholder}" /></label>`
+}
+
+function renderNodeField(field) {
+  const value = state.manualForm[field.key] ?? ''
+  if (field.type === 'checkbox') {
+    return `<label class="check-field"><input data-setting="${field.key}" type="checkbox" ${value ? 'checked' : ''} /> ${field.label}</label>`
+  }
+  if (field.type === 'select') {
+    return `<label class="setting-field"><span>${field.label}</span><select data-setting="${field.key}" class="select">${field.options.map(([key, label]) => `<option value="${key}" ${value === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label>`
+  }
+  return `<label class="setting-field"><span>${field.label}</span><input data-setting="${field.key}" class="input" type="${field.type || 'text'}" value="${escapeHtml(value)}" placeholder="${field.placeholder || ''}" ${field.required ? 'required' : ''} /></label>`
+}
+
+function buildManualSettings(protocol, password) {
+  const form = state.manualForm
+  const settings = {}
+  for (const field of NODE_FIELDS[protocol] || []) {
+    const value = form[field.key]
+    if (field.type === 'checkbox') {
+      if (value) settings[field.key] = 'true'
+    } else if (String(value || '').trim()) {
+      settings[field.key] = String(value).trim()
+    }
+  }
+  if (protocol === 'vless' || protocol === 'vmess') {
+    settings.uuid = settings.password || password
+    delete settings.password
+  }
+  if (protocol === 'hysteria2' && settings.server_name) {
+    settings.sni = settings.server_name
+    delete settings.server_name
+  }
+  return settings
+}
+
+function renderRoutingPage() {
+  return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div></section>
+    ${state.config?.routing_mode === 'custom' ? `<section class="card"><h2>自定义分流规则</h2><div id="customRulesPanel">${renderCustomRules()}</div><div class="row"><select id="ruleMatchType" class="select"><option value="domain_suffix">域名后缀</option><option value="domain_keyword">域名关键词</option><option value="domain">完整域名</option><option value="ip_cidr">IP 网段</option><option value="port">端口</option></select><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="例如 example.com 或 443" /><select id="ruleAction" class="select"><option value="proxy">代理</option><option value="direct">直连</option><option value="block">阻断</option></select><button id="addRuleBtn" class="btn btn-primary">添加规则</button></div><div class="row"><textarea id="ruleImport" class="input" rows="3" placeholder="粘贴规则链接、文件路径或文本；每行：proxy,domain_suffix,example.com"></textarea><button id="importRuleBtn" class="btn btn-ghost">导入规则</button></div></section>` : ''}
+  </div>`
+}
+
+function renderRulesPage() {
+  return `<div class="page-stack"><section class="card"><div id="rulesPanel">${renderRules()}</div><button id="updateAllRules" class="btn btn-primary">${state.allRulesUpdating ? '更新中...' : '更新全部规则集'}</button></section></div>`
 }
 
 function dotClass(s) {
@@ -301,15 +406,39 @@ function renderApp() {
 }
 
 function bindEvents() {
-  for (const id of ['nodeUrl', 'nodeName', 'nodeServer', 'nodePort', 'nodePassword']) {
+  document.querySelectorAll('[data-view]').forEach(item => {
+    item.addEventListener('click', () => {
+      state.view = item.dataset.view
+      renderApp()
+    })
+  })
+  document.querySelectorAll('[data-scroll]').forEach(item => {
+    item.addEventListener('click', () => document.querySelector('#' + item.dataset.scroll)?.scrollIntoView({ behavior: 'smooth' }))
+  })
+  for (const id of ['nodeUrl', 'nodeName', 'nodeServer', 'nodePort']) {
     const input = document.querySelector('#' + id)
     if (input) {
       input.addEventListener('input', () => {
-        const key = id === 'nodeUrl' ? 'url' : id === 'nodeName' ? 'name' : id === 'nodeServer' ? 'server' : id === 'nodePort' ? 'port' : 'password'
+        const key = id === 'nodeUrl' ? 'url' : id === 'nodeName' ? 'name' : id === 'nodeServer' ? 'server' : 'port'
         state.manualForm[key] = input.value
       })
+      if (input.type === 'checkbox') {
+        input.addEventListener('change', () => { state.manualForm[id === 'nodeTLS' ? 'tls' : 'insecure'] = input.checked })
+      }
     }
   }
+  for (const id of ['nodeTLS', 'nodeInsecure']) {
+    const input = document.querySelector('#' + id)
+    if (input) input.addEventListener('change', () => { state.manualForm[id === 'nodeTLS' ? 'tls' : 'insecure'] = input.checked })
+  }
+  document.querySelectorAll('[data-setting]').forEach(input => {
+    const update = () => {
+      state.manualForm[input.dataset.setting] = input.type === 'checkbox' ? input.checked : input.value
+      if (input.dataset.setting === 'transport_type' && input.type === 'select-one') renderApp()
+    }
+    input.addEventListener('input', update)
+    input.addEventListener('change', update)
+  })
   const ruleValue = document.querySelector('#ruleValue')
   if (ruleValue) {
     ruleValue.addEventListener('input', () => { state.customRuleForm.value = ruleValue.value })
@@ -525,6 +654,7 @@ function bindEvents() {
   if (nodeProtocol) {
     nodeProtocol.addEventListener('change', () => {
       state.manualProtocol = nodeProtocol.value
+      renderApp()
     })
   }
   if (addNodeBtn) {
@@ -541,7 +671,7 @@ function bindEvents() {
         await window.go.app.App.AddNode({
           id: 'manual-' + Date.now(),
           name, server, port, protocol,
-          settings: password ? { uuid: password, password } : {},
+          settings: buildManualSettings(protocol, password),
         })
         await refreshConfig()
     await refreshRules()
@@ -549,11 +679,12 @@ function bindEvents() {
         state.manualForm.name = ''
         state.manualForm.server = ''
         state.manualForm.port = ''
-        state.manualForm.password = ''
-        for (const id of ['nodeName', 'nodeServer', 'nodePort', 'nodePassword']) {
+        for (const key of Object.keys(state.manualForm)) state.manualForm[key] = typeof state.manualForm[key] === 'boolean' ? false : ''
+        for (const id of ['nodeName', 'nodeServer', 'nodePort']) {
           const input = document.querySelector('#' + id)
           if (input) input.value = ''
         }
+        renderApp()
       } catch (e) {
         showToast(e.message, 'error')
       }
