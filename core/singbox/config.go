@@ -80,7 +80,13 @@ func buildSelector(nodes []config.Node, currentID string) ([]map[string]any, err
 	if len(tags) == 0 {
 		return nil, fmt.Errorf("没有可用节点")
 	}
-	outbounds = append(outbounds, map[string]any{"type": "selector", "tag": "proxy", "outbounds": tags, "default": nodeTag(currentID)})
+	outbounds = append(outbounds, map[string]any{
+		"type":                        "selector",
+		"tag":                         "proxy",
+		"outbounds":                   tags,
+		"default":                     nodeTag(currentID),
+		"interrupt_exist_connections": true,
+	})
 	return outbounds, nil
 }
 

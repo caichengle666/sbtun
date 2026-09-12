@@ -328,11 +328,40 @@ func switchSelector(id string) error {
 	if err != nil {
 		return fmt.Errorf("无缝切换节点失败: %w", err)
 	}
-	defer resp.Body.Close()
+	resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return fmt.Errorf("无缝切换节点失败: HTTP %d", resp.StatusCode)
 	}
-	return nil
+	for attempt := 0; attempt < 8; attempt++ {
+		current, err := currentSelector()
+		if err == nil && current == "node-"+id {
+			return nil
+		}
+		time.Sleep(150 * time.Millisecond)
+	}
+	return fmt.Errorf("无缝切换节点未确认生效: node-%s", id)
+}
+
+func currentSelector() (string, error) {
+	client := &http.Client{Timeout: 500 * time.Millisecond}
+	resp, err := client.Get("http://127.0.0.1:9090/proxies/proxy")
+	if err != nil {
+		return "", err
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return "", fmt.Errorf("读取当前节点失败: HTTP %d", resp.StatusCode)
+	}
+	var result struct {
+		Now string `json:"now"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&result); err != nil {
+		return "", err
+	}
+	if result.Now == "" {
+		return "", errors.New("sing-box 未返回当前节点")
+	}
+	return result.Now, nil
 }
 
 func (a *App) monitorNodes() {

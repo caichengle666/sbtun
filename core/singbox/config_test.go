@@ -181,4 +181,7 @@ func TestBuildConfigSkipsInvalidBackupNode(t *testing.T) {
 	if len(selector["outbounds"].([]any)) != 1 {
 		t.Fatalf("invalid backup node was not skipped: %+v", selector["outbounds"])
 	}
+	if selector["interrupt_exist_connections"] != true {
+		t.Fatalf("selector must interrupt existing connections: %+v", selector)
+	}
 }
