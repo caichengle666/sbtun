@@ -99,14 +99,14 @@ func enableInterface(name string) error {
 // runWindows 执行 Windows 命令并隐藏窗口。
 func runWindows(args ...string) error {
 	cmd := exec.Command(args[0], args[1:]...)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	return cmd.Run()
 }
 
 // interfaceIndex 通过 netsh 获取网卡索引。
 func interfaceIndex(name string) (int, error) {
 	cmd := exec.Command("netsh", "interface", "ipv4", "show", "interfaces")
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	out, err := cmd.CombinedOutput()
 	if err != nil {
 		return 0, fmt.Errorf("读取网络接口失败: %w", err)

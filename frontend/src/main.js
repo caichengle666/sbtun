@@ -10,6 +10,7 @@ const state = {
   config: null,
   selectedNode: '',
   manualProtocol: 'vless',
+  manualForm: { url: '', name: '', server: '', port: '', password: '' },
   rules: null,
   ruleUpdating: '',
   allRulesUpdating: false,
@@ -50,15 +51,15 @@ function render() {
           <div id="nodePanel">${renderNodes()}</div>
           <div style="margin-top:12px;border-top:1px solid #25284a;padding-top:12px">
             <div class="row">
-              <input id="nodeUrl" class="input" placeholder="节点链接 vmess:// vless:// ss:// 或订阅" />
+              <input id="nodeUrl" class="input" value="${escapeHtml(state.manualForm.url)}" placeholder="节点链接 vmess:// vless:// ss:// 或订阅" />
               <button id="importBtn" class="btn btn-primary">导入</button>
             </div>
             <div class="row">
-              <input id="nodeName" class="input" placeholder="节点名称" style="flex:1" />
+              <input id="nodeName" class="input" value="${escapeHtml(state.manualForm.name)}" placeholder="节点名称" style="flex:1" />
             </div>
             <div class="row">
-              <input id="nodeServer" class="input" placeholder="服务器地址" />
-              <input id="nodePort" class="input" placeholder="端口" style="max-width:80px" />
+              <input id="nodeServer" class="input" value="${escapeHtml(state.manualForm.server)}" placeholder="服务器地址" />
+              <input id="nodePort" class="input" value="${escapeHtml(state.manualForm.port)}" placeholder="端口" style="max-width:80px" />
             </div>
             <div class="row">
               <select id="nodeProtocol" class="select">
@@ -70,7 +71,7 @@ function render() {
                 <option value="http" ${state.manualProtocol === 'http' ? 'selected' : ''}>HTTP</option>
                 <option value="hysteria2" ${state.manualProtocol === 'hysteria2' ? 'selected' : ''}>Hysteria2</option>
               </select>
-              <input id="nodePassword" class="input" placeholder="UUID/密码" />
+              <input id="nodePassword" class="input" value="${escapeHtml(state.manualForm.password)}" placeholder="UUID/密码" />
             </div>
             <div class="row">
               <button id="addNodeBtn" class="btn btn-ghost">手动添加节点</button>
@@ -208,10 +209,26 @@ async function refreshStatus() {
     state.statusState = s.state
     state.statusMessage = s.message
     state.traffic = { up: s.upload_bytes || 0, down: s.download_bytes || 0 }
-    renderApp()
+    updateStatusView()
   } catch (e) {
     showToast('获取状态失败: ' + e.message, 'error')
   }
+}
+
+function updateStatusView() {
+  const statusText = document.querySelector('#statusText')
+  const trafficText = document.querySelector('#trafficText')
+  const power = document.querySelector('#power')
+  const dot = document.querySelector('.status .dot')
+  if (!statusText || !trafficText || !power || !dot) {
+    renderApp()
+    return
+  }
+  statusText.textContent = statusLabel(state.statusState, state.statusMessage)
+  trafficText.textContent = formatTraffic(state.traffic)
+  power.textContent = state.running ? '关闭 TUN' : '开启 TUN'
+  power.className = 'switch ' + (state.running ? 'on' : '')
+  dot.className = 'dot ' + dotClass(state.statusState)
 }
 
 async function refreshConfig() {
@@ -238,6 +255,15 @@ function renderApp() {
 }
 
 function bindEvents() {
+  for (const id of ['nodeUrl', 'nodeName', 'nodeServer', 'nodePort', 'nodePassword']) {
+    const input = document.querySelector('#' + id)
+    if (input) {
+      input.addEventListener('input', () => {
+        const key = id === 'nodeUrl' ? 'url' : id === 'nodeName' ? 'name' : id === 'nodeServer' ? 'server' : id === 'nodePort' ? 'port' : 'password'
+        state.manualForm[key] = input.value
+      })
+    }
+  }
   const power = document.querySelector('#power')
   if (power) {
     power.addEventListener('click', async () => {
@@ -360,7 +386,7 @@ function bindEvents() {
   const importBtn = document.querySelector('#importBtn')
   if (importBtn) {
     importBtn.addEventListener('click', async () => {
-      const url = document.querySelector('#nodeUrl').value.trim()
+      const url = state.manualForm.url.trim()
       if (!url) { showToast('请输入节点或订阅链接', 'error'); return }
       importBtn.disabled = true
       try {
@@ -368,7 +394,9 @@ function bindEvents() {
         await refreshConfig()
     await refreshRules()
         showToast('导入成功，新增 ' + added + ' 个节点', 'success')
-        document.querySelector('#nodeUrl').value = ''
+        state.manualForm.url = ''
+        const urlInput = document.querySelector('#nodeUrl')
+        if (urlInput) urlInput.value = ''
       } catch (e) {
         showToast(e.message, 'error')
       } finally {
@@ -386,11 +414,11 @@ function bindEvents() {
   }
   if (addNodeBtn) {
     addNodeBtn.addEventListener('click', async () => {
-      const name = document.querySelector('#nodeName').value.trim()
-      const server = document.querySelector('#nodeServer').value.trim()
-      const port = parseInt(document.querySelector('#nodePort').value.trim(), 10)
+      const name = state.manualForm.name.trim()
+      const server = state.manualForm.server.trim()
+      const port = parseInt(state.manualForm.port.trim(), 10)
       const protocol = document.querySelector('#nodeProtocol').value
-      const password = document.querySelector('#nodePassword').value.trim()
+      const password = state.manualForm.password.trim()
       if (!name || !server || !port) {
         showToast('请填写名称、服务器和端口', 'error'); return
       }
@@ -403,10 +431,14 @@ function bindEvents() {
         await refreshConfig()
     await refreshRules()
         showToast('节点已添加', 'success')
-        document.querySelector('#nodeName').value = ''
-        document.querySelector('#nodeServer').value = ''
-        document.querySelector('#nodePort').value = ''
-        document.querySelector('#nodePassword').value = ''
+        state.manualForm.name = ''
+        state.manualForm.server = ''
+        state.manualForm.port = ''
+        state.manualForm.password = ''
+        for (const id of ['nodeName', 'nodeServer', 'nodePort', 'nodePassword']) {
+          const input = document.querySelector('#' + id)
+          if (input) input.value = ''
+        }
       } catch (e) {
         showToast(e.message, 'error')
       }

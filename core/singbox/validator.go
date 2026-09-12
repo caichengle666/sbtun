@@ -18,7 +18,7 @@ func ValidateConfig(ctx context.Context, binary, configPath string) error {
 		return fmt.Errorf("sing-box 配置路径不能为空")
 	}
 	cmd := exec.CommandContext(ctx, binary, "check", "-c", configPath)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true}
+	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 	var stderr bytes.Buffer
 	cmd.Stderr = &stderr
 	cmd.Stdout = &stderr
