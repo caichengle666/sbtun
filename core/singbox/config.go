@@ -28,11 +28,10 @@ func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 	if cfg.CurrentNodeID == "" {
 		return nil, fmt.Errorf("尚未选择节点")
 	}
-	node, ok := findNode(cfg.Nodes, cfg.CurrentNodeID)
-	if !ok {
+	if _, ok := findNode(cfg.Nodes, cfg.CurrentNodeID); !ok {
 		return nil, fmt.Errorf("当前节点不存在: %s", cfg.CurrentNodeID)
 	}
-	proxy, err := buildOutbound(node)
+	proxy, err := buildSelector(cfg.Nodes, cfg.CurrentNodeID)
 	if err != nil {
 		return nil, err
 	}
@@ -46,7 +45,7 @@ func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 			"address":    []string{"172.18.0.1/30"},
 			"auto_route": true, "strict_route": false, "stack": "system",
 		}},
-		Outbounds: []map[string]any{proxy, {"type": "direct", "tag": "direct", "domain_resolver": "dns-local"}, {"type": "block", "tag": "block"}},
+		Outbounds: append(proxy, map[string]any{"type": "direct", "tag": "direct", "domain_resolver": "dns-local"}, map[string]any{"type": "block", "tag": "block"}),
 		Route:     routeForMode(cfg.RoutingMode, cfg.CustomRules, exeDir),
 		Experimental: map[string]any{
 			"cache_file": map[string]any{"enabled": true},
@@ -59,6 +58,28 @@ func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 	}
 	return data, nil
 }
+
+func buildSelector(nodes []config.Node, currentID string) ([]map[string]any, error) {
+	tags := make([]string, 0, len(nodes))
+	outbounds := make([]map[string]any, 0, len(nodes)+1)
+	for _, node := range nodes {
+		outbound, err := buildOutbound(node)
+		if err != nil {
+			return nil, err
+		}
+		tag := nodeTag(node.ID)
+		outbound["tag"] = tag
+		outbounds = append(outbounds, outbound)
+		tags = append(tags, tag)
+	}
+	if len(tags) == 0 {
+		return nil, fmt.Errorf("没有可用节点")
+	}
+	outbounds = append(outbounds, map[string]any{"type": "selector", "tag": "proxy", "outbounds": tags, "default": nodeTag(currentID)})
+	return outbounds, nil
+}
+
+func nodeTag(id string) string { return "node-" + id }
 
 func findNode(nodes []config.Node, id string) (config.Node, bool) {
 	for _, n := range nodes {

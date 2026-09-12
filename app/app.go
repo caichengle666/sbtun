@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"encoding/json"
 	"errors"
@@ -197,6 +198,8 @@ func (a *App) Stop() error {
 func (a *App) stopLocked() error { return a.runtime.Stop() }
 
 func (a *App) AddNode(node config.Node) error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
 	cfg, err := a.manager.Load()
 	if err != nil {
 		return err
@@ -204,14 +207,25 @@ func (a *App) AddNode(node config.Node) error {
 	for i := range cfg.Nodes {
 		if cfg.Nodes[i].ID == node.ID {
 			cfg.Nodes[i] = node
-			return a.manager.Save(cfg)
+			if err := a.manager.Save(cfg); err != nil {
+				return err
+			}
+			return a.reloadIfRunningLocked()
 		}
 	}
 	cfg.Nodes = append(cfg.Nodes, node)
-	return a.manager.Save(cfg)
+	if cfg.CurrentNodeID == "" {
+		cfg.CurrentNodeID = node.ID
+	}
+	if err := a.manager.Save(cfg); err != nil {
+		return err
+	}
+	return a.reloadIfRunningLocked()
 }
 
 func (a *App) RemoveNode(id string) error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
 	cfg, err := a.manager.Load()
 	if err != nil {
 		return err
@@ -232,7 +246,20 @@ func (a *App) RemoveNode(id string) error {
 	if cfg.CurrentNodeID == id {
 		cfg.CurrentNodeID = ""
 	}
-	return a.manager.Save(cfg)
+	if err := a.manager.Save(cfg); err != nil {
+		return err
+	}
+	return a.reloadIfRunningLocked()
+}
+
+func (a *App) reloadIfRunningLocked() error {
+	if a.runtime == nil || !a.runtime.State.IsRunning() {
+		return nil
+	}
+	if err := a.stopLocked(); err != nil {
+		return err
+	}
+	return a.startLocked()
 }
 
 func (a *App) SelectNode(id string) error {
@@ -256,15 +283,36 @@ func (a *App) selectNodeLocked(id string) error {
 	if !found {
 		return fmt.Errorf("节点不存在: %s", id)
 	}
+	if a.runtime.State.IsRunning() {
+		if err := switchSelector(id); err != nil {
+			return err
+		}
+	}
 	cfg.CurrentNodeID = id
 	if err := a.manager.Save(cfg); err != nil {
 		return err
 	}
-	if a.runtime.State.IsRunning() {
-		if err := a.stopLocked(); err != nil {
-			return err
-		}
-		return a.startLocked()
+	return nil
+}
+
+func switchSelector(id string) error {
+	body, err := json.Marshal(map[string]string{"name": "node-" + id})
+	if err != nil {
+		return err
+	}
+	req, err := http.NewRequest(http.MethodPut, "http://127.0.0.1:9090/proxies/proxy", bytes.NewReader(body))
+	if err != nil {
+		return err
+	}
+	req.Header.Set("Content-Type", "application/json")
+	client := &http.Client{Timeout: 5 * time.Second}
+	resp, err := client.Do(req)
+	if err != nil {
+		return fmt.Errorf("无缝切换节点失败: %w", err)
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
+		return fmt.Errorf("无缝切换节点失败: HTTP %d", resp.StatusCode)
 	}
 	return nil
 }
@@ -333,6 +381,8 @@ func (a *App) SetRoutingMode(mode config.RoutingMode) error {
 }
 
 func (a *App) ImportSubscription(link string) (int, error) {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
 	nodes, err := parseSubscription(link)
 	if err != nil {
 		return 0, err
@@ -362,6 +412,9 @@ func (a *App) ImportSubscription(link string) (int, error) {
 	}
 	if err := a.manager.Save(cfg); err != nil {
 		return 0, err
+	}
+	if err := a.reloadIfRunningLocked(); err != nil {
+		return added, err
 	}
 	return added, nil
 }
