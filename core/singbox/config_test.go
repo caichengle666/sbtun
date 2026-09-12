@@ -2,6 +2,8 @@ package singbox
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"testing"
 
 	"github.com/caichengle666/sbtun/config"
@@ -41,7 +43,16 @@ func TestRoutingModes(t *testing.T) {
 }
 
 func TestSmartRoutingUsesChinaRuleSets(t *testing.T) {
-	data, err := BuildConfig(testConfig(config.RoutingSmart), "D:\\test")
+	exeDir := t.TempDir()
+	if err := os.MkdirAll(filepath.Join(exeDir, "rules"), 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"geosite-geolocation-cn.srs", "geoip-cn.srs"} {
+		if err := os.WriteFile(filepath.Join(exeDir, "rules", name), []byte("test"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	data, err := BuildConfig(testConfig(config.RoutingSmart), exeDir)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -53,15 +64,12 @@ func TestSmartRoutingUsesChinaRuleSets(t *testing.T) {
 	if !ok {
 		t.Fatalf("rule_set type=%T", runtime.Route["rule_set"])
 	}
-	if len(sets) != 3 {
-		t.Fatalf("rule_set count=%d want=3", len(sets))
+	if len(sets) != 2 {
+		t.Fatalf("rule_set count=%d want=2", len(sets))
 	}
 	routeRules := runtime.Route["rules"].([]any)
-	if len(routeRules) != 5 {
-		t.Fatalf("smart route rules=%d want=5", len(routeRules))
-	}
-	if routeRules[4].(map[string]any)["outbound"] != "proxy" {
-		t.Fatalf("non-China rule outbound=%v want=proxy", routeRules[4].(map[string]any)["outbound"])
+	if len(routeRules) != 4 {
+		t.Fatalf("smart route rules=%d want=4", len(routeRules))
 	}
 }
 
@@ -145,6 +153,9 @@ func TestTUNKeepsWindowsCompatibleRouteMode(t *testing.T) {
 	}
 	if runtime.Inbounds[0]["strict_route"] != false {
 		t.Fatalf("strict_route=%v want=false", runtime.Inbounds[0]["strict_route"])
+	}
+	if runtime.Inbounds[0]["sniff"] != true {
+		t.Fatalf("sniff=%v want=true", runtime.Inbounds[0]["sniff"])
 	}
 }
 

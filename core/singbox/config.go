@@ -3,6 +3,7 @@ package singbox
 import (
 	"encoding/json"
 	"fmt"
+	"os"
 	"path/filepath"
 	"strings"
 
@@ -43,7 +44,7 @@ func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 		Inbounds: []map[string]any{{
 			"type": "tun", "tag": "tun-in",
 			"address":    []string{"172.18.0.1/30"},
-			"auto_route": true, "strict_route": false, "stack": "system",
+			"auto_route": true, "strict_route": false, "stack": "system", "sniff": true,
 		}},
 		Outbounds: append(proxy, map[string]any{"type": "direct", "tag": "direct", "domain_resolver": "dns-local"}, map[string]any{"type": "block", "tag": "block"}),
 		Route:     routeForMode(cfg.RoutingMode, cfg.CustomRules, exeDir),
@@ -117,7 +118,7 @@ func buildDNS(mode config.DNSMode, routeMode config.RoutingMode) map[string]any 
 	if mode == config.DNSCustom {
 		final = "dns-remote"
 	}
-	return map[string]any{"servers": servers, "rules": rules, "final": final, "strategy": "prefer_ipv4"}
+	return map[string]any{"servers": servers, "rules": rules, "final": final, "strategy": "prefer_ipv4", "independent_cache": true}
 }
 
 func routeForMode(mode config.RoutingMode, custom []config.Rule, exeDir string) map[string]any {
@@ -135,11 +136,12 @@ func routeForMode(mode config.RoutingMode, custom []config.Rule, exeDir string) 
 		final = "direct"
 	case config.RoutingSmart:
 		// 中国域名/IP 直连；非中国域名和其余流量代理。
-		base = append(base,
-			map[string]any{"rule_set": []string{"geosite-cn"}, "outbound": "direct"},
-			map[string]any{"rule_set": []string{"geoip-cn"}, "outbound": "direct"},
-			map[string]any{"rule_set": []string{"geosite-non-cn"}, "outbound": "proxy"},
-		)
+		if ruleSetExists(exeDir, "geosite-geolocation-cn.srs") {
+			base = append(base, map[string]any{"rule_set": []string{"geosite-cn"}, "outbound": "direct"})
+		}
+		if ruleSetExists(exeDir, "geoip-cn.srs") {
+			base = append(base, map[string]any{"rule_set": []string{"geoip-cn"}, "outbound": "direct"})
+		}
 		final = "proxy"
 	case config.RoutingCustom:
 		for _, r := range custom {
@@ -152,10 +154,11 @@ func routeForMode(mode config.RoutingMode, custom []config.Rule, exeDir string) 
 
 	ruleSets := []map[string]any{}
 	if mode == config.RoutingSmart {
-		ruleSets = []map[string]any{
-			{"type": "local", "tag": "geosite-cn", "format": "binary", "path": filepath.Join(exeDir, "rules", "geosite-geolocation-cn.srs")},
-			{"type": "local", "tag": "geoip-cn", "format": "binary", "path": filepath.Join(exeDir, "rules", "geoip-cn.srs")},
-			{"type": "local", "tag": "geosite-non-cn", "format": "binary", "path": filepath.Join(exeDir, "rules", "geosite-geolocation-!cn.srs")},
+		if ruleSetExists(exeDir, "geosite-geolocation-cn.srs") {
+			ruleSets = append(ruleSets, map[string]any{"type": "local", "tag": "geosite-cn", "format": "binary", "path": filepath.Join(exeDir, "rules", "geosite-geolocation-cn.srs")})
+		}
+		if ruleSetExists(exeDir, "geoip-cn.srs") {
+			ruleSets = append(ruleSets, map[string]any{"type": "local", "tag": "geoip-cn", "format": "binary", "path": filepath.Join(exeDir, "rules", "geoip-cn.srs")})
 		}
 	}
 	return map[string]any{
@@ -165,6 +168,11 @@ func routeForMode(mode config.RoutingMode, custom []config.Rule, exeDir string) 
 		"rules":                   base,
 		"final":                   final,
 	}
+}
+
+func ruleSetExists(exeDir, name string) bool {
+	info, err := os.Stat(filepath.Join(exeDir, "rules", name))
+	return err == nil && !info.IsDir() && info.Size() > 0
 }
 
 func customRule(r config.Rule) (map[string]any, bool) {
