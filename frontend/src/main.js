@@ -16,6 +16,7 @@ const state = {
   rules: null,
   ruleUpdating: '',
   allRulesUpdating: false,
+  nodeSwitching: false,
   nodeHealth: {},
   traffic: { up: 0, down: 0 },
 }
@@ -196,7 +197,7 @@ function renderNodes() {
         ${renderNodeHealth(n.id)}
       </span>
       <span class="node-actions">
-        <button class="btn btn-ghost select-node" data-id="${n.id}">${state.config.current_node_id === n.id ? '当前' : '选择'}</button>
+        <button class="btn btn-ghost select-node" data-id="${n.id}" ${state.nodeSwitching ? 'disabled' : ''}>${state.config.current_node_id === n.id ? '当前' : '选择'}</button>
         <button class="btn btn-ghost test-node" data-id="${n.id}">测试</button>
         <button class="btn btn-danger rm-node" data-id="${n.id}">删除</button>
       </span>
@@ -406,13 +407,19 @@ function bindEvents() {
 
   document.querySelectorAll('.select-node').forEach(btn => {
     btn.addEventListener('click', async () => {
+      if (state.nodeSwitching) return
+      state.nodeSwitching = true
+      document.querySelectorAll('.select-node').forEach(item => { item.disabled = true })
       try {
         await window.go.app.App.SelectNode(btn.dataset.id)
         await refreshConfig()
-    await refreshRules()
+        await refreshRules()
         showToast('节点已选择', 'success')
       } catch (e) {
         showToast(e.message, 'error')
+      } finally {
+        state.nodeSwitching = false
+        document.querySelectorAll('.select-node').forEach(item => { item.disabled = false })
       }
     })
   })

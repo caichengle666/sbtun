@@ -140,7 +140,14 @@ func (a *App) GetConfig() config.Config {
 	return cfg
 }
 
-func (a *App) SaveConfig(cfg config.Config) error { return a.manager.Save(cfg) }
+func (a *App) SaveConfig(cfg config.Config) error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	if err := a.manager.Save(cfg); err != nil {
+		return err
+	}
+	return a.reloadIfRunningLocked()
+}
 
 func (a *App) Start() error {
 	a.operationMu.Lock()
@@ -383,12 +390,17 @@ func testNodePort(node config.Node) bool {
 }
 
 func (a *App) SetRoutingMode(mode config.RoutingMode) error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
 	cfg, err := a.manager.Load()
 	if err != nil {
 		return err
 	}
 	cfg.RoutingMode = mode
-	return a.manager.Save(cfg)
+	if err := a.manager.Save(cfg); err != nil {
+		return err
+	}
+	return a.reloadIfRunningLocked()
 }
 
 func (a *App) ImportSubscription(link string) (int, error) {
@@ -450,11 +462,24 @@ func (a *App) ListRules() []rules.RuleInfo {
 }
 
 func (a *App) UpdateRule(id string) error {
-	return a.rulesManager.Update(id)
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	if err := a.rulesManager.Update(id); err != nil {
+		return err
+	}
+	return a.reloadIfRunningLocked()
 }
 
 func (a *App) UpdateAllRules() []error {
-	return a.rulesManager.UpdateAll()
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	errs := a.rulesManager.UpdateAll()
+	if len(errs) == 0 {
+		if err := a.reloadIfRunningLocked(); err != nil {
+			return []error{err}
+		}
+	}
+	return errs
 }
 
 func (a *App) Ping() string { return "sbtun 运行正常" }

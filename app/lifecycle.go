@@ -45,22 +45,22 @@ func (r *RuntimeCoordinator) watchSingBoxExit() {
 		// Windows reports externally terminated GUI child processes as 0xffffffff.
 		// This is not a useful configuration error and should not poison the UI state.
 		if exitErr, ok := event.Err.(*exec.ExitError); ok && exitErr.ExitCode() == -1 {
-			r.cleanupTUN()
 			r.TUN.MarkStopped()
 			r.State.Set(core.StateStopped, "")
+			r.cleanupTUN()
 			continue
 		}
 		state, _ := r.State.Get()
 		if state == core.StateStopping || state == core.StateStopped {
 			continue
 		}
-		r.cleanupTUN()
 		r.TUN.MarkStopped()
 		message := ErrSingBoxExited
 		if event.Err != nil {
 			message += ": " + event.Err.Error()
 		}
 		r.State.Set(core.StateError, message)
+		r.cleanupTUN()
 	}
 }
 
