@@ -277,8 +277,10 @@ function updateStatusView() {
 
 async function refreshConfig() {
   try {
-    state.config = await window.go.app.App.GetConfig()
-    renderApp()
+    const next = await window.go.app.App.GetConfig()
+    const changed = JSON.stringify(state.config) !== JSON.stringify(next)
+    state.config = next
+    if (changed) renderApp()
   } catch (e) {
     showToast('获取配置失败: ' + e.message, 'error')
   }
@@ -566,6 +568,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     await refreshConfig()
     await refreshRules()
     setInterval(refreshStatus, 2000)
+    setInterval(refreshConfig, 500)
   } else {
     showToast('Wails 运行时未加载', 'error')
     renderApp()
