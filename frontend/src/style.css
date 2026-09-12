@@ -117,3 +117,75 @@ textarea.input { resize: vertical; }
   .node-actions { flex-wrap: wrap; }
   .mode-grid { grid-template-columns: 1fr; }
 }
+
+/* The light theme uses a warm parchment palette while keeping the same layout. */
+:root[data-theme="light"] {
+  --bg: #f2ede1;
+  --surface: #fbf8ef;
+  --surface-2: #f1ecdf;
+  --border: #ded6c4;
+  --border-light: #c9bea8;
+  --text: #1e2733;
+  --text-sec: #69665d;
+  --text-ter: #978f7e;
+  --accent: #5878b7;
+  --accent-dim: rgba(88, 120, 183, .11);
+  --accent-hover: #4969a6;
+  --green: #22a85a;
+  --green-dim: rgba(34, 168, 90, .08);
+  --green-hover: #1d9850;
+  color: var(--text);
+  background: var(--bg);
+}
+:root[data-theme="light"] body { background: var(--bg); color: var(--text); }
+:root[data-theme="light"] .sidebar { border-color: var(--border); background: var(--surface); }
+:root[data-theme="light"] .brand { color: var(--text); }
+:root[data-theme="light"] .nav-item { color: var(--text-sec); }
+:root[data-theme="light"] .nav-item:hover { color: var(--text); background: var(--surface-2); }
+:root[data-theme="light"] .nav-item.active { color: var(--text); border-color: var(--accent); background: var(--accent-dim); }
+:root[data-theme="light"] .sidebar-status,
+:root[data-theme="light"] .muted,
+:root[data-theme="light"] small,
+:root[data-theme="light"] .traffic-chip { color: var(--text-sec); }
+:root[data-theme="light"] h1,
+:root[data-theme="light"] h2,
+:root[data-theme="light"] .focus-card h2,
+:root[data-theme="light"] .metric-value,
+:root[data-theme="light"] .node-name,
+:root[data-theme="light"] .mode-summary strong { color: var(--text); }
+:root[data-theme="light"] .eyebrow { color: var(--accent); }
+:root[data-theme="light"] .status-bar,
+:root[data-theme="light"] .card { border-color: var(--border); background: var(--surface); box-shadow: 0 8px 24px rgba(105, 102, 93, .08); }
+:root[data-theme="light"] .mode-summary,
+:root[data-theme="light"] .node-item.active,
+:root[data-theme="light"] .mode-btn.active { border-color: var(--accent); background: var(--accent-dim); }
+:root[data-theme="light"] .input,
+:root[data-theme="light"] .select,
+:root[data-theme="light"] .node-item,
+:root[data-theme="light"] .mode-btn { border-color: var(--border); color: var(--text); background: var(--surface-2); }
+:root[data-theme="light"] .input:focus,
+:root[data-theme="light"] .select:focus { border-color: var(--accent); }
+:root[data-theme="light"] .btn { color: var(--text); }
+:root[data-theme="light"] .btn-ghost { border-color: var(--border); }
+:root[data-theme="light"] .btn-ghost:hover { border-color: var(--accent); color: var(--text); }
+:root[data-theme="light"] .node-server,
+:root[data-theme="light"] .section-kicker,
+:root[data-theme="light"] .field-hint,
+:root[data-theme="light"] .mode-desc,
+:root[data-theme="light"] .empty,
+:root[data-theme="light"] .rules-summary { color: var(--text-ter); }
+:root[data-theme="light"] .advanced-fields { border-color: var(--border); }
+:root[data-theme="light"] .setting-field > span,
+:root[data-theme="light"] .check-field { color: var(--text-sec); }
+:root[data-theme="light"] .badge { color: var(--text-sec); background: var(--border); }
+:root[data-theme="light"] .badge.proxy { color: #35588f; background: #dce6f7; }
+:root[data-theme="light"] .badge.direct { color: #1d6b3e; background: #d9efdf; }
+:root[data-theme="light"] .health-check { color: var(--text-ter); }
+:root[data-theme="light"] .health-check.ok { color: var(--green-hover); }
+:root[data-theme="light"] .health-check.bad { color: #b33d4f; }
+:root[data-theme="light"] .toast { border-color: var(--border); color: var(--text); background: var(--surface); box-shadow: 0 8px 24px rgba(105, 102, 93, .18); }
+
+.theme-toggle { width: 38px; height: 38px; flex: 0 0 38px; padding: 0; border: 1px solid #25284a; border-radius: 8px; color: #facc15; background: transparent; font-size: 20px; line-height: 1; cursor: pointer; }
+.theme-toggle:hover { border-color: #22d3ee; }
+:root[data-theme="light"] .theme-toggle { border-color: var(--border); color: var(--accent); }
+:root[data-theme="light"] .theme-toggle:hover { border-color: var(--accent); }

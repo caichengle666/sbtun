@@ -4,6 +4,7 @@ import './style.css'
 const app = document.querySelector('#app')
 
 const state = {
+  theme: localStorage.getItem('sbtun-theme') || 'dark',
   running: false,
   statusState: 'stopped',
   statusMessage: '',
@@ -83,6 +84,7 @@ const NODE_FIELDS = {
   ],
 }
 
+document.documentElement.dataset.theme = state.theme
 app.innerHTML = render()
 
 function render() {
@@ -112,6 +114,7 @@ function render() {
           </div>
           <div class="topbar-actions">
             <span class="traffic-chip" id="trafficText">${formatTraffic(state.traffic)}</span>
+            <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">${state.theme === 'dark' ? '☀' : '☾'}</button>
             <button id="power" class="switch ${state.running ? 'on' : ''}">${state.running ? '关闭 TUN' : '开启 TUN'}</button>
           </div>
         </header>
@@ -401,11 +404,20 @@ async function refreshRules() {
 }
 
 function renderApp() {
+  document.documentElement.dataset.theme = state.theme
   app.innerHTML = render()
   bindEvents()
 }
 
 function bindEvents() {
+  const themeToggle = document.querySelector('#themeToggle')
+  if (themeToggle) {
+    themeToggle.addEventListener('click', () => {
+      state.theme = state.theme === 'dark' ? 'light' : 'dark'
+      localStorage.setItem('sbtun-theme', state.theme)
+      renderApp()
+    })
+  }
   document.querySelectorAll('[data-view]').forEach(item => {
     item.addEventListener('click', () => {
       state.view = item.dataset.view
