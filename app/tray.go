@@ -9,8 +9,10 @@ import (
 	"time"
 
 	"fyne.io/systray"
+	"github.com/caichengle666/sbtun/config"
 	"github.com/caichengle666/sbtun/core"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
+	"strings"
 )
 
 var (
@@ -24,9 +26,12 @@ func (a *App) StartTray() {
 		defer goruntime.UnlockOSThread()
 		a.trayEnd = systray.Quit
 		systray.Run(func() {
-			iconPath := filepath.Join(filepath.Dir(a.binary), "resources", "sbtun.ico")
-			if _, err := os.Stat(iconPath); err == nil {
-				_ = systray.SetIconFromFilePath(iconPath)
+			for _, name := range []string{"sbtun.ico", "icon.ico", "icon.png"} {
+				iconPath := filepath.Join(filepath.Dir(a.binary), "resources", name)
+				if _, err := os.Stat(iconPath); err == nil {
+					_ = systray.SetIconFromFilePath(iconPath)
+					break
+				}
 			}
 			systray.SetTitle("sbtun")
 			systray.SetTooltip("sbtun")
@@ -43,19 +48,7 @@ func (a *App) StartTray() {
 			nodeMenu.AddSeparator()
 			nodeItems := make(map[string]*systray.MenuItem)
 			nodeNames := make(map[string]string)
-			if cfg, err := a.manager.Load(); err == nil {
-				for _, node := range cfg.Nodes {
-					nodeID := node.ID
-					item := nodeMenu.AddSubMenuItemCheckbox(node.Name, node.Server, node.ID == cfg.CurrentNodeID)
-					nodeItems[nodeID] = item
-					nodeNames[nodeID] = node.Name
-					go func() {
-						for range item.ClickedCh {
-							a.runTrayAction(func() { _ = a.SelectNode(nodeID) })
-						}
-					}()
-				}
-			}
+			lastNodeSignature := ""
 			systray.AddSeparator()
 			quitItem := systray.AddMenuItem("退出", "退出 sbtun 并关闭代理")
 
@@ -92,6 +85,26 @@ func (a *App) StartTray() {
 					currentNodeID := ""
 					if cfg, err := a.manager.Load(); err == nil {
 						currentNodeID = cfg.CurrentNodeID
+						signature := trayNodeSignature(cfg)
+						if signature != lastNodeSignature {
+							for _, item := range nodeItems {
+								item.Remove()
+							}
+							nodeItems = make(map[string]*systray.MenuItem)
+							nodeNames = make(map[string]string)
+							for _, node := range cfg.Nodes {
+								nodeID := node.ID
+								item := nodeMenu.AddSubMenuItemCheckbox(node.Name, node.Server, node.ID == cfg.CurrentNodeID)
+								nodeItems[nodeID] = item
+								nodeNames[nodeID] = node.Name
+								go func() {
+									for range item.ClickedCh {
+										a.runTrayAction(func() { _ = a.SelectNode(nodeID) })
+									}
+								}()
+							}
+							lastNodeSignature = signature
+						}
 						for nodeID, item := range nodeItems {
 							if nodeID == currentNodeID {
 								item.Check()
@@ -124,6 +137,18 @@ func (a *App) StartTray() {
 			}()
 		}, func() {})
 	})
+}
+
+func trayNodeSignature(cfg config.Config) string {
+	var b strings.Builder
+	b.WriteString(cfg.CurrentNodeID)
+	for _, node := range cfg.Nodes {
+		b.WriteByte('|')
+		b.WriteString(node.ID)
+		b.WriteByte(':')
+		b.WriteString(node.Name)
+	}
+	return b.String()
 }
 
 func trayNodeName(nodes map[string]string, id string) string {
