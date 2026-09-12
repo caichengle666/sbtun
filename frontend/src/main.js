@@ -9,6 +9,7 @@ const state = {
   statusMessage: '',
   config: null,
   selectedNode: '',
+  manualProtocol: 'vless',
   rules: null,
   ruleUpdating: '',
   allRulesUpdating: false,
@@ -61,13 +62,13 @@ function render() {
             </div>
             <div class="row">
               <select id="nodeProtocol" class="select">
-                <option value="vless">VLESS</option>
-                <option value="vmess">VMess</option>
-                <option value="trojan">Trojan</option>
-                <option value="shadowsocks">Shadowsocks</option>
-                <option value="socks">SOCKS</option>
-                <option value="http">HTTP</option>
-                <option value="hysteria2">Hysteria2</option>
+                <option value="vless" ${state.manualProtocol === 'vless' ? 'selected' : ''}>VLESS</option>
+                <option value="vmess" ${state.manualProtocol === 'vmess' ? 'selected' : ''}>VMess</option>
+                <option value="trojan" ${state.manualProtocol === 'trojan' ? 'selected' : ''}>Trojan</option>
+                <option value="shadowsocks" ${state.manualProtocol === 'shadowsocks' ? 'selected' : ''}>Shadowsocks</option>
+                <option value="socks" ${state.manualProtocol === 'socks' ? 'selected' : ''}>SOCKS</option>
+                <option value="http" ${state.manualProtocol === 'http' ? 'selected' : ''}>HTTP</option>
+                <option value="hysteria2" ${state.manualProtocol === 'hysteria2' ? 'selected' : ''}>Hysteria2</option>
               </select>
               <input id="nodePassword" class="input" placeholder="UUID/密码" />
             </div>
@@ -377,6 +378,12 @@ function bindEvents() {
   }
 
   const addNodeBtn = document.querySelector('#addNodeBtn')
+  const nodeProtocol = document.querySelector('#nodeProtocol')
+  if (nodeProtocol) {
+    nodeProtocol.addEventListener('change', () => {
+      state.manualProtocol = nodeProtocol.value
+    })
+  }
   if (addNodeBtn) {
     addNodeBtn.addEventListener('click', async () => {
       const name = document.querySelector('#nodeName').value.trim()
