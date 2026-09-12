@@ -25,6 +25,7 @@ type App struct {
 	rulesManager *rules.Manager
 	trayEnd      func()
 	shutdownOnce sync.Once
+	operationMu  sync.Mutex
 	trafficMu    sync.RWMutex
 	uploadRate   uint64
 	downloadRate uint64
@@ -43,6 +44,7 @@ func (a *App) Startup(ctx context.Context) {
 	}
 	a.rulesManager = rules.NewManager(filepath.Join(exeDir, "rules"))
 	go a.StartTray()
+	go a.monitorNodes()
 }
 
 // Shutdown stops the proxy before Wails tears down the application process.
@@ -140,6 +142,12 @@ func (a *App) GetConfig() config.Config {
 func (a *App) SaveConfig(cfg config.Config) error { return a.manager.Save(cfg) }
 
 func (a *App) Start() error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	return a.startLocked()
+}
+
+func (a *App) startLocked() error {
 	cfg, err := a.manager.Load()
 	if err != nil {
 		return err
@@ -180,7 +188,13 @@ func currentNode(cfg config.Config) (config.Node, bool) {
 	return config.Node{}, false
 }
 
-func (a *App) Stop() error { return a.runtime.Stop() }
+func (a *App) Stop() error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	return a.stopLocked()
+}
+
+func (a *App) stopLocked() error { return a.runtime.Stop() }
 
 func (a *App) AddNode(node config.Node) error {
 	cfg, err := a.manager.Load()
@@ -222,6 +236,12 @@ func (a *App) RemoveNode(id string) error {
 }
 
 func (a *App) SelectNode(id string) error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	return a.selectNodeLocked(id)
+}
+
+func (a *App) selectNodeLocked(id string) error {
 	cfg, err := a.manager.Load()
 	if err != nil {
 		return err
@@ -241,12 +261,66 @@ func (a *App) SelectNode(id string) error {
 		return err
 	}
 	if a.runtime.State.IsRunning() {
-		if err := a.Stop(); err != nil {
+		if err := a.stopLocked(); err != nil {
 			return err
 		}
-		return a.Start()
+		return a.startLocked()
 	}
 	return nil
+}
+
+func (a *App) monitorNodes() {
+	if a.ctx == nil {
+		return
+	}
+	ticker := time.NewTicker(30 * time.Second)
+	defer ticker.Stop()
+	for {
+		select {
+		case <-ticker.C:
+			a.autoSwitchNode()
+		case <-a.ctx.Done():
+			return
+		}
+	}
+}
+
+func (a *App) autoSwitchNode() {
+	if a.runtime == nil || !a.runtime.State.IsRunning() {
+		return
+	}
+	cfg, err := a.manager.Load()
+	if err != nil {
+		return
+	}
+	current, ok := currentNode(cfg)
+	if !ok || testNodePort(current) {
+		return
+	}
+	if candidate, ok := firstHealthyReplacement(cfg.Nodes, current.ID, testNodePort); ok {
+		a.operationMu.Lock()
+		if a.runtime.State.IsRunning() {
+			_ = a.selectNodeLocked(candidate.ID)
+		}
+		a.operationMu.Unlock()
+		return
+	}
+}
+
+func firstHealthyReplacement(nodes []config.Node, currentID string, check func(config.Node) bool) (config.Node, bool) {
+	for _, candidate := range nodes {
+		if candidate.ID == currentID || !check(candidate) {
+			continue
+		}
+		return candidate, true
+	}
+	return config.Node{}, false
+}
+
+func testNodePort(node config.Node) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
+	defer cancel()
+	return testNode(ctx, node).Port.OK
 }
 
 func (a *App) SetRoutingMode(mode config.RoutingMode) error {
