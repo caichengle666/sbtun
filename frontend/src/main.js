@@ -11,6 +11,7 @@ const state = {
   selectedNode: '',
   manualProtocol: 'vless',
   manualForm: { url: '', name: '', server: '', port: '', password: '' },
+  customRuleForm: { match_type: 'domain_suffix', value: '', action: 'proxy' },
   rules: null,
   ruleUpdating: '',
   allRulesUpdating: false,
@@ -91,6 +92,29 @@ function render() {
           </div>
         </div>
       </section>
+
+      ${state.config?.routing_mode === 'custom' ? `
+      <section class="card">
+        <h2>自定义分流规则</h2>
+        <div id="customRulesPanel">${renderCustomRules()}</div>
+        <div class="row">
+          <select id="ruleMatchType" class="select">
+            <option value="domain_suffix">域名后缀</option>
+            <option value="domain_keyword">域名关键词</option>
+            <option value="domain">完整域名</option>
+            <option value="ip_cidr">IP 网段</option>
+            <option value="port">端口</option>
+          </select>
+          <input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="例如 example.com 或 443" />
+          <select id="ruleAction" class="select">
+            <option value="proxy">代理</option>
+            <option value="direct">直连</option>
+            <option value="block">阻断</option>
+          </select>
+          <button id="addRuleBtn" class="btn btn-primary">添加规则</button>
+        </div>
+      </section>
+      ` : ''}
 
       <section class="card">
         <h2>智能分流规则集</h2>
@@ -215,6 +239,20 @@ async function refreshStatus() {
   }
 }
 
+function renderCustomRules() {
+  const rules = state.config?.custom_rules || []
+  if (!rules.length) return '<div class="empty">暂无自定义规则</div>'
+  const labels = { domain_suffix: '域名后缀', domain_keyword: '域名关键词', domain: '完整域名', ip_cidr: 'IP 网段', port: '端口' }
+  const actions = { proxy: '代理', direct: '直连', block: '阻断' }
+  return rules.map((rule, index) => `
+    <div class="node-item rule-item">
+      <span class="badge">${labels[rule.match_type] || rule.match_type}</span>
+      <span style="flex:1"><span class="node-name">${escapeHtml(rule.value)}</span><span class="node-server">${actions[rule.action] || rule.action}</span></span>
+      <button class="btn btn-danger remove-custom-rule" data-index="${index}">删除</button>
+    </div>
+  `).join('')
+}
+
 function updateStatusView() {
   const statusText = document.querySelector('#statusText')
   const trafficText = document.querySelector('#trafficText')
@@ -264,6 +302,49 @@ function bindEvents() {
       })
     }
   }
+  const ruleValue = document.querySelector('#ruleValue')
+  if (ruleValue) {
+    ruleValue.addEventListener('input', () => { state.customRuleForm.value = ruleValue.value })
+  }
+  const ruleMatchType = document.querySelector('#ruleMatchType')
+  if (ruleMatchType) {
+    ruleMatchType.value = state.customRuleForm.match_type
+    ruleMatchType.addEventListener('change', () => { state.customRuleForm.match_type = ruleMatchType.value })
+  }
+  const ruleAction = document.querySelector('#ruleAction')
+  if (ruleAction) {
+    ruleAction.value = state.customRuleForm.action
+    ruleAction.addEventListener('change', () => { state.customRuleForm.action = ruleAction.value })
+  }
+  const addRuleBtn = document.querySelector('#addRuleBtn')
+  if (addRuleBtn) {
+    addRuleBtn.addEventListener('click', async () => {
+      const value = state.customRuleForm.value.trim()
+      if (!value) { showToast('请输入规则值', 'error'); return }
+      const cfg = JSON.parse(JSON.stringify(state.config))
+      cfg.custom_rules = cfg.custom_rules || []
+      cfg.custom_rules.push({ match_type: state.customRuleForm.match_type, value, action: state.customRuleForm.action })
+      try {
+        await window.go.app.App.SaveConfig(cfg)
+        state.config = cfg
+        state.customRuleForm.value = ''
+        renderApp()
+        showToast('规则已添加', 'success')
+      } catch (e) { showToast(e.message || String(e), 'error') }
+    })
+  }
+  document.querySelectorAll('.remove-custom-rule').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const cfg = JSON.parse(JSON.stringify(state.config))
+      cfg.custom_rules.splice(Number(btn.dataset.index), 1)
+      try {
+        await window.go.app.App.SaveConfig(cfg)
+        state.config = cfg
+        renderApp()
+        showToast('规则已删除', 'success')
+      } catch (e) { showToast(e.message || String(e), 'error') }
+    })
+  })
   const power = document.querySelector('#power')
   if (power) {
     power.addEventListener('click', async () => {
