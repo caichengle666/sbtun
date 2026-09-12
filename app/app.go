@@ -283,6 +283,9 @@ func (a *App) ImportSubscription(link string) (int, error) {
 		existing[n.ID] = struct{}{}
 		added++
 	}
+	if cfg.CurrentNodeID == "" && len(cfg.Nodes) > 0 {
+		cfg.CurrentNodeID = cfg.Nodes[0].ID
+	}
 	if err := a.manager.Save(cfg); err != nil {
 		return 0, err
 	}
