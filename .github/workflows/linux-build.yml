@@ -116,10 +116,28 @@ jobs:
           export LD_LIBRARY_PATH="$HERE/libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
           export WEBKIT_EXEC_PATH="$HERE/webkit"
           export WEBKIT2_EXEC_PATH="$HERE/webkit"
-          exec "$HERE/sbtun" "$@"
+          if [[ "${EUID:-$(id -u)}" -eq 0 ]]; then
+            exec "$HERE/sbtun" "$@"
+          fi
+          if command -v pkexec >/dev/null 2>&1; then
+            exec pkexec env \
+              LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
+              WEBKIT_EXEC_PATH="$WEBKIT_EXEC_PATH" \
+              WEBKIT2_EXEC_PATH="$WEBKIT2_EXEC_PATH" \
+              "$HERE/sbtun" "$@"
+          fi
+          if command -v sudo >/dev/null 2>&1; then
+            exec sudo env \
+              LD_LIBRARY_PATH="$LD_LIBRARY_PATH" \
+              WEBKIT_EXEC_PATH="$WEBKIT_EXEC_PATH" \
+              WEBKIT2_EXEC_PATH="$WEBKIT2_EXEC_PATH" \
+              "$HERE/sbtun" "$@"
+          fi
+          printf '无法获取管理员权限，请安装 polkit 后重试，或手动使用 sudo 启动。\n' >&2
+          exit 1
           EOF
           chmod +x dist/sbtun-linux-amd64/start-sbtun.sh
-          printf 'sbtun Linux 便携版\n\n双击 start-sbtun.sh 启动桌面程序。\n也可以在终端执行 ./start-sbtun.sh。\nTUN 模式需要 root 或 CAP_NET_ADMIN 权限。\n\n内置 sing-box %s 和 WebKitGTK 4.0 运行库。\n' "$SING_BOX_VERSION" > dist/sbtun-linux-amd64/README.txt
+          printf 'sbtun Linux 便携版\n\n双击 start-sbtun.sh 启动，程序会自动请求管理员权限。\n也可以在终端执行 ./start-sbtun.sh。\nTUN 模式需要 root 或 CAP_NET_ADMIN 权限。\n\n内置 sing-box %s 和 WebKitGTK 4.0 运行库。\n' "$SING_BOX_VERSION" > dist/sbtun-linux-amd64/README.txt
           (cd dist/sbtun-linux-amd64 && find libs webkit -type f -exec sha256sum {} +; sha256sum sbtun sing-box start-sbtun.sh) > dist/sbtun-linux-amd64/SHA256SUMS.txt
 
       - name: 打包 TAR.GZ
