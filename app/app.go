@@ -18,18 +18,21 @@ import (
 )
 
 type App struct {
-	ctx          context.Context
-	workDir      string
-	binary       string
-	manager      *config.Manager
-	runtime      *RuntimeCoordinator
-	rulesManager *rules.Manager
-	trayEnd      func()
-	shutdownOnce sync.Once
-	operationMu  sync.Mutex
-	trafficMu    sync.RWMutex
-	uploadRate   uint64
-	downloadRate uint64
+	ctx             context.Context
+	workDir         string
+	binary          string
+	manager         *config.Manager
+	runtime         *RuntimeCoordinator
+	rulesManager    *rules.Manager
+	trayEnd         func()
+	shutdownOnce    sync.Once
+	operationMu     sync.Mutex
+	trafficMu       sync.RWMutex
+	failoverMu      sync.Mutex
+	failoverNext    time.Time
+	failoverBackoff time.Duration
+	uploadRate      uint64
+	downloadRate    uint64
 }
 
 func New() *App { return &App{} }
@@ -79,6 +82,33 @@ type StatusDTO struct {
 	Running       bool   `json:"running"`
 	UploadBytes   uint64 `json:"upload_bytes"`
 	DownloadBytes uint64 `json:"download_bytes"`
+}
+
+type DiagnosticsDTO struct {
+	Enabled       bool   `json:"enabled"`
+	Selector      string `json:"selector"`
+	CurrentNodeID string `json:"current_node_id"`
+	Message       string `json:"message"`
+}
+
+func (a *App) GetDiagnostics() DiagnosticsDTO {
+	cfg := a.GetConfig()
+	result := DiagnosticsDTO{Enabled: cfg.DiagnosticsEnabled, CurrentNodeID: cfg.CurrentNodeID}
+	if !cfg.DiagnosticsEnabled {
+		return result
+	}
+	if !a.runtime.State.IsRunning() {
+		result.Message = "TUN 未运行"
+		return result
+	}
+	selector, err := currentSelector()
+	if err != nil {
+		result.Message = err.Error()
+		return result
+	}
+	result.Selector = selector
+	result.Message = "selector 已连接"
+	return result
 }
 
 func (a *App) GetStatus() StatusDTO {
@@ -384,6 +414,12 @@ func (a *App) autoSwitchNode() {
 	if a.runtime == nil || !a.runtime.State.IsRunning() {
 		return
 	}
+	a.failoverMu.Lock()
+	if time.Now().Before(a.failoverNext) {
+		a.failoverMu.Unlock()
+		return
+	}
+	a.failoverMu.Unlock()
 	cfg, err := a.manager.Load()
 	if err != nil {
 		return
@@ -402,6 +438,19 @@ func (a *App) autoSwitchNode() {
 		if candidate, ok = firstHealthyReplacement(latest.Nodes, latest.CurrentNodeID, a.testNodeHealthy); ok {
 			if err := a.selectNodeLocked(candidate.ID); err != nil {
 				fmt.Printf("自动切换节点失败（%s）: %v\n", candidate.ID, err)
+				a.failoverMu.Lock()
+				if a.failoverBackoff == 0 {
+					a.failoverBackoff = 10 * time.Second
+				} else if a.failoverBackoff < 2*time.Minute {
+					a.failoverBackoff *= 2
+				}
+				a.failoverNext = time.Now().Add(a.failoverBackoff)
+				a.failoverMu.Unlock()
+			} else {
+				a.failoverMu.Lock()
+				a.failoverBackoff = 0
+				a.failoverNext = time.Time{}
+				a.failoverMu.Unlock()
 			}
 		}
 		return

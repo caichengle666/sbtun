@@ -29,13 +29,14 @@ type Rule struct {
 // Config 是 sbtun 的用户配置模型。
 // 它刻意与 sing-box runtime JSON 解耦，普通用户无需接触 sing-box 配置。
 type Config struct {
-	Version       int         `json:"version"`
-	RoutingMode   RoutingMode `json:"routing_mode"`
-	DNSMode       DNSMode     `json:"dns_mode"`
-	TUNEnabled    bool        `json:"tun_enabled"`
-	CurrentNodeID string      `json:"current_node_id"`
-	Nodes         []Node      `json:"nodes"`
-	CustomRules   []Rule      `json:"custom_rules,omitempty"`
+	Version            int         `json:"version"`
+	RoutingMode        RoutingMode `json:"routing_mode"`
+	DNSMode            DNSMode     `json:"dns_mode"`
+	TUNEnabled         bool        `json:"tun_enabled"`
+	DiagnosticsEnabled bool        `json:"diagnostics_enabled,omitempty"`
+	CurrentNodeID      string      `json:"current_node_id"`
+	Nodes              []Node      `json:"nodes"`
+	CustomRules        []Rule      `json:"custom_rules,omitempty"`
 }
 
 // Node 是统一的用户节点模型。

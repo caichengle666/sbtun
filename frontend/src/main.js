@@ -21,6 +21,7 @@ const state = {
   nodeSwitching: false,
   nodeHealth: {},
   traffic: { up: 0, down: 0 },
+  diagnostics: null,
   view: 'overview',
   statusRefreshing: false,
   configRefreshing: false,
@@ -279,7 +280,8 @@ function buildManualSettings(protocol, password) {
 function renderRoutingPage() {
   const matchType = RULE_MATCH_TYPES.find(item => item.id === state.customRuleForm.match_type) || RULE_MATCH_TYPES[0]
   const action = RULE_ACTIONS.find(item => item.id === state.customRuleForm.action) || RULE_ACTIONS[0]
-  return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div></section>
+  const diagnostics = state.diagnostics
+  return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div><label class="toggle-field"><input id="diagnosticsToggle" type="checkbox" ${state.config?.diagnostics_enabled ? 'checked' : ''}><span>启用诊断信息</span><small>显示当前 selector 和运行节点，仅用于排查问题</small></label></section>${state.config?.diagnostics_enabled ? `<section class="card"><h2>运行诊断</h2><div class="diagnostics-grid"><span>当前配置节点</span><strong>${escapeHtml(diagnostics?.current_node_id || '未选择')}</strong><span>实际 selector</span><strong>${escapeHtml(diagnostics?.selector || '未读取')}</strong><span>状态</span><strong>${escapeHtml(diagnostics?.message || '读取中')}</strong></div></section>` : ''}
     ${state.config?.routing_mode === 'custom' ? `<section class="card"><div class="section-heading"><div><h2>自定义分流规则</h2><p class="muted">先选择匹配对象，再填写内容和处理方式。</p></div></div><div id="customRulesPanel">${renderCustomRules()}</div><div class="rule-editor"><label class="rule-field"><span>匹配对象</span><select id="ruleMatchType" class="select">${RULE_MATCH_TYPES.map(item => `<option value="${item.id}" ${item.id === matchType.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-field"><span>匹配内容</span><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="${matchType.placeholder}" /></label><label class="rule-field"><span>处理方式</span><select id="ruleAction" class="select">${RULE_ACTIONS.map(item => `<option value="${item.id}" ${item.id === action.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><button id="addRuleBtn" class="btn btn-primary">添加规则</button><small class="rule-hint value-hint" id="ruleValueHint">${matchType.hint}</small><small class="rule-hint action-hint" id="ruleActionHint">${action.hint}</small></div><details class="rule-import" open><summary>批量导入规则</summary><div class="rule-import-body"><textarea id="ruleImport" class="input" rows="3" placeholder="每行一条，例如：proxy,domain_suffix,example.com"></textarea><button id="importRuleBtn" class="btn btn-ghost">导入</button></div></details></section>` : ''}
   </div>`
 }
@@ -468,6 +470,14 @@ function updateRuleEditorHints() {
   if (ruleValueHint) ruleValueHint.textContent = matchType.hint
 }
 
+async function refreshDiagnostics() {
+  try {
+    state.diagnostics = await window.go.app.App.GetDiagnostics()
+  } catch (e) {
+    state.diagnostics = { message: e.message || String(e) }
+  }
+}
+
 async function refreshRules() {
   try {
     state.rules = await window.go.app.App.ListRules()
@@ -645,6 +655,23 @@ function bindEvents() {
     })
   })
 
+  const diagnosticsToggle = document.querySelector('#diagnosticsToggle')
+  if (diagnosticsToggle) {
+    diagnosticsToggle.addEventListener('change', async () => {
+      const cfg = JSON.parse(JSON.stringify(state.config))
+      cfg.diagnostics_enabled = diagnosticsToggle.checked
+      try {
+        await window.go.app.App.SaveConfig(cfg)
+        state.config = cfg
+        await refreshDiagnostics()
+        renderApp()
+      } catch (e) {
+        diagnosticsToggle.checked = !diagnosticsToggle.checked
+        showToast(e.message || String(e), 'error')
+      }
+    })
+  }
+
   document.querySelectorAll('.select-node').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (state.nodeSwitching) return
@@ -809,8 +836,10 @@ window.addEventListener('DOMContentLoaded', async () => {
     await refreshStatus()
     await refreshConfig()
     await refreshRules()
+    await refreshDiagnostics()
     setInterval(refreshStatus, 2000)
     setInterval(refreshConfig, 1500)
+    setInterval(refreshDiagnostics, 1500)
   } else {
     showToast('Wails 运行时未加载', 'error')
     renderApp()
