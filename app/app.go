@@ -68,10 +68,10 @@ func (a *App) initPaths() {
 	if execPath != "" && err == nil {
 		base := filepath.Dir(execPath)
 		a.workDir = filepath.Join(base, "runtime-data")
-		a.binary = filepath.Join(base, "sing-box.exe")
+		a.binary = filepath.Join(base, singBoxBinaryName())
 	} else {
 		a.workDir = filepath.Join(".", "runtime-data")
-		a.binary = "sing-box.exe"
+		a.binary = singBoxBinaryName()
 	}
 	a.manager = config.NewManager(filepath.Join(a.workDir, "config.json"))
 }
@@ -191,7 +191,7 @@ func (a *App) startLocked() error {
 		return err
 	}
 	if a.binary == "" || !fileExists(a.binary) {
-		return errors.New("未找到 sing-box.exe，请把它放在 sbtun.exe 同目录下")
+		return fmt.Errorf("未找到 %s，请把它放在 sbtun 同目录下", singBoxBinaryName())
 	}
 	node, ok := currentNode(cfg)
 	if !ok {

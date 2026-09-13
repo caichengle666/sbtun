@@ -11,7 +11,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
-	"syscall"
 	"time"
 
 	"github.com/caichengle666/sbtun/config"
@@ -77,8 +76,7 @@ func pingNode(ctx context.Context, host string) HealthCheckDTO {
 	started := time.Now()
 	pingCtx, cancel := context.WithTimeout(ctx, nodeHealthTimeout)
 	defer cancel()
-	cmd := exec.CommandContext(pingCtx, "ping.exe", "-n", "1", "-w", "3000", host)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	cmd := pingCommand(pingCtx, host)
 	if err := cmd.Run(); err != nil {
 		return HealthCheckDTO{Message: fmt.Sprintf("Ping 失败: %v", err)}
 	}
@@ -130,7 +128,7 @@ func probeURL(ctx context.Context, binary string, node config.Node) HealthCheckD
 	}
 	cmd := exec.CommandContext(ctx, binary, "run", "-c", configPath)
 	cmd.Dir = filepath.Dir(binary)
-	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
+	configureProcess(cmd)
 	var logs bytes.Buffer
 	cmd.Stdout = &logs
 	cmd.Stderr = &logs

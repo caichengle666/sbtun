@@ -7,7 +7,6 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
-	"syscall"
 )
 
 // ExitEvent 描述 sing-box 进程退出。
@@ -34,7 +33,7 @@ func (m *Manager) Start(ctx context.Context, binary, configPath string) error {
 	}
 	cmd := exec.CommandContext(ctx, binary, "run", "-c", configPath)
 	m.stopping = false
-	cmd.SysProcAttr = &syscall.SysProcAttr{CreationFlags: 0x08000000}
+	configureProcess(cmd)
 	// Set working directory to where sing-box.exe lives so relative paths resolve
 	cmd.Dir = filepath.Dir(binary) // CREATE_NO_WINDOW
 	// Capture logs to file for debugging

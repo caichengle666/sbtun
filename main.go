@@ -7,7 +7,6 @@ import (
 	"github.com/wailsapp/wails/v2"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/assetserver"
-	"github.com/wailsapp/wails/v2/pkg/options/windows"
 )
 
 //go:embed frontend/dist
@@ -23,7 +22,7 @@ func main() {
 
 	application := app.New()
 
-	err = wails.Run(&options.App{
+	appOptions := &options.App{
 		Title:             "sbtun",
 		Width:             980,
 		Height:            680,
@@ -37,12 +36,9 @@ func main() {
 		OnStartup:  application.Startup,
 		OnShutdown: application.Shutdown,
 		Bind:       []interface{}{application},
-		Windows: &windows.Options{
-			WebviewIsTransparent: false,
-			WindowIsTranslucent:  false,
-			DisableWindowIcon:    false,
-		},
-	})
+	}
+	configurePlatformOptions(appOptions)
+	err = wails.Run(appOptions)
 	if err != nil {
 		panic(err)
 	}
