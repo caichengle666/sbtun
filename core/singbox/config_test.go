@@ -42,6 +42,26 @@ func TestGeneratedProtocolConfigsPassSingBoxCheck(t *testing.T) {
 	}
 }
 
+func TestHealthDNSUsesPlatformResolver(t *testing.T) {
+	data, err := BuildHealthConfig(config.Node{ID: "n1", Protocol: "socks", Server: "127.0.0.1", Port: 1080}, 18080)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var generated map[string]any
+	if err := json.Unmarshal(data, &generated); err != nil {
+		t.Fatal(err)
+	}
+	dns := generated["dns"].(map[string]any)
+	servers := dns["servers"].([]any)
+	server := servers[0].(map[string]any)
+	if server["type"] == "local" {
+		t.Skip("Windows keeps the system DNS resolver for health checks")
+	}
+	if server["server"] != "1.1.1.1" || dns["final"] != "dns-health" {
+		t.Fatalf("unexpected Linux health DNS: %+v", dns)
+	}
+}
+
 func testConfig(mode config.RoutingMode) config.Config {
 	return config.Config{
 		Version: 1, RoutingMode: mode, DNSMode: config.DNSAuto,
