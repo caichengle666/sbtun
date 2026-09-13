@@ -8,13 +8,13 @@ func healthDNSConfig() map[string]any {
 	return map[string]any{
 		"servers": []map[string]any{{
 			"type":        "https",
-			"tag":         "dns-health",
+			"tag":         "dns-local",
 			"server":      "1.1.1.1",
 			"server_port": 443,
 			"path":        "/dns-query",
 			"tls":         map[string]any{"enabled": true, "server_name": "cloudflare-dns.com"},
-			"detour":      "direct",
+			"detour":      "proxy",
 		}},
-		"final": "dns-health",
+		"final": "dns-local",
 	}
 }
