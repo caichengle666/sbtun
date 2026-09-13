@@ -45,7 +45,8 @@ h2 { margin: 0 0 14px; color: #cbd5e1; font-size: 16px; }
 .mode-summary { display: flex; align-items: center; gap: 14px; padding: 14px; border: 1px solid #22d3ee; border-radius: 8px; background: #162338; }
 .mode-summary strong { color: #e2e8f0; }
 .muted, small { color: #94a3b8; }
-.input, .select { min-width: 0; flex: 1; padding: 10px 12px; border: 1px solid #25284a; border-radius: 8px; color: #e2e8f0; background: #0d0e15; font-size: 13px; }
+.input, .select { min-width: 0; flex: 1; padding: 10px 12px; border: 1px solid #25284a; border-radius: 8px; color: #e2e8f0; background: #0d0e15; color-scheme: dark; font-size: 13px; }
+.select option { color: #e2e8f0; background: #0d0e15; }
 .input:focus, .select:focus { outline: none; border-color: #22d3ee; }
 textarea.input { resize: vertical; }
 .port-input { max-width: 120px; }
@@ -179,6 +180,8 @@ textarea.input { resize: vertical; }
 :root[data-theme="light"] .select,
 :root[data-theme="light"] .node-item,
 :root[data-theme="light"] .mode-btn { border-color: var(--border); color: var(--text); background: var(--surface-2); }
+:root[data-theme="light"] .select { color-scheme: light; }
+:root[data-theme="light"] .select option { color: var(--text); background: var(--surface-2); }
 :root[data-theme="light"] .input:focus,
 :root[data-theme="light"] .select:focus { border-color: var(--accent); }
 :root[data-theme="light"] .btn { color: var(--text); }
