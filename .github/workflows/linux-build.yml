@@ -76,6 +76,24 @@ jobs:
           curl -fL https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs -o dist/rules/geoip-cn.srs
           sha256sum dist/rules/*.srs > dist/rules/SHA256SUMS.txt
 
+      - name: 准备可携带 WebKitGTK 运行库
+        run: |
+          set -euo pipefail
+          deb_dir="$RUNNER_TEMP/webkit-debs"
+          extracted="$RUNNER_TEMP/webkit-extracted"
+          mkdir -p "$deb_dir" "$extracted"
+          cd "$deb_dir"
+          apt-get download libwebkit2gtk-4.0-37 libjavascriptcoregtk-4.0-18 libicu70 libwoff1
+          for deb in *.deb; do
+            dpkg-deb -x "$deb" "$extracted"
+          done
+          mkdir -p "$RUNNER_TEMP/webkit-runtime/libs" "$RUNNER_TEMP/webkit-runtime/webkit"
+          find "$extracted/usr/lib/x86_64-linux-gnu" -maxdepth 1 -type f -name '*.so*' -exec cp -a {} "$RUNNER_TEMP/webkit-runtime/libs/" \;
+          find "$extracted/usr/lib/x86_64-linux-gnu" -type f \( -name WebKitNetworkProcess -o -name WebKitWebProcess \) -exec cp -a {} "$RUNNER_TEMP/webkit-runtime/webkit/" \;
+          test -f "$RUNNER_TEMP/webkit-runtime/libs/libwebkit2gtk-4.0.so.37"
+          test -f "$RUNNER_TEMP/webkit-runtime/webkit/WebKitNetworkProcess"
+          test -f "$RUNNER_TEMP/webkit-runtime/webkit/WebKitWebProcess"
+
       - name: 组装 Linux 便携版
         run: |
           set -euo pipefail
@@ -88,9 +106,21 @@ jobs:
           cp -r dist/rules dist/sbtun-linux-amd64/rules
           cp VERSION dist/sbtun-linux-amd64/VERSION
           cp resources/icon.png dist/sbtun-linux-amd64/resources/icon.png
+          cp -r "$RUNNER_TEMP/webkit-runtime/libs" dist/sbtun-linux-amd64/libs
+          cp -r "$RUNNER_TEMP/webkit-runtime/webkit" dist/sbtun-linux-amd64/webkit
           chmod +x dist/sbtun-linux-amd64/sbtun dist/sbtun-linux-amd64/sing-box
-          printf 'sbtun Linux 便携版\n\n运行 ./sbtun 启动桌面程序。\nTUN 模式需要 root 或 CAP_NET_ADMIN 权限。\n\n内置 sing-box %s。\n' "$SING_BOX_VERSION" > dist/sbtun-linux-amd64/README.txt
-          (cd dist/sbtun-linux-amd64 && sha256sum sbtun sing-box > SHA256SUMS.txt)
+          cat > dist/sbtun-linux-amd64/start-sbtun.sh <<'EOF'
+          #!/usr/bin/env bash
+          set -euo pipefail
+          HERE="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"
+          export LD_LIBRARY_PATH="$HERE/libs${LD_LIBRARY_PATH:+:$LD_LIBRARY_PATH}"
+          export WEBKIT_EXEC_PATH="$HERE/webkit"
+          export WEBKIT2_EXEC_PATH="$HERE/webkit"
+          exec "$HERE/sbtun" "$@"
+          EOF
+          chmod +x dist/sbtun-linux-amd64/start-sbtun.sh
+          printf 'sbtun Linux 便携版\n\n双击 start-sbtun.sh 启动桌面程序。\n也可以在终端执行 ./start-sbtun.sh。\nTUN 模式需要 root 或 CAP_NET_ADMIN 权限。\n\n内置 sing-box %s 和 WebKitGTK 4.0 运行库。\n' "$SING_BOX_VERSION" > dist/sbtun-linux-amd64/README.txt
+          (cd dist/sbtun-linux-amd64 && find libs webkit -type f -exec sha256sum {} +; sha256sum sbtun sing-box start-sbtun.sh) > dist/sbtun-linux-amd64/SHA256SUMS.txt
 
       - name: 打包 TAR.GZ
         run: tar -czf dist/sbtun-linux-amd64.tar.gz -C dist sbtun-linux-amd64
