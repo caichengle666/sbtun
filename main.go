@@ -16,6 +16,7 @@ var assets embed.FS
 func main() {
 	releaseInstance, err := app.AcquireSingleInstance()
 	if err != nil {
+		app.ShowSingleInstanceMessage()
 		return
 	}
 	defer releaseInstance()

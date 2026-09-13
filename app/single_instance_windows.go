@@ -25,3 +25,9 @@ func AcquireSingleInstance() (func(), error) {
 	}
 	return func() { windows.CloseHandle(handle) }, nil
 }
+
+func ShowSingleInstanceMessage() {
+	text, _ := windows.UTF16PtrFromString("sbtun 已经在运行，请勿重复启动。")
+	caption, _ := windows.UTF16PtrFromString("sbtun")
+	_, _ = windows.MessageBox(0, text, caption, 0x00000010)
+}

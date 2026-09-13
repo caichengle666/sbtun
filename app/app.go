@@ -400,7 +400,9 @@ func (a *App) autoSwitchNode() {
 			return
 		}
 		if candidate, ok = firstHealthyReplacement(latest.Nodes, latest.CurrentNodeID, a.testNodeHealthy); ok {
-			_ = a.selectNodeLocked(candidate.ID)
+			if err := a.selectNodeLocked(candidate.ID); err != nil {
+				fmt.Printf("自动切换节点失败（%s）: %v\n", candidate.ID, err)
+			}
 		}
 		return
 	}
@@ -513,10 +515,8 @@ func (a *App) UpdateAllRules() []error {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
 	errs := a.rulesManager.UpdateAll()
-	if len(errs) == 0 {
-		if err := a.reloadIfRunningLocked(); err != nil {
-			return []error{err}
-		}
+	if err := a.reloadIfRunningLocked(); err != nil {
+		errs = append(errs, err)
 	}
 	return errs
 }
