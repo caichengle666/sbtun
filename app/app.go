@@ -394,10 +394,14 @@ func (a *App) autoSwitchNode() {
 	}
 	if candidate, ok := firstHealthyReplacement(cfg.Nodes, current.ID, a.testNodeHealthy); ok {
 		a.operationMu.Lock()
-		if a.runtime.State.IsRunning() {
+		defer a.operationMu.Unlock()
+		latest, err := a.manager.Load()
+		if err != nil || latest.CurrentNodeID != current.ID || !a.runtime.State.IsRunning() {
+			return
+		}
+		if candidate, ok = firstHealthyReplacement(latest.Nodes, latest.CurrentNodeID, a.testNodeHealthy); ok {
 			_ = a.selectNodeLocked(candidate.ID)
 		}
-		a.operationMu.Unlock()
 		return
 	}
 }

@@ -110,7 +110,7 @@ func TestSmartRoutingUsesChinaRuleSets(t *testing.T) {
 }
 
 func TestCustomRoutingRule(t *testing.T) {
-	cfg := testConfig(config.RoutingCustom)
+	cfg := testConfig(config.RoutingSmart)
 	cfg.CustomRules = []config.Rule{{MatchType: "domain_suffix", Value: "example.com", Action: "direct"}, {MatchType: "port", Value: "443", Action: "proxy"}}
 	data, err := BuildConfig(cfg, "D:\\test")
 	if err != nil {
@@ -123,6 +123,12 @@ func TestCustomRoutingRule(t *testing.T) {
 	rules := runtime.Route["rules"].([]any)
 	if len(rules) != 6 {
 		t.Fatalf("rules count=%d want=6", len(rules))
+	}
+	if rules[3].(map[string]any)["domain_suffix"] == nil || rules[3].(map[string]any)["outbound"] != "direct" {
+		t.Fatalf("custom domain rule is not first priority: %+v", rules)
+	}
+	if rules[4].(map[string]any)["port"] == nil || rules[4].(map[string]any)["outbound"] != "proxy" {
+		t.Fatalf("custom port rule is not first priority: %+v", rules)
 	}
 }
 
