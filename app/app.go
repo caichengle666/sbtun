@@ -389,10 +389,10 @@ func (a *App) autoSwitchNode() {
 		return
 	}
 	current, ok := currentNode(cfg)
-	if !ok || testNodePort(current) {
+	if !ok || a.testNodeHealthy(current) {
 		return
 	}
-	if candidate, ok := firstHealthyReplacement(cfg.Nodes, current.ID, testNodePort); ok {
+	if candidate, ok := firstHealthyReplacement(cfg.Nodes, current.ID, a.testNodeHealthy); ok {
 		a.operationMu.Lock()
 		if a.runtime.State.IsRunning() {
 			_ = a.selectNodeLocked(candidate.ID)
@@ -416,6 +416,12 @@ func testNodePort(node config.Node) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
 	defer cancel()
 	return testNode(ctx, node).Port.OK
+}
+
+func (a *App) testNodeHealthy(node config.Node) bool {
+	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
+	defer cancel()
+	return testNodeWithBinary(ctx, node, a.binary).Healthy
 }
 
 func (a *App) SetRoutingMode(mode config.RoutingMode) error {

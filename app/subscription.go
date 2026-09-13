@@ -146,9 +146,13 @@ type vmessConfig struct {
 	Aid  string `json:"aid"`
 	Net  string `json:"net"`
 	Type string `json:"type"`
+	Scy  string `json:"scy"`
 	Host string `json:"host"`
 	Path string `json:"path"`
 	TLS  string `json:"tls"`
+	SNI  string `json:"sni"`
+	ALPN string `json:"alpn"`
+	FP   string `json:"fp"`
 }
 
 func parseVMess(link string) (config.Node, error) {
@@ -165,18 +169,35 @@ func parseVMess(link string) (config.Node, error) {
 	if err != nil {
 		return config.Node{}, fmt.Errorf("vmess 端口无效: %s", cfg.Port)
 	}
-	settings := map[string]string{"alter_id": cfg.Aid}
-	if cfg.Net != "" {
-		settings["network"] = cfg.Net
+	settings := map[string]string{"uuid": cfg.ID}
+	if cfg.Aid != "" {
+		settings["alter_id"] = cfg.Aid
 	}
+	security := cfg.Scy
+	if security == "" {
+		security = cfg.Type
+	}
+	if security != "" {
+		settings["security"] = security
+	}
+	setLinkTransport(settings, cfg.Net)
 	if cfg.Host != "" {
-		settings["server_name"] = cfg.Host
+		settings["transport_host"] = cfg.Host
 	}
 	if cfg.Path != "" {
-		settings["path"] = cfg.Path
+		settings["transport_path"] = cfg.Path
 	}
 	if strings.EqualFold(cfg.TLS, "tls") {
 		settings["tls"] = "true"
+	}
+	if cfg.SNI != "" {
+		settings["server_name"] = cfg.SNI
+	}
+	if cfg.ALPN != "" {
+		settings["alpn"] = cfg.ALPN
+	}
+	if cfg.FP != "" {
+		settings["utls_fingerprint"] = cfg.FP
 	}
 	return config.Node{
 		ID:       "vmess-" + cfg.Add + "-" + cfg.Port,
@@ -202,17 +223,39 @@ func parseVLess(link string) (config.Node, error) {
 	}
 	settings := map[string]string{"uuid": u.User.Username()}
 	vals := u.Query()
-	if vals.Get("type") != "" {
-		settings["network"] = vals.Get("type")
-	}
+	setLinkTransport(settings, vals.Get("type"))
 	if vals.Get("host") != "" {
-		settings["server_name"] = vals.Get("host")
+		settings["transport_host"] = vals.Get("host")
 	}
 	if vals.Get("path") != "" {
-		settings["path"] = vals.Get("path")
+		settings["transport_path"] = vals.Get("path")
 	}
-	if vals.Get("security") == "tls" {
+	if vals.Get("serviceName") != "" {
+		settings["transport_service_name"] = vals.Get("serviceName")
+	}
+	if vals.Get("flow") != "" {
+		settings["flow"] = vals.Get("flow")
+	}
+	if vals.Get("sni") != "" {
+		settings["server_name"] = vals.Get("sni")
+	}
+	if vals.Get("security") == "tls" || vals.Get("security") == "reality" {
 		settings["tls"] = "true"
+	}
+	if vals.Get("alpn") != "" {
+		settings["alpn"] = vals.Get("alpn")
+	}
+	if vals.Get("insecure") == "1" || strings.EqualFold(vals.Get("insecure"), "true") {
+		settings["insecure"] = "true"
+	}
+	if vals.Get("pbk") != "" {
+		settings["reality_public_key"] = vals.Get("pbk")
+	}
+	if vals.Get("sid") != "" {
+		settings["reality_short_id"] = vals.Get("sid")
+	}
+	if vals.Get("fp") != "" {
+		settings["utls_fingerprint"] = vals.Get("fp")
 	}
 	name := u.Fragment
 	if name == "" {
@@ -246,14 +289,24 @@ func parseTrojan(link string) (config.Node, error) {
 	}
 	settings := map[string]string{"password": password}
 	vals := u.Query()
-	if vals.Get("type") != "" {
-		settings["network"] = vals.Get("type")
-	}
+	setLinkTransport(settings, vals.Get("type"))
 	if vals.Get("host") != "" {
-		settings["server_name"] = vals.Get("host")
+		settings["transport_host"] = vals.Get("host")
+	}
+	if vals.Get("path") != "" {
+		settings["transport_path"] = vals.Get("path")
+	}
+	if vals.Get("sni") != "" {
+		settings["server_name"] = vals.Get("sni")
 	}
 	if vals.Get("security") == "tls" {
 		settings["tls"] = "true"
+	}
+	if vals.Get("alpn") != "" {
+		settings["alpn"] = vals.Get("alpn")
+	}
+	if vals.Get("insecure") == "1" || strings.EqualFold(vals.Get("insecure"), "true") {
+		settings["insecure"] = "true"
 	}
 	name := u.Fragment
 	if name == "" {
@@ -337,6 +390,18 @@ func parseHysteria2(link string) (config.Node, error) {
 	if v := vals.Get("down_mbps"); v != "" {
 		settings["down_mbps"] = v
 	}
+	for _, key := range []string{"server_ports", "mport", "hop_interval", "alpn", "obfs", "obfs-password"} {
+		if v := vals.Get(key); v != "" {
+			name := strings.ReplaceAll(key, "-", "_")
+			if key == "mport" {
+				name = "server_ports"
+			}
+			if key == "obfs" {
+				name = "obfs_type"
+			}
+			settings[name] = v
+		}
+	}
 	name := u.Fragment
 	if name == "" {
 		name = "hysteria2-" + u.Hostname()
@@ -374,6 +439,19 @@ func parseHTTPStyle(link string) (config.Node, error) {
 			settings["password"] = pw
 		}
 	}
+	vals := u.Query()
+	if vals.Get("tls") == "1" || strings.EqualFold(vals.Get("tls"), "true") {
+		settings["tls"] = "true"
+	}
+	if vals.Get("sni") != "" {
+		settings["server_name"] = vals.Get("sni")
+	}
+	if vals.Get("insecure") == "1" || strings.EqualFold(vals.Get("insecure"), "true") {
+		settings["insecure"] = "true"
+	}
+	if vals.Get("path") != "" {
+		settings["path"] = vals.Get("path")
+	}
 	name := u.Fragment
 	if name == "" {
 		name = protocol + "-" + u.Hostname()
@@ -395,6 +473,15 @@ func parsePort(s string) (uint16, error) {
 		return 0, fmt.Errorf("无效端口: %s", s)
 	}
 	return p, nil
+}
+
+func setLinkTransport(settings map[string]string, value string) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "tcp", "udp":
+		settings["network"] = strings.ToLower(strings.TrimSpace(value))
+	case "ws", "http", "grpc", "httpupgrade":
+		settings["transport_type"] = strings.ToLower(strings.TrimSpace(value))
+	}
 }
 
 func fetchURL(link string) (string, error) {

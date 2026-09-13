@@ -134,8 +134,13 @@ func routeForMode(mode config.RoutingMode, custom []config.Rule, exeDir string) 
 		{"inbound": []string{"tun-in"}, "action": "sniff", "timeout": "1s"},
 		{"inbound": []string{"tun-in"}, "action": "resolve", "strategy": "prefer_ipv4"},
 		dns,
-		private,
 	}
+	for _, r := range custom {
+		if rr, ok := customRule(r); ok {
+			base = append(base, rr)
+		}
+	}
+	base = append(base, private)
 	final := "proxy"
 
 	switch mode {
@@ -155,11 +160,6 @@ func routeForMode(mode config.RoutingMode, custom []config.Rule, exeDir string) 
 		}
 		final = "proxy"
 	case config.RoutingCustom:
-		for _, r := range custom {
-			if rr, ok := customRule(r); ok {
-				base = append(base, rr)
-			}
-		}
 		final = "proxy"
 	}
 
@@ -232,8 +232,12 @@ func buildOutbound(n config.Node) (map[string]any, error) {
 	}
 	out := map[string]any{"type": protocol, "tag": "proxy", "server": n.Server, "server_port": n.Port, "domain_resolver": "dns-local"}
 	for k, v := range n.Settings {
+		if strings.HasPrefix(k, "transport_") {
+			continue
+		}
 		addSetting(out, k, v)
 	}
+	addTransport(out, n.Settings)
 	switch protocol {
 	case "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria2":
 		return out, nil
@@ -246,6 +250,7 @@ func buildHysteria2(out map[string]any, n config.Node) map[string]any {
 	out["type"] = "hysteria2"
 	out["server"] = n.Server
 	out["server_port"] = n.Port
+	out["domain_resolver"] = "dns-local"
 	if n.Settings != nil {
 		if v := n.Settings["password"]; v != "" {
 			out["password"] = v
@@ -255,6 +260,18 @@ func buildHysteria2(out map[string]any, n config.Node) map[string]any {
 		}
 		if v := n.Settings["down_mbps"]; v != "" {
 			out["down_mbps"] = parseBandwidth(v)
+		}
+		if v := n.Settings["server_ports"]; v != "" {
+			out["server_ports"] = normalizePortRanges(v)
+		}
+		if v := n.Settings["hop_interval"]; v != "" {
+			out["hop_interval"] = v
+		}
+		if v := n.Settings["network"]; v == "tcp" || v == "udp" {
+			out["network"] = v
+		}
+		if strings.EqualFold(n.Settings["disable_path_mtu_discovery"], "true") || n.Settings["disable_path_mtu_discovery"] == "1" {
+			out["disable_path_mtu_discovery"] = true
 		}
 		if v := n.Settings["obfs_type"]; v != "" {
 			out["obfs"] = map[string]any{"type": v, "password": n.Settings["obfs_password"]}
@@ -268,6 +285,9 @@ func buildHysteria2(out map[string]any, n config.Node) map[string]any {
 	}
 	if v := n.Settings["insecure"]; strings.EqualFold(v, "true") || v == "1" {
 		tls["insecure"] = true
+	}
+	if v := n.Settings["alpn"]; v != "" {
+		tls["alpn"] = splitList(v)
 	}
 	out["tls"] = tls
 	return out
@@ -283,30 +303,52 @@ func parseBandwidth(s string) int {
 
 func addSetting(out map[string]any, key, value string) {
 	switch key {
-	case "uuid", "password", "method", "flow", "security", "network", "alter_id", "username", "version", "packet_encoding", "plugin", "plugin_opts":
+	case "uuid", "password", "method", "flow", "security", "network", "alter_id", "username", "version", "packet_encoding", "plugin", "plugin_opts", "path":
 		out[key] = value
-	case "tls":
-		if strings.EqualFold(value, "true") {
-			out["tls"] = map[string]any{"enabled": true}
+	case "server_ports", "hop_interval":
+		out[key] = value
+	case "disable_path_mtu_discovery", "udp_over_tcp", "multiplex":
+		if strings.EqualFold(value, "true") || value == "1" {
+			if key == "multiplex" {
+				out[key] = map[string]any{"enabled": true}
+			} else {
+				out[key] = true
+			}
 		}
-	case "server_name":
-		tls, _ := out["tls"].(map[string]any)
-		if tls == nil {
-			tls = map[string]any{}
+	case "tls":
+		if strings.EqualFold(value, "true") || value == "1" {
+			tls, _ := out["tls"].(map[string]any)
+			if tls == nil {
+				tls = map[string]any{}
+			}
+			tls["enabled"] = true
 			out["tls"] = tls
 		}
-		tls["server_name"] = value
-	case "transport":
-		out["transport"] = map[string]any{"type": value}
-	case "transport_type":
-		out["transport"] = map[string]any{"type": value}
-	case "transport_path", "transport_host", "transport_service_name":
-		transport, _ := out["transport"].(map[string]any)
-		if transport == nil {
-			transport = map[string]any{}
-			out["transport"] = transport
+	case "server_name", "insecure", "alpn", "reality_public_key", "reality_short_id", "utls_fingerprint":
+		tls, _ := out["tls"].(map[string]any)
+		if tls == nil {
+			tls = map[string]any{"enabled": true}
+			out["tls"] = tls
 		}
-		transport[strings.TrimPrefix(key, "transport_")] = value
+		switch key {
+		case "server_name":
+			tls["server_name"] = value
+		case "insecure":
+			if strings.EqualFold(value, "true") || value == "1" {
+				tls["insecure"] = true
+			}
+		case "alpn":
+			tls["alpn"] = splitList(value)
+		case "reality_public_key", "reality_short_id":
+			reality, _ := tls["reality"].(map[string]any)
+			if reality == nil {
+				reality = map[string]any{"enabled": true}
+				tls["reality"] = reality
+			}
+			reality[strings.TrimPrefix(key, "reality_")] = value
+		case "utls_fingerprint":
+			tls["utls"] = map[string]any{"enabled": true, "fingerprint": value}
+		}
 	case "obfs_type":
 		out["obfs"] = map[string]any{"type": value}
 	case "obfs_password":
@@ -317,4 +359,43 @@ func addSetting(out map[string]any, key, value string) {
 		}
 		obfs["password"] = value
 	}
+}
+
+func addTransport(out map[string]any, settings map[string]string) {
+	typeName := settings["transport_type"]
+	if typeName == "" {
+		typeName = settings["transport"]
+	}
+	if typeName == "" {
+		return
+	}
+	transport := map[string]any{"type": typeName}
+	if path := settings["transport_path"]; path != "" {
+		transport["path"] = path
+	}
+	if host := settings["transport_host"]; host != "" {
+		switch typeName {
+		case "ws", "httpupgrade":
+			transport["headers"] = map[string]any{"Host": host}
+		default:
+			transport["host"] = host
+		}
+	}
+	if service := settings["transport_service_name"]; service != "" && typeName == "grpc" {
+		transport["service_name"] = service
+	}
+	out["transport"] = transport
+}
+
+func splitList(value string) []string {
+	parts := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' })
+	return parts
+}
+
+func normalizePortRanges(value string) []string {
+	parts := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' })
+	for i, part := range parts {
+		parts[i] = strings.Replace(part, "-", ":", 1)
+	}
+	return parts
 }

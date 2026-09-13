@@ -2,16 +2,17 @@
 import './style.css'
 
 const app = document.querySelector('#app')
+const initialTheme = localStorage.getItem('sbtun-theme') === 'light' ? 'light' : 'dark'
 
 const state = {
-  theme: localStorage.getItem('sbtun-theme') || 'dark',
+  theme: initialTheme,
   running: false,
   statusState: 'stopped',
   statusMessage: '',
   config: null,
   selectedNode: '',
   manualProtocol: 'vless',
-  manualForm: { url: '', name: '', server: '', port: '', password: '', username: '', method: '', network: '', server_name: '', flow: '', alter_id: '', security: '', packet_encoding: '', transport_type: '', transport_path: '', transport_host: '', transport_service_name: '', plugin: '', plugin_opts: '', version: '5', up_mbps: '', down_mbps: '', obfs_type: '', obfs_password: '', insecure: false, tls: false },
+  manualForm: { url: '', name: '', server: '', port: '', password: '', username: '', method: '', network: '', server_name: '', alpn: '', flow: '', alter_id: '', security: '', packet_encoding: '', reality_public_key: '', reality_short_id: '', utls_fingerprint: '', transport_type: '', transport_path: '', transport_host: '', transport_service_name: '', plugin: '', plugin_opts: '', version: '5', up_mbps: '', down_mbps: '', server_ports: '', hop_interval: '', path: '', obfs_type: '', obfs_password: '', disable_path_mtu_discovery: false, udp_over_tcp: false, multiplex: false, insecure: false, tls: false },
   customRuleForm: { match_type: 'domain_suffix', value: '', action: 'proxy' },
   customRuleImport: '',
   rules: null,
@@ -21,6 +22,8 @@ const state = {
   nodeHealth: {},
   traffic: { up: 0, down: 0 },
   view: 'overview',
+  statusRefreshing: false,
+  configRefreshing: false,
 }
 
 const MODES = [
@@ -30,30 +33,59 @@ const MODES = [
   { id: 'custom', name: '自定义', desc: '按用户规则精细控制' },
 ]
 
+const RULE_MATCH_TYPES = [
+  { id: 'domain_suffix', label: '域名后缀', hint: '匹配以该后缀结尾的域名', placeholder: '例如 example.com' },
+  { id: 'domain_keyword', label: '域名关键词', hint: '匹配域名中包含的关键词', placeholder: '例如 google' },
+  { id: 'domain', label: '完整域名', hint: '只匹配一个完整域名', placeholder: '例如 www.example.com' },
+  { id: 'ip_cidr', label: 'IP 网段', hint: '填写 IPv4 或 IPv6 网段', placeholder: '例如 192.168.1.0/24' },
+  { id: 'port', label: '端口', hint: '只填写一个端口号', placeholder: '例如 443' },
+]
+
+const RULE_ACTIONS = [
+  { id: 'proxy', label: '代理', hint: '匹配流量通过当前节点' },
+  { id: 'direct', label: '直连', hint: '匹配流量直接连接' },
+  { id: 'block', label: '阻断', hint: '匹配流量直接拒绝' },
+]
+
 const NODE_FIELDS = {
   vless: [
     { key: 'password', label: 'UUID', type: 'password', placeholder: 'VLESS 用户 UUID', required: true },
     { key: 'flow', label: 'Flow', type: 'select', options: [['', '无'], ['xtls-rprx-vision', 'xtls-rprx-vision']] },
+    { key: 'packet_encoding', label: 'Packet Encoding', placeholder: '可选：xudp' },
     { key: 'network', label: '网络', type: 'select', options: [['', 'TCP + UDP'], ['tcp', 'TCP'], ['udp', 'UDP']] },
     { key: 'tls', label: 'TLS', type: 'checkbox' },
     { key: 'server_name', label: 'TLS SNI', placeholder: '可选，默认服务器地址' },
+    { key: 'alpn', label: 'TLS ALPN', placeholder: '逗号分隔，例如 h2,http/1.1' },
+    { key: 'insecure', label: '跳过证书校验', type: 'checkbox' },
+    { key: 'reality_public_key', label: 'Reality Public Key', placeholder: '可选' },
+    { key: 'reality_short_id', label: 'Reality Short ID', placeholder: '可选' },
+    { key: 'utls_fingerprint', label: 'uTLS 指纹', placeholder: '可选，例如 chrome' },
     { key: 'transport_type', label: '传输', type: 'select', options: [['', '无'], ['ws', 'WebSocket'], ['http', 'HTTP'], ['grpc', 'gRPC'], ['httpupgrade', 'HTTPUpgrade']] },
+    { key: 'multiplex', label: '启用 Multiplex', type: 'checkbox' },
   ],
   vmess: [
     { key: 'password', label: 'UUID', type: 'password', placeholder: 'VMess 用户 UUID', required: true },
     { key: 'security', label: '加密', type: 'select', options: [['auto', 'auto'], ['none', 'none'], ['zero', 'zero'], ['aes-128-gcm', 'aes-128-gcm'], ['chacha20-poly1305', 'chacha20-poly1305']] },
     { key: 'alter_id', label: 'Alter ID', type: 'number', placeholder: '默认 0' },
+    { key: 'packet_encoding', label: 'Packet Encoding', placeholder: '可选：xudp' },
     { key: 'network', label: '网络', type: 'select', options: [['', 'TCP + UDP'], ['tcp', 'TCP'], ['udp', 'UDP']] },
     { key: 'tls', label: 'TLS', type: 'checkbox' },
     { key: 'server_name', label: 'TLS SNI', placeholder: '可选，默认服务器地址' },
+    { key: 'alpn', label: 'TLS ALPN', placeholder: '逗号分隔，例如 h2,http/1.1' },
+    { key: 'insecure', label: '跳过证书校验', type: 'checkbox' },
+    { key: 'utls_fingerprint', label: 'uTLS 指纹', placeholder: '可选，例如 chrome' },
     { key: 'transport_type', label: '传输', type: 'select', options: [['', '无'], ['ws', 'WebSocket'], ['http', 'HTTP'], ['grpc', 'gRPC'], ['httpupgrade', 'HTTPUpgrade']] },
+    { key: 'multiplex', label: '启用 Multiplex', type: 'checkbox' },
   ],
   trojan: [
     { key: 'password', label: '密码', type: 'password', placeholder: 'Trojan 密码', required: true },
     { key: 'network', label: '网络', type: 'select', options: [['', 'TCP + UDP'], ['tcp', 'TCP'], ['udp', 'UDP']] },
     { key: 'tls', label: 'TLS', type: 'checkbox' },
     { key: 'server_name', label: 'TLS SNI', placeholder: '可选，默认服务器地址' },
+    { key: 'alpn', label: 'TLS ALPN', placeholder: '逗号分隔，例如 h2,http/1.1' },
+    { key: 'insecure', label: '跳过证书校验', type: 'checkbox' },
     { key: 'transport_type', label: '传输', type: 'select', options: [['', '无'], ['ws', 'WebSocket'], ['http', 'HTTP'], ['grpc', 'gRPC'], ['httpupgrade', 'HTTPUpgrade']] },
+    { key: 'multiplex', label: '启用 Multiplex', type: 'checkbox' },
   ],
   shadowsocks: [
     { key: 'method', label: '加密方式', placeholder: '例如 aes-128-gcm', required: true },
@@ -61,25 +93,37 @@ const NODE_FIELDS = {
     { key: 'network', label: '网络', type: 'select', options: [['', 'TCP + UDP'], ['tcp', 'TCP'], ['udp', 'UDP']] },
     { key: 'plugin', label: '插件', placeholder: '可选：obfs-local / v2ray-plugin' },
     { key: 'plugin_opts', label: '插件参数', placeholder: '可选' },
+    { key: 'udp_over_tcp', label: 'UDP over TCP', type: 'checkbox' },
+    { key: 'multiplex', label: '启用 Multiplex', type: 'checkbox' },
   ],
   socks: [
     { key: 'version', label: '版本', type: 'select', options: [['5', 'SOCKS5'], ['4', 'SOCKS4'], ['4a', 'SOCKS4a']] },
     { key: 'username', label: '用户名', placeholder: '可选' },
     { key: 'password', label: '密码', type: 'password', placeholder: '可选' },
     { key: 'network', label: '网络', type: 'select', options: [['', 'TCP + UDP'], ['tcp', 'TCP'], ['udp', 'UDP']] },
+    { key: 'udp_over_tcp', label: 'UDP over TCP', type: 'checkbox' },
   ],
   http: [
     { key: 'username', label: '用户名', placeholder: '可选' },
     { key: 'password', label: '密码', type: 'password', placeholder: '可选' },
     { key: 'tls', label: 'TLS', type: 'checkbox' },
+    { key: 'server_name', label: 'TLS SNI', placeholder: '可选' },
+    { key: 'alpn', label: 'TLS ALPN', placeholder: '逗号分隔，例如 h2,http/1.1' },
+    { key: 'insecure', label: '跳过证书校验', type: 'checkbox' },
+    { key: 'path', label: 'HTTP Path', placeholder: '可选' },
   ],
   hysteria2: [
     { key: 'password', label: '密码', type: 'password', placeholder: 'Hysteria2 密码', required: true },
     { key: 'server_name', label: 'TLS SNI', placeholder: '可选，默认服务器地址' },
+    { key: 'alpn', label: 'TLS ALPN', placeholder: '逗号分隔，例如 h3' },
     { key: 'up_mbps', label: '上行 Mbps', type: 'number', placeholder: '可选' },
     { key: 'down_mbps', label: '下行 Mbps', type: 'number', placeholder: '可选' },
+    { key: 'server_ports', label: '跳跃端口', placeholder: '例如 2000-3000 或 443,8443' },
+    { key: 'hop_interval', label: '跳跃间隔', placeholder: '例如 30s' },
+    { key: 'network', label: '网络', type: 'select', options: [['', 'TCP + UDP'], ['tcp', 'TCP'], ['udp', 'UDP']] },
     { key: 'obfs_type', label: 'Obfs 类型', type: 'select', options: [['', '关闭'], ['salamander', 'salamander']] },
     { key: 'obfs_password', label: 'Obfs 密码', type: 'password', placeholder: '启用 obfs 时填写' },
+    { key: 'disable_path_mtu_discovery', label: '禁用 Path MTU Discovery', type: 'checkbox' },
     { key: 'insecure', label: '跳过证书校验', type: 'checkbox' },
   ],
 }
@@ -233,8 +277,10 @@ function buildManualSettings(protocol, password) {
 }
 
 function renderRoutingPage() {
+  const matchType = RULE_MATCH_TYPES.find(item => item.id === state.customRuleForm.match_type) || RULE_MATCH_TYPES[0]
+  const action = RULE_ACTIONS.find(item => item.id === state.customRuleForm.action) || RULE_ACTIONS[0]
   return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div></section>
-    ${state.config?.routing_mode === 'custom' ? `<section class="card"><h2>自定义分流规则</h2><div id="customRulesPanel">${renderCustomRules()}</div><div class="row"><select id="ruleMatchType" class="select"><option value="domain_suffix">域名后缀</option><option value="domain_keyword">域名关键词</option><option value="domain">完整域名</option><option value="ip_cidr">IP 网段</option><option value="port">端口</option></select><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="例如 example.com 或 443" /><select id="ruleAction" class="select"><option value="proxy">代理</option><option value="direct">直连</option><option value="block">阻断</option></select><button id="addRuleBtn" class="btn btn-primary">添加规则</button></div><div class="row"><textarea id="ruleImport" class="input" rows="3" placeholder="粘贴规则链接、文件路径或文本；每行：proxy,domain_suffix,example.com"></textarea><button id="importRuleBtn" class="btn btn-ghost">导入规则</button></div></section>` : ''}
+    ${state.config?.routing_mode === 'custom' ? `<section class="card"><div class="section-heading"><div><h2>自定义分流规则</h2><p class="muted">先选择匹配对象，再填写内容和处理方式。</p></div></div><div id="customRulesPanel">${renderCustomRules()}</div><div class="rule-editor"><label class="rule-field"><span>匹配对象</span><select id="ruleMatchType" class="select">${RULE_MATCH_TYPES.map(item => `<option value="${item.id}" ${item.id === matchType.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-field"><span>匹配内容</span><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="${matchType.placeholder}" /></label><label class="rule-field"><span>处理方式</span><select id="ruleAction" class="select">${RULE_ACTIONS.map(item => `<option value="${item.id}" ${item.id === action.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><button id="addRuleBtn" class="btn btn-primary">添加规则</button><small class="rule-hint value-hint" id="ruleValueHint">${matchType.hint}</small><small class="rule-hint action-hint" id="ruleActionHint">${action.hint}</small></div><details class="rule-import" open><summary>批量导入规则</summary><div class="rule-import-body"><textarea id="ruleImport" class="input" rows="3" placeholder="每行一条，例如：proxy,domain_suffix,example.com"></textarea><button id="importRuleBtn" class="btn btn-ghost">导入</button></div></details></section>` : ''}
   </div>`
 }
 
@@ -341,6 +387,8 @@ function showToast(msg, type = '') {
 }
 
 async function refreshStatus() {
+  if (state.statusRefreshing) return
+  state.statusRefreshing = true
   try {
     const s = await window.go.app.App.GetStatus()
     state.running = s.running
@@ -350,18 +398,18 @@ async function refreshStatus() {
     updateStatusView()
   } catch (e) {
     showToast('获取状态失败: ' + e.message, 'error')
+  } finally {
+    state.statusRefreshing = false
   }
 }
 
 function renderCustomRules() {
   const rules = state.config?.custom_rules || []
   if (!rules.length) return '<div class="empty">暂无自定义规则</div>'
-  const labels = { domain_suffix: '域名后缀', domain_keyword: '域名关键词', domain: '完整域名', ip_cidr: 'IP 网段', port: '端口' }
-  const actions = { proxy: '代理', direct: '直连', block: '阻断' }
   return rules.map((rule, index) => `
     <div class="node-item rule-item">
-      <span class="badge">${labels[rule.match_type] || rule.match_type}</span>
-      <span style="flex:1"><span class="node-name">${escapeHtml(rule.value)}</span><span class="node-server">${actions[rule.action] || rule.action}</span></span>
+      <span class="badge">${escapeHtml(ruleMatchLabel(rule.match_type))}</span>
+      <span class="rule-content"><span class="node-name">${escapeHtml(rule.value)}</span><span class="node-server">${escapeHtml(ruleActionLabel(rule.action))}</span></span>
       <button class="btn btn-danger remove-custom-rule" data-index="${index}">删除</button>
     </div>
   `).join('')
@@ -384,6 +432,8 @@ function updateStatusView() {
 }
 
 async function refreshConfig() {
+  if (state.configRefreshing) return
+  state.configRefreshing = true
   try {
     const next = await window.go.app.App.GetConfig()
     const changed = JSON.stringify(state.config) !== JSON.stringify(next)
@@ -391,7 +441,31 @@ async function refreshConfig() {
     if (changed) renderApp()
   } catch (e) {
     showToast('获取配置失败: ' + e.message, 'error')
+  } finally {
+    state.configRefreshing = false
   }
+}
+
+function ruleMatchLabel(id) { return RULE_MATCH_TYPES.find(item => item.id === id)?.label || id }
+function ruleActionLabel(id) { return RULE_ACTIONS.find(item => item.id === id)?.label || id }
+
+function validateCustomRule(matchType, value) {
+  if (!value) return '请输入匹配内容'
+  if (matchType === 'port' && (!/^\d+$/.test(value) || Number(value) < 1 || Number(value) > 65535)) return '端口必须是 1-65535 的整数'
+  if (matchType === 'ip_cidr') {
+    const cidr = value.includes('/') ? value : `${value}/32`
+    if (!/^([0-9a-f:.]+)\/\d+$/i.test(cidr)) return '请输入合法的 IP 网段，例如 192.168.1.0/24'
+  }
+  if (matchType !== 'port' && /[\s,]/.test(value)) return '规则内容不能包含空格或逗号'
+  return ''
+}
+
+function updateRuleEditorHints() {
+  const matchType = RULE_MATCH_TYPES.find(item => item.id === state.customRuleForm.match_type) || RULE_MATCH_TYPES[0]
+  const ruleValue = document.querySelector('#ruleValue')
+  const ruleValueHint = document.querySelector('#ruleValueHint')
+  if (ruleValue) ruleValue.placeholder = matchType.placeholder
+  if (ruleValueHint) ruleValueHint.textContent = matchType.hint
 }
 
 async function refreshRules() {
@@ -404,9 +478,24 @@ async function refreshRules() {
 }
 
 function renderApp() {
+  const focused = document.activeElement
+  const focusSnapshot = focused?.id ? {
+    id: focused.id,
+    start: typeof focused.selectionStart === 'number' ? focused.selectionStart : null,
+    end: typeof focused.selectionEnd === 'number' ? focused.selectionEnd : null,
+  } : null
   document.documentElement.dataset.theme = state.theme
   app.innerHTML = render()
   bindEvents()
+  if (focusSnapshot) {
+    const restored = document.getElementById(focusSnapshot.id)
+    if (restored) {
+      restored.focus({ preventScroll: true })
+      if (focusSnapshot.start !== null && typeof restored.setSelectionRange === 'function') {
+        restored.setSelectionRange(focusSnapshot.start, focusSnapshot.end)
+      }
+    }
+  }
 }
 
 function bindEvents() {
@@ -458,7 +547,10 @@ function bindEvents() {
   const ruleMatchType = document.querySelector('#ruleMatchType')
   if (ruleMatchType) {
     ruleMatchType.value = state.customRuleForm.match_type
-    ruleMatchType.addEventListener('change', () => { state.customRuleForm.match_type = ruleMatchType.value })
+    ruleMatchType.addEventListener('change', () => {
+      state.customRuleForm.match_type = ruleMatchType.value
+      updateRuleEditorHints()
+    })
   }
   const ruleAction = document.querySelector('#ruleAction')
   if (ruleAction) {
@@ -469,10 +561,14 @@ function bindEvents() {
   if (addRuleBtn) {
     addRuleBtn.addEventListener('click', async () => {
       const value = state.customRuleForm.value.trim()
-      if (!value) { showToast('请输入规则值', 'error'); return }
+      const error = validateCustomRule(state.customRuleForm.match_type, value)
+      if (error) { showToast(error, 'error'); return }
       const cfg = JSON.parse(JSON.stringify(state.config))
       cfg.custom_rules = cfg.custom_rules || []
+      const duplicate = cfg.custom_rules.some(rule => rule.match_type === state.customRuleForm.match_type && rule.value.toLowerCase() === value.toLowerCase() && rule.action === state.customRuleForm.action)
+      if (duplicate) { showToast('这条规则已经存在', 'error'); return }
       cfg.custom_rules.push({ match_type: state.customRuleForm.match_type, value, action: state.customRuleForm.action })
+      addRuleBtn.disabled = true
       try {
         await window.go.app.App.SaveConfig(cfg)
         state.config = cfg
@@ -480,6 +576,7 @@ function bindEvents() {
         renderApp()
         showToast('规则已添加', 'success')
       } catch (e) { showToast(e.message || String(e), 'error') }
+      finally { addRuleBtn.disabled = false }
     })
   }
   const ruleImport = document.querySelector('#ruleImport')
@@ -587,9 +684,11 @@ function bindEvents() {
         const result = await window.go.app.App.TestNode(btn.dataset.id)
         state.nodeHealth[btn.dataset.id] = result
         renderApp()
-        showToast(result.message, result.healthy ? 'success' : 'error')
+        showToast(result.message, (result.healthy ?? result.ok) ? 'success' : 'error')
       } catch (e) {
         showToast(e.message || String(e), 'error')
+      } finally {
+        btn.disabled = false
       }
     })
   })
@@ -676,7 +775,7 @@ function bindEvents() {
       const port = parseInt(state.manualForm.port.trim(), 10)
       const protocol = document.querySelector('#nodeProtocol').value
       const password = state.manualForm.password.trim()
-      if (!name || !server || !port) {
+      if (!name || !server || !Number.isInteger(port) || port < 1 || port > 65535) {
         showToast('请填写名称、服务器和端口', 'error'); return
       }
       try {
@@ -711,7 +810,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     await refreshConfig()
     await refreshRules()
     setInterval(refreshStatus, 2000)
-    setInterval(refreshConfig, 500)
+    setInterval(refreshConfig, 1500)
   } else {
     showToast('Wails 运行时未加载', 'error')
     renderApp()

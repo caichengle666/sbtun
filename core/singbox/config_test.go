@@ -3,11 +3,44 @@ package singbox
 import (
 	"encoding/json"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"testing"
 
 	"github.com/caichengle666/sbtun/config"
 )
+
+func TestGeneratedProtocolConfigsPassSingBoxCheck(t *testing.T) {
+	binary := filepath.Join("..", "..", "dist", "downloads", "sing-box", "sing-box-1.14.0-windows-amd64", "sing-box.exe")
+	if _, err := os.Stat(binary); err != nil {
+		t.Skip("local sing-box 1.14.0 binary not available")
+	}
+	cases := []config.Node{
+		{ID: "vless", Protocol: "vless", Server: "example.com", Port: 443, Settings: map[string]string{"uuid": "00000000-0000-0000-0000-000000000001", "tls": "true", "server_name": "example.com", "alpn": "h2,http/1.1", "transport_type": "ws", "transport_path": "/ws", "transport_host": "example.com"}},
+		{ID: "vmess", Protocol: "vmess", Server: "example.com", Port: 443, Settings: map[string]string{"uuid": "00000000-0000-0000-0000-000000000001", "security": "auto", "tls": "true", "transport_type": "ws", "transport_path": "/ws", "transport_host": "example.com"}},
+		{ID: "trojan", Protocol: "trojan", Server: "example.com", Port: 443, Settings: map[string]string{"password": "secret", "tls": "true", "transport_type": "grpc", "transport_service_name": "proxy"}},
+		{ID: "shadowsocks", Protocol: "shadowsocks", Server: "example.com", Port: 8388, Settings: map[string]string{"method": "aes-256-gcm", "password": "secret", "network": "tcp"}},
+		{ID: "socks", Protocol: "socks", Server: "example.com", Port: 1080, Settings: map[string]string{"version": "5", "username": "user", "password": "secret"}},
+		{ID: "http", Protocol: "http", Server: "example.com", Port: 8080, Settings: map[string]string{"username": "user", "password": "secret", "tls": "true", "server_name": "example.com", "path": "/proxy"}},
+		{ID: "hysteria2", Protocol: "hysteria2", Server: "example.com", Port: 443, Settings: map[string]string{"password": "secret", "sni": "example.com", "alpn": "h3", "server_ports": "2000-3000", "hop_interval": "30s", "obfs_type": "salamander", "obfs_password": "secret"}},
+	}
+	for _, node := range cases {
+		t.Run(node.Protocol, func(t *testing.T) {
+			data, err := BuildHealthConfig(node, 18080)
+			if err != nil {
+				t.Fatal(err)
+			}
+			path := filepath.Join(t.TempDir(), "config.json")
+			if err := os.WriteFile(path, data, 0o600); err != nil {
+				t.Fatal(err)
+			}
+			cmd := exec.Command(binary, "check", "-c", path)
+			if output, err := cmd.CombinedOutput(); err != nil {
+				t.Fatalf("sing-box check failed: %v\n%s\nconfig:\n%s", err, output, data)
+			}
+		})
+	}
+}
 
 func testConfig(mode config.RoutingMode) config.Config {
 	return config.Config{

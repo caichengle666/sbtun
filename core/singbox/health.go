@@ -14,6 +14,7 @@ func BuildHealthConfig(node config.Node, listenPort int) ([]byte, error) {
 	}
 	result := map[string]any{
 		"log": map[string]any{"level": "error", "timestamp": true},
+		"dns": map[string]any{"servers": []map[string]any{{"type": "local", "tag": "dns-local"}}, "final": "dns-local"},
 		"inbounds": []map[string]any{{
 			"type": "mixed", "tag": "health-in",
 			"listen": "127.0.0.1", "listen_port": listenPort,
