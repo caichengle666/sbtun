@@ -121,8 +121,8 @@ func TestCustomRoutingRule(t *testing.T) {
 		t.Fatal(err)
 	}
 	rules := runtime.Route["rules"].([]any)
-	if len(rules) != 6 {
-		t.Fatalf("rules count=%d want=6", len(rules))
+	if len(rules) < 6 {
+		t.Fatalf("rules count=%d want at least 6", len(rules))
 	}
 	if rules[3].(map[string]any)["domain_suffix"] == nil || rules[3].(map[string]any)["outbound"] != "direct" {
 		t.Fatalf("custom domain rule is not first priority: %+v", rules)

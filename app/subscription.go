@@ -116,7 +116,7 @@ func parseSubscriptionLine(line string) (config.Node, error) {
 		return parseShadowsocks(line)
 	case strings.HasPrefix(line, "hysteria2://"):
 		return parseHysteria2(line)
-	case strings.HasPrefix(line, "socks://"), strings.HasPrefix(line, "http://"), strings.HasPrefix(line, "https://"):
+	case strings.HasPrefix(line, "socks://"), strings.HasPrefix(line, "socks5://"), strings.HasPrefix(line, "socks5h://"), strings.HasPrefix(line, "http://"), strings.HasPrefix(line, "https://"):
 		return parseHTTPStyle(line)
 	default:
 		return config.Node{}, fmt.Errorf("不支持的协议前缀: %s", line)
@@ -429,7 +429,7 @@ func parseHTTPStyle(link string) (config.Node, error) {
 		return config.Node{}, fmt.Errorf("代理端口无效: %w", err)
 	}
 	protocol := "http"
-	if strings.HasPrefix(link, "socks://") {
+	if strings.HasPrefix(link, "socks://") || strings.HasPrefix(link, "socks5://") || strings.HasPrefix(link, "socks5h://") {
 		protocol = "socks"
 	}
 	settings := map[string]string{}

@@ -14,9 +14,15 @@ import (
 var assets embed.FS
 
 func main() {
+	releaseInstance, err := app.AcquireSingleInstance()
+	if err != nil {
+		return
+	}
+	defer releaseInstance()
+
 	application := app.New()
 
-	err := wails.Run(&options.App{
+	err = wails.Run(&options.App{
 		Title:             "sbtun",
 		Width:             980,
 		Height:            680,

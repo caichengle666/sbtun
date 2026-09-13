@@ -113,3 +113,15 @@ func TestImportSubscriptionSelectsFirstNode(t *testing.T) {
 		t.Fatalf("current node=%q first=%q", cfg.CurrentNodeID, cfg.Nodes[0].ID)
 	}
 }
+
+func TestParseSOCKS5Links(t *testing.T) {
+	for _, link := range []string{"socks5://user:pass@example.com:1080#s5", "socks5h://example.com:1081#s5h"} {
+		node, err := parseSubscriptionLine(link)
+		if err != nil {
+			t.Fatalf("parse %s: %v", link, err)
+		}
+		if node.Protocol != "socks" || node.Port == 0 {
+			t.Fatalf("unexpected SOCKS5 node: %+v", node)
+		}
+	}
+}
