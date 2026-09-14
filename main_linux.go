@@ -26,6 +26,10 @@ func main() {
 		printHelp()
 		return
 	}
+	if command == "version" || command == "-v" || command == "--version" {
+		fmt.Println("sbtun 0.1.10")
+		return
+	}
 	release, err := app.AcquireSingleInstance()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -68,6 +72,10 @@ func main() {
 			err = fmt.Errorf("用法: %s add-node <节点链接或订阅链接>", os.Args[0])
 			break
 		}
+		if os.Args[2] == "-h" || os.Args[2] == "--help" {
+			fmt.Printf("用法: %s add-node <节点链接或订阅链接>\n", os.Args[0])
+			break
+		}
 		var count int
 		count, err = application.ImportSubscription(os.Args[2])
 		if err == nil {
@@ -95,6 +103,7 @@ func printHelp() {
   sbtun rules update <id>           更新规则集
   sbtun rules update-all            更新全部规则集
   sbtun help                        显示帮助
+  sbtun version                     显示版本
 
 运行中修改 route 或 rules 会自动重载 sing-box。停止前台运行请按 Ctrl+C。`)
 }
