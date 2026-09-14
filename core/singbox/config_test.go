@@ -54,11 +54,8 @@ func TestHealthDNSUsesPlatformResolver(t *testing.T) {
 	dns := generated["dns"].(map[string]any)
 	servers := dns["servers"].([]any)
 	server := servers[0].(map[string]any)
-	if server["type"] == "local" {
-		t.Skip("Windows keeps the system DNS resolver for health checks")
-	}
-	if server["server"] != "1.1.1.1" || dns["final"] != "dns-local" || server["detour"] != "proxy" {
-		t.Fatalf("unexpected Linux health DNS: %+v", dns)
+	if server["type"] != "local" || dns["final"] != "dns-local" {
+		t.Fatalf("unexpected platform health DNS: %+v", dns)
 	}
 }
 

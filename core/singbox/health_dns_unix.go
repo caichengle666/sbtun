@@ -2,19 +2,11 @@
 
 package singbox
 
-// Use an IP-based DoH endpoint so URL health checks do not depend on a
-// system resolver being configured on Linux.
+// Use the system resolver for URL health checks on Linux, matching Windows
+// and avoiding hard-coded public DNS endpoints that may be unreachable.
 func healthDNSConfig() map[string]any {
 	return map[string]any{
-		"servers": []map[string]any{{
-			"type":        "https",
-			"tag":         "dns-local",
-			"server":      "1.1.1.1",
-			"server_port": 443,
-			"path":        "/dns-query",
-			"tls":         map[string]any{"enabled": true, "server_name": "cloudflare-dns.com"},
-			"detour":      "proxy",
-		}},
-		"final": "dns-local",
+		"servers": []map[string]any{{"type": "local", "tag": "dns-local"}},
+		"final":   "dns-local",
 	}
 }
