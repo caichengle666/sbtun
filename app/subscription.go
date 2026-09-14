@@ -1,4 +1,4 @@
-package app
+﻿package app
 
 import (
 	"encoding/base64"
@@ -8,6 +8,7 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
+	"strconv"
 	"time"
 
 	"github.com/caichengle666/sbtun/config"
@@ -143,7 +144,7 @@ type vmessConfig struct {
 	Add  string `json:"add"`
 	Port string `json:"port"`
 	ID   string `json:"id"`
-	Aid  string `json:"aid"`
+	Aid  int    `json:"aid"`
 	Net  string `json:"net"`
 	Type string `json:"type"`
 	Scy  string `json:"scy"`
@@ -156,8 +157,11 @@ type vmessConfig struct {
 }
 
 func parseVMess(link string) (config.Node, error) {
-	payload := strings.TrimPrefix(link, "vmess://")
-	decoded, err := tryBase64Decode(payload)
+	raw := strings.TrimPrefix(link, "vmess://")
+	if idx := strings.IndexByte(raw, '#'); idx >= 0 {
+		raw = raw[:idx]
+	}
+	decoded, err := tryBase64Decode(raw)
 	if err != nil {
 		return config.Node{}, fmt.Errorf("vmess base64 解码失败: %w", err)
 	}
@@ -170,7 +174,7 @@ func parseVMess(link string) (config.Node, error) {
 		return config.Node{}, fmt.Errorf("vmess 端口无效: %s", cfg.Port)
 	}
 	settings := map[string]string{"uuid": cfg.ID}
-	if cfg.Aid != "" {
+	if cfg.Aid != 0 {
 		settings["alter_id"] = cfg.Aid
 	}
 	security := cfg.Scy

@@ -161,10 +161,10 @@ func TestCustomDNSUsesModernServerShape(t *testing.T) {
 		t.Fatal(err)
 	}
 	servers := runtime.DNS["servers"].([]any)
-	if len(servers) != 2 {
-		t.Fatalf("dns servers count=%d want=2", len(servers))
+	if len(servers) != 3 {
+		t.Fatalf("dns servers count=%d want=3", len(servers))
 	}
-	server := servers[1].(map[string]any)
+	server := servers[2].(map[string]any)
 	if server["type"] != "https" {
 		t.Fatalf("dns type=%v", server["type"])
 	}
