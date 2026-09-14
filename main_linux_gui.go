@@ -1,4 +1,4 @@
-//go:build windows
+//go:build linux && !cli
 
 package main
 
@@ -15,15 +15,7 @@ import (
 var assets embed.FS
 
 func main() {
-	releaseInstance, err := app.AcquireSingleInstance()
-	if err != nil {
-		app.ShowSingleInstanceMessage()
-		return
-	}
-	defer releaseInstance()
-
 	application := app.New()
-
 	appOptions := &options.App{
 		Title:             "sbtun",
 		Width:             980,
@@ -32,16 +24,13 @@ func main() {
 		MinHeight:         520,
 		BackgroundColour:  &options.RGBA{R: 13, G: 14, B: 21, A: 255},
 		HideWindowOnClose: true,
-		AssetServer: &assetserver.Options{
-			Assets: assets,
-		},
-		OnStartup:  application.Startup,
-		OnShutdown: application.Shutdown,
-		Bind:       []interface{}{application},
+		AssetServer:       &assetserver.Options{Assets: assets},
+		OnStartup:         application.Startup,
+		OnShutdown:        application.Shutdown,
+		Bind:              []interface{}{application},
 	}
 	configurePlatformOptions(appOptions)
-	err = wails.Run(appOptions)
-	if err != nil {
+	if err := wails.Run(appOptions); err != nil {
 		panic(err)
 	}
 }

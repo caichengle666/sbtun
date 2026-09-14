@@ -38,6 +38,18 @@ type App struct {
 func New() *App { return &App{} }
 
 func (a *App) Startup(ctx context.Context) {
+	a.startupCore(ctx)
+	go a.StartTray()
+	go a.monitorNodes()
+}
+
+// StartupCLI initializes the runtime without starting the desktop tray.
+func (a *App) StartupCLI(ctx context.Context) {
+	a.startupCore(ctx)
+	go a.monitorNodes()
+}
+
+func (a *App) startupCore(ctx context.Context) {
 	a.ctx = ctx
 	a.initPaths()
 	a.runtime = NewRuntimeCoordinator(a.workDir, a.binary)
@@ -47,8 +59,6 @@ func (a *App) Startup(ctx context.Context) {
 		exeDir, _ = os.Getwd()
 	}
 	a.rulesManager = rules.NewManager(filepath.Join(exeDir, "rules"))
-	go a.StartTray()
-	go a.monitorNodes()
 }
 
 // Shutdown stops the proxy before Wails tears down the application process.

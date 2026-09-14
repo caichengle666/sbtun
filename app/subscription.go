@@ -53,7 +53,7 @@ func parseSubscription(link string) ([]config.Node, error) {
 		}
 		return []config.Node{node}, nil
 	}
-	if strings.HasPrefix(link, "socks://") {
+	if strings.HasPrefix(link, "socks://") || strings.HasPrefix(link, "socks5://") || strings.HasPrefix(link, "socks5h://") {
 		node, err := parseHTTPStyle(link)
 		if err != nil {
 			return nil, err

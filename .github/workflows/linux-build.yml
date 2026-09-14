@@ -100,6 +100,7 @@ jobs:
           rm -rf dist/sbtun-linux-amd64
           mkdir -p dist/sbtun-linux-amd64/resources
           cp build/bin/sbtun dist/sbtun-linux-amd64/sbtun
+          go build -tags cli -o dist/sbtun-linux-amd64/sbtun-cli .
           sing_box=$(find "$RUNNER_TEMP/sing-box" -type f -name sing-box -executable | head -n 1)
           test -n "$sing_box"
           cp "$sing_box" dist/sbtun-linux-amd64/sing-box
@@ -108,7 +109,7 @@ jobs:
           cp resources/icon.png dist/sbtun-linux-amd64/resources/icon.png
           cp -r "$RUNNER_TEMP/webkit-runtime/libs" dist/sbtun-linux-amd64/libs
           cp -r "$RUNNER_TEMP/webkit-runtime/webkit" dist/sbtun-linux-amd64/webkit
-          chmod +x dist/sbtun-linux-amd64/sbtun dist/sbtun-linux-amd64/sing-box
+          chmod +x dist/sbtun-linux-amd64/sbtun dist/sbtun-linux-amd64/sbtun-cli dist/sbtun-linux-amd64/sing-box
           cat > dist/sbtun-linux-amd64/start-sbtun.sh <<'EOF'
           #!/usr/bin/env bash
           set -euo pipefail
@@ -137,8 +138,8 @@ jobs:
           exit 1
           EOF
           chmod +x dist/sbtun-linux-amd64/start-sbtun.sh
-          printf 'sbtun Linux 便携版\n\n双击 start-sbtun.sh 启动，程序会自动请求管理员权限。\n也可以在终端执行 ./start-sbtun.sh。\nTUN 模式需要 root 或 CAP_NET_ADMIN 权限。\n\n内置 sing-box %s 和 WebKitGTK 4.0 运行库。\n' "$SING_BOX_VERSION" > dist/sbtun-linux-amd64/README.txt
-          (cd dist/sbtun-linux-amd64 && find libs webkit -type f -exec sha256sum {} +; sha256sum sbtun sing-box start-sbtun.sh) > dist/sbtun-linux-amd64/SHA256SUMS.txt
+          printf 'sbtun Linux 便携版\n\n运行 ./start-sbtun.sh 启动 GUI，程序会自动请求管理员权限。\n命令行模式：./sbtun-cli help\nTUN 模式需要 root 或 CAP_NET_ADMIN 权限。\n\n内置 sing-box %s 和 WebKitGTK 4.0 运行库。\n' "$SING_BOX_VERSION" > dist/sbtun-linux-amd64/README.txt
+          (cd dist/sbtun-linux-amd64 && find libs webkit -type f -exec sha256sum {} +; sha256sum sbtun sbtun-cli sing-box start-sbtun.sh) > dist/sbtun-linux-amd64/SHA256SUMS.txt
 
       - name: 打包 TAR.GZ
         run: tar -czf dist/sbtun-linux-amd64.tar.gz -C dist sbtun-linux-amd64
