@@ -102,6 +102,16 @@ func main() {
 		if err == nil {
 			fmt.Println("node switched")
 		}
+	case "add-rule":
+		if len(os.Args) < 3 {
+			err = fmt.Errorf("usage: %s add-rule <链接|文件|文本>", os.Args[0])
+			break
+		}
+		var ruleCount int
+		ruleCount, err = application.ImportCustomRules(os.Args[2])
+		if err == nil {
+			fmt.Printf("已导入 %d 条规则\n", ruleCount)
+		}
 	case "rules":
 		err = runRulesCommand(application, os.Args[2:])
 	default:
@@ -147,6 +157,7 @@ func printHelp() {
   sbtun status                      查看配置状态
   sbtun add-node <链接>             添加节点或订阅
   sbtun route <模式>                设置路由: smart/global/direct/custom
+  sbtun add-rule <链接|文件|文本>  添加自定义规则
   sbtun rules list                  列出规则集
   sbtun rules update <id>           更新规则集
   sbtun nodes                       列出节点编号
@@ -181,7 +192,6 @@ func runRulesCommand(application *app.App, args []string) error {
 		return fmt.Errorf("用法: sbtun rules [list|update <id>|update-all]")
 	}
 }
-
 
 // listNodes prints the current node list with 1-based indices.
 func listNodes(application *app.App) error {
