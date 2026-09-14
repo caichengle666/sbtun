@@ -6,6 +6,7 @@ import (
 	"os"
 	"path/filepath"
 	"strings"
+	"strconv"
 
 	"github.com/caichengle666/sbtun/config"
 )
@@ -103,7 +104,8 @@ func findNode(nodes []config.Node, id string) (config.Node, bool) {
 
 func buildDNS(mode config.DNSMode, routeMode config.RoutingMode) map[string]any {
 	servers := []map[string]any{
-		{"type": "local", "tag": "dns-local", "detour": "direct"},
+		{"type": "udp", "tag": "dns-local", "server": "223.5.5.5", "server_port": 53, "detour": "direct"},
+		{"type": "udp", "tag": "dns-local-standby", "server": "119.29.29.29", "server_port": 53, "detour": "direct"},
 		{
 			"type": "https", "tag": "dns-remote", "server": "cloudflare-dns.com", "server_port": 443,
 			"path": "/dns-query", "domain_resolver": "dns-local", "detour": "proxy",
@@ -303,9 +305,15 @@ func parseBandwidth(s string) int {
 
 func addSetting(out map[string]any, key, value string) {
 	switch key {
-	case "uuid", "password", "method", "flow", "security", "network", "alter_id", "username", "version", "packet_encoding", "plugin", "plugin_opts", "path":
+case "uuid", "password", "method", "flow", "security", "network", "username", "version", "packet_encoding", "plugin", "plugin_opts", "path":
 		out[key] = value
-	case "server_ports", "hop_interval":
+case "alter_id":
+		if v, err := strconv.Atoi(value); err == nil {
+			out[key] = v
+		} else {
+			out[key] = value
+		}
+case "server_ports", "hop_interval":
 		out[key] = value
 	case "disable_path_mtu_discovery", "udp_over_tcp", "multiplex":
 		if strings.EqualFold(value, "true") || value == "1" {

@@ -1,4 +1,4 @@
-﻿package app
+package app
 
 import (
 	"encoding/base64"
@@ -8,7 +8,6 @@ import (
 	"net/http"
 	"net/url"
 	"strings"
-	"strconv"
 	"time"
 
 	"github.com/caichengle666/sbtun/config"
@@ -144,7 +143,7 @@ type vmessConfig struct {
 	Add  string `json:"add"`
 	Port string `json:"port"`
 	ID   string `json:"id"`
-	Aid  int    `json:"aid"`
+	Aid  string `json:"aid"`
 	Net  string `json:"net"`
 	Type string `json:"type"`
 	Scy  string `json:"scy"`
@@ -157,16 +156,16 @@ type vmessConfig struct {
 }
 
 func parseVMess(link string) (config.Node, error) {
-	raw := strings.TrimPrefix(link, "vmess://")
-	if idx := strings.IndexByte(raw, '#'); idx >= 0 {
-		raw = raw[:idx]
-	}
-	decoded, err := tryBase64Decode(raw)
-	if err != nil {
-		return config.Node{}, fmt.Errorf("vmess base64 解码失败: %w", err)
-	}
-	var cfg vmessConfig
-	if err := json.Unmarshal([]byte(decoded), &cfg); err != nil {
+raw := strings.TrimPrefix(link, "vmess://")
+if idx := strings.IndexByte(raw, '#'); idx >= 0 {
+raw = raw[:idx]
+}
+decoded, err := tryBase64Decode(raw)
+if err != nil {
+return config.Node{}, fmt.Errorf("vmess base64 解码失败: %w", err)
+}
+var cfg vmessConfig
+if err := json.Unmarshal([]byte(decoded), &cfg); err != nil {
 		return config.Node{}, fmt.Errorf("vmess JSON 解析失败: %w", err)
 	}
 	port, err := parsePort(cfg.Port)
@@ -174,7 +173,7 @@ func parseVMess(link string) (config.Node, error) {
 		return config.Node{}, fmt.Errorf("vmess 端口无效: %s", cfg.Port)
 	}
 	settings := map[string]string{"uuid": cfg.ID}
-	if cfg.Aid != 0 {
+	if cfg.Aid != "" {
 		settings["alter_id"] = cfg.Aid
 	}
 	security := cfg.Scy
