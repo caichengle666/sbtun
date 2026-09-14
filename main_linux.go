@@ -84,7 +84,11 @@ func main() {
 		var count int
 		count, err = application.ImportSubscription(os.Args[2])
 		if err == nil {
-			fmt.Printf("已添加 %d 个节点\n", count)
+			if count == 0 {
+				fmt.Println("未添加新节点：节点已存在")
+			} else {
+				fmt.Printf("已添加 %d 个节点\n", count)
+			}
 		}
 	case "rules":
 		err = runRulesCommand(application, os.Args[2:])
