@@ -8,6 +8,7 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"strconv"
 	"syscall"
 
 	"github.com/caichengle666/sbtun/app"
@@ -90,6 +91,17 @@ func main() {
 				fmt.Printf("已添加 %d 个节点\n", count)
 			}
 		}
+	case "nodes":
+		err = listNodes(application)
+	case "switch":
+		if len(os.Args) < 3 {
+			err = fmt.Errorf("usage: %s switch <index>", os.Args[0])
+			break
+		}
+		err = switchNodeByIndex(application, os.Args[2])
+		if err == nil {
+			fmt.Println("node switched")
+		}
 	case "rules":
 		err = runRulesCommand(application, os.Args[2:])
 	default:
@@ -137,6 +149,8 @@ func printHelp() {
   sbtun route <模式>                设置路由: smart/global/direct/custom
   sbtun rules list                  列出规则集
   sbtun rules update <id>           更新规则集
+  sbtun nodes                       列出节点编号
+  sbtun switch <编号>                按编号切换节点
   sbtun rules update-all            更新全部规则集
   sbtun help                        显示帮助
   sbtun version                     显示版本
@@ -166,4 +180,42 @@ func runRulesCommand(application *app.App, args []string) error {
 	default:
 		return fmt.Errorf("用法: sbtun rules [list|update <id>|update-all]")
 	}
+}
+
+
+// listNodes prints the current node list with 1-based indices.
+func listNodes(application *app.App) error {
+	cfg, err := application.LoadConfig()
+	if err != nil {
+		return err
+	}
+	if len(cfg.Nodes) == 0 {
+		fmt.Println("no nodes yet; use add-node first")
+		return nil
+	}
+	for i, node := range cfg.Nodes {
+		marker := " "
+		if node.ID == cfg.CurrentNodeID {
+			marker = "*"
+		}
+		fmt.Printf("%s %d\t%s\t%s:%d\n", marker, i+1, node.Name, node.Server, node.Port)
+	}
+	fmt.Printf("current: %s\n", cfg.CurrentNodeID)
+	return nil
+}
+
+// switchNodeByIndex selects a node using a 1-based index.
+func switchNodeByIndex(application *app.App, arg string) error {
+	index, err := strconv.Atoi(arg)
+	if err != nil || index < 1 {
+		return fmt.Errorf("invalid node index: %s", arg)
+	}
+	cfg, err := application.LoadConfig()
+	if err != nil {
+		return err
+	}
+	if index > len(cfg.Nodes) {
+		return fmt.Errorf("node index out of range: %d (max %d)", index, len(cfg.Nodes))
+	}
+	return application.SelectNode(cfg.Nodes[index-1].ID)
 }
