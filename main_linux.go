@@ -9,7 +9,9 @@ import (
 	"os/exec"
 	"os/signal"
 	"strconv"
+	"strings"
 	"syscall"
+	"path/filepath"
 
 	"github.com/caichengle666/sbtun/app"
 	"github.com/caichengle666/sbtun/config"
@@ -24,6 +26,7 @@ func main() {
 	defer stop()
 	application := app.New()
 	application.StartupCLI(ctx)
+	var err error
 	if command == "help" || command == "-h" || command == "--help" {
 		printHelp()
 		return
@@ -36,13 +39,13 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	release, err := app.AcquireSingleInstance()
-	if err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
-	}
-	defer release()
 	if command == "run" || command == "start" {
+		release, err := app.AcquireSingleInstance()
+		if err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+		defer release()
 		if err := application.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -112,6 +115,11 @@ func main() {
 		if err == nil {
 			fmt.Printf("已导入 %d 条规则\n", ruleCount)
 		}
+	case "stop":
+		err = stopRunningInstance()
+		if err == nil {
+			fmt.Println("sbtun 已停止")
+		}
 	case "rules":
 		err = runRulesCommand(application, os.Args[2:])
 	default:
@@ -163,6 +171,7 @@ func printHelp() {
   sbtun nodes                       列出节点编号
   sbtun switch <编号>                按编号切换节点
   sbtun rules update-all            更新全部规则集
+  sbtun stop                        停止运行中的实例
   sbtun help                        显示帮助
   sbtun version                     显示版本
 
@@ -228,4 +237,44 @@ func switchNodeByIndex(application *app.App, arg string) error {
 		return fmt.Errorf("node index out of range: %d (max %d)", index, len(cfg.Nodes))
 	}
 	return application.SelectNode(cfg.Nodes[index-1].ID)
+}
+
+// stopRunningInstance scans /proc for running sbtun-cli or sbtun processes
+// and sends SIGTERM. It avoids matching its own PID.
+func stopRunningInstance() error {
+	myPid := os.Getpid()
+	entries, err := os.ReadDir("/proc")
+	if err != nil {
+		return fmt.Errorf("读取 /proc 失败: %w", err)
+	}
+	var targets []int
+	for _, entry := range entries {
+		if !entry.IsDir() {
+			continue
+		}
+		pid, convErr := strconv.Atoi(entry.Name())
+		if convErr != nil || pid == myPid {
+			continue
+		}
+		commPath := filepath.Join("/proc", entry.Name(), "comm")
+		comm, readErr := os.ReadFile(commPath)
+		if readErr != nil {
+			continue
+		}
+		name := strings.TrimSpace(string(comm))
+		if name == "sbtun-cli" || name == "sbtun" {
+			targets = append(targets, pid)
+		}
+	}
+	if len(targets) == 0 {
+		return fmt.Errorf("没有运行中的 sbtun 实例")
+	}
+	for _, pid := range targets {
+		proc, findErr := os.FindProcess(pid)
+		if findErr != nil {
+			continue
+		}
+		_ = proc.Signal(syscall.SIGTERM)
+	}
+	return nil
 }
