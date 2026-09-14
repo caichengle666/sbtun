@@ -48,7 +48,11 @@ func main() {
 
 	switch command {
 	case "status":
-		cfg := application.GetConfig()
+		cfg, loadErr := application.LoadConfig()
+		if loadErr != nil {
+			err = fmt.Errorf("读取配置失败: %w", loadErr)
+			break
+		}
 		fmt.Printf("路由模式: %s\nDNS 模式: %s\n当前节点: %s\n节点数量: %d\n", cfg.RoutingMode, cfg.DNSMode, cfg.CurrentNodeID, len(cfg.Nodes))
 	case "route":
 		if len(os.Args) < 3 {

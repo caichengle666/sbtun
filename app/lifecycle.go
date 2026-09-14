@@ -69,19 +69,8 @@ func (r *RuntimeCoordinator) Start(ctx context.Context, cfg config.Config) error
 	if err := config.Validate(cfg); err != nil {
 		return r.fail(ErrConfigInvalid, err)
 	}
-	exeDir := filepath.Dir(r.Binary)
-	if exeDir == "." || exeDir == "" {
-		exeDir, _ = os.Getwd()
-	}
-	data, err := singbox.BuildConfig(cfg, exeDir)
+	configPath, err := r.SyncConfig(cfg)
 	if err != nil {
-		return r.fail(ErrConfigInvalid, err)
-	}
-	if err := os.MkdirAll(r.WorkDir, 0o755); err != nil {
-		return r.fail(ErrConfigInvalid, fmt.Errorf("创建运行目录失败: %w", err))
-	}
-	configPath := filepath.Join(r.WorkDir, "runtime.json")
-	if err := atomicWrite(configPath, data); err != nil {
 		return r.fail(ErrConfigInvalid, err)
 	}
 	if err := singbox.ValidateConfig(ctx, r.Binary, configPath); err != nil {
@@ -103,6 +92,28 @@ func (r *RuntimeCoordinator) Start(ctx context.Context, cfg config.Config) error
 	r.TUN.MarkRunning()
 	r.State.Set(core.StateRunning, "")
 	return nil
+}
+
+// SyncConfig rebuilds runtime.json from the persisted configuration without
+// starting sing-box. This keeps the generated artifact inspectable after CLI
+// changes while config.json remains the source of truth.
+func (r *RuntimeCoordinator) SyncConfig(cfg config.Config) (string, error) {
+	exeDir := filepath.Dir(r.Binary)
+	if exeDir == "." || exeDir == "" {
+		exeDir, _ = os.Getwd()
+	}
+	data, err := singbox.BuildConfig(cfg, exeDir)
+	if err != nil {
+		return "", err
+	}
+	if err := os.MkdirAll(r.WorkDir, 0o755); err != nil {
+		return "", fmt.Errorf("创建运行目录失败: %w", err)
+	}
+	configPath := filepath.Join(r.WorkDir, "runtime.json")
+	if err := atomicWrite(configPath, data); err != nil {
+		return "", fmt.Errorf("写入运行配置失败: %w", err)
+	}
+	return configPath, nil
 }
 
 func (r *RuntimeCoordinator) cleanupTUN() {

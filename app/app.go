@@ -173,11 +173,17 @@ func trafficStats() (uint64, uint64) {
 }
 
 func (a *App) GetConfig() config.Config {
-	cfg, err := a.manager.Load()
-	if err != nil {
-		return config.Default()
-	}
+	cfg, _ := a.LoadConfig()
 	return cfg
+}
+
+// LoadConfig exposes configuration errors to CLI callers instead of silently
+// turning permission or format failures into an empty default configuration.
+func (a *App) LoadConfig() (config.Config, error) {
+	if a.manager == nil {
+		return config.Config{}, errors.New("配置管理器未初始化")
+	}
+	return a.manager.Load()
 }
 
 func (a *App) SaveConfig(cfg config.Config) error {
@@ -257,6 +263,11 @@ func (a *App) AddNode(node config.Node) error {
 			if err := a.manager.Save(cfg); err != nil {
 				return err
 			}
+			if a.runtime != nil {
+				if _, err := a.runtime.SyncConfig(cfg); err != nil {
+					return fmt.Errorf("节点已写入配置，但生成运行配置失败: %w", err)
+				}
+			}
 			return a.reloadIfRunningLocked()
 		}
 	}
@@ -266,6 +277,11 @@ func (a *App) AddNode(node config.Node) error {
 	}
 	if err := a.manager.Save(cfg); err != nil {
 		return err
+	}
+	if a.runtime != nil {
+		if _, err := a.runtime.SyncConfig(cfg); err != nil {
+			return fmt.Errorf("节点已写入配置，但生成运行配置失败: %w", err)
+		}
 	}
 	return a.reloadIfRunningLocked()
 }
@@ -535,6 +551,11 @@ func (a *App) ImportSubscription(link string) (int, error) {
 	}
 	if err := a.manager.Save(cfg); err != nil {
 		return 0, err
+	}
+	if a.runtime != nil {
+		if _, err := a.runtime.SyncConfig(cfg); err != nil {
+			return added, fmt.Errorf("节点已写入配置，但生成运行配置失败: %w", err)
+		}
 	}
 	if err := a.reloadIfRunningLocked(); err != nil {
 		return added, err
