@@ -6,6 +6,7 @@ import (
 	"context"
 	"fmt"
 	"os"
+	"os/exec"
 	"os/signal"
 	"syscall"
 
@@ -29,6 +30,10 @@ func main() {
 	if command == "version" || command == "-v" || command == "--version" {
 		fmt.Println("sbtun 0.1.10")
 		return
+	}
+	if err := relaunchElevated(); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
 	}
 	release, err := app.AcquireSingleInstance()
 	if err != nil {
@@ -90,6 +95,33 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
 	}
+}
+
+// relaunchElevated keeps the CLI convenient for TUN and root-owned runtime
+// data. The marker prevents sudo/pkexec recursion after elevation.
+func relaunchElevated() error {
+	if os.Geteuid() == 0 || os.Getenv("SBTUN_ELEVATED") == "1" {
+		return nil
+	}
+	exe, err := os.Executable()
+	if err != nil {
+		return fmt.Errorf("获取 CLI 路径失败: %w", err)
+	}
+	args := append([]string{exe}, os.Args[1:]...)
+	env := append(os.Environ(), "SBTUN_ELEVATED=1")
+	for _, tool := range []string{"pkexec", "sudo"} {
+		path, lookErr := exec.LookPath(tool)
+		if lookErr != nil {
+			continue
+		}
+		if tool == "pkexec" {
+			args = append([]string{"pkexec", "env", "SBTUN_ELEVATED=1", exe}, os.Args[1:]...)
+			return syscall.Exec(path, args, env)
+		}
+		args = append([]string{"sudo", "-E", exe}, os.Args[1:]...)
+		return syscall.Exec(path, args, env)
+	}
+	return fmt.Errorf("需要管理员权限，请安装 pkexec 或 sudo 后重试")
 }
 
 func printHelp() {
