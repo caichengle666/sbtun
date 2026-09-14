@@ -4,6 +4,8 @@ package main
 
 import (
 	"embed"
+	"fmt"
+	"os"
 
 	"github.com/caichengle666/sbtun/app"
 	"github.com/wailsapp/wails/v2"
@@ -15,6 +17,13 @@ import (
 var assets embed.FS
 
 func main() {
+	release, err := app.AcquireSingleInstance()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer release()
+
 	application := app.New()
 	appOptions := &options.App{
 		Title:             "sbtun",

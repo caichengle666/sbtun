@@ -26,13 +26,13 @@ func main() {
 		printHelp()
 		return
 	}
+	release, err := app.AcquireSingleInstance()
+	if err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(1)
+	}
+	defer release()
 	if command == "run" || command == "start" {
-		release, err := app.AcquireSingleInstance()
-		if err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(1)
-		}
-		defer release()
 		if err := application.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -46,7 +46,6 @@ func main() {
 		return
 	}
 
-	var err error
 	switch command {
 	case "status":
 		cfg := application.GetConfig()
