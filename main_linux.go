@@ -123,7 +123,11 @@ func main() {
 		}
 	case "edit":
 		if len(os.Args) == 2 {
-			err = interactiveEdit(application)
+			err = interactiveEdit(application, "")
+			break
+		}
+		if len(os.Args) == 3 {
+			err = interactiveEdit(application, os.Args[2])
 			break
 		}
 		if len(os.Args) == 4 {
@@ -174,16 +178,16 @@ func main() {
 		}
 	case "switch":
 		if len(os.Args) < 3 {
-			err = fmt.Errorf("usage: %s switch <index>", os.Args[0])
+			err = fmt.Errorf("用法: %s switch <编号>", os.Args[0])
 			break
 		}
 		err = switchNodeByIndex(application, os.Args[2])
 		if err == nil {
-			fmt.Println("node switched")
+			fmt.Println("节点已切换")
 		}
 	case "add-rule":
 		if len(os.Args) < 3 {
-			err = fmt.Errorf("usage: %s add-rule <链接|文件|文本>", os.Args[0])
+			err = fmt.Errorf("用法: %s add-rule <链接|文件|文本>", os.Args[0])
 			break
 		}
 		var ruleCount int
@@ -244,38 +248,81 @@ func relaunchElevated() error {
 }
 
 func printHelp() {
-	fmt.Println(`sbtun Linux 命令行用法:
-  sbtun run                         前台启动 TUN 和代理
-  sbtun start                       同 run
-  sbtun status                      查看配置状态
-  sbtun add-node <链接>             添加节点或订阅
-  sbtun route <模式>                设置路由: smart/global/direct/custom
-  sbtun add-rule <链接|文件|文本>  添加自定义规则
-  sbtun rules list                  列出规则集
-  sbtun rules update <id>           更新规则集
-  sbtun nodes                       列出节点编号
-  sbtun del <编号...>                批量删除节点，例如 del 1 2 3
-  sbtun test <编号...>               按编号顺序测试节点健康
-  sbtun edit                         列出节点并进入交互式编辑
-  sbtun edit <编号> <节点链接>       用完整链接覆盖全部参数
-  sbtun edit <编号> <名称> <服务器> <端口> 仅修改基本信息
-  sbtun switch <编号>                按编号切换节点
-  sbtun rules update-all            更新全部规则集
-  sbtun stop                        停止运行中的实例
-  sbtun help                        显示帮助
-  sbtun version                     显示版本
-
+	fmt.Println("sbtun Linux 命令行\n\n用法:\n  sbtun <命令> [参数]")
+	printHelpGroup("运行", []helpEntry{
+		{"run", "前台启动 TUN 和代理"},
+		{"start", "同 run"},
+		{"stop", "停止运行中的实例"},
+		{"status", "查看配置状态"},
+	})
+	printHelpGroup("节点", []helpEntry{
+		{"nodes", "列出节点编号，* 表示当前节点"},
+		{"add-node <链接>", "添加单节点链接或订阅链接"},
+		{"switch <编号>", "按编号切换节点"},
+		{"test <编号...>", "按编号顺序测试节点健康"},
+		{"del <编号...>", "批量删除节点，例如 del 1 2 3"},
+		{"edit [编号]", "进入交互式编辑，可直接指定节点"},
+		{"edit <编号> <节点链接>", "用完整链接覆盖全部参数"},
+		{"edit <编号> <名称> <服务器> <端口>", "仅修改基本信息"},
+	})
+	printHelpGroup("路由与规则", []helpEntry{
+		{"route <模式>", "设置路由: smart/global/direct/custom"},
+		{"add-rule <链接|文件|文本>", "添加自定义规则"},
+		{"rules list", "列出规则集"},
+		{"rules update <id>", "更新指定规则集"},
+		{"rules update-all", "更新全部规则集"},
+	})
+	printHelpGroup("其他", []helpEntry{
+		{"help", "显示帮助"},
+		{"version", "显示版本"},
+	})
+	fmt.Println(`
 示例:
-  sbtun nodes                       先查看节点编号
-  sbtun del 1 2 3                   删除第 1、2、3 个节点
-  sbtun test 1 2 3                  顺序测试第 1、2、3 个节点
-  sbtun edit 2 韩国节点 1.2.3.4 443 修改第 2 个节点
-  sbtun edit 2 "vless://UUID@1.2.3.4:443?..." 修改 UUID、TLS、Reality 等全部参数
+  sbtun nodes
+  sbtun switch 2
+  sbtun del 1 2 3
+  sbtun test 1 2 3
+  sbtun edit 2
+  sbtun edit 2 "vless://UUID@1.2.3.4:443?..."
+
+说明:
   交互编辑中直接按回车保留当前值，输入 - 清空当前参数。
   名称包含空格时请使用引号，例如: sbtun edit 2 "韩国 高速" 1.2.3.4 443
+  批量测试按顺序执行，不会同时启动大量检测进程。
+  删除当前节点后会自动选择剩余节点。
+  运行中修改 route 或 rules 会自动重载 sing-box。
+  停止前台运行请按 Ctrl+C。`)
+}
 
-批量测试按顺序执行，不会同时启动大量检测进程；删除当前节点后会自动选择剩余节点。
- 运行中修改 route 或 rules 会自动重载 sing-box。停止前台运行请按 Ctrl+C。`)
+type helpEntry struct {
+	command     string
+	description string
+}
+
+func printHelpGroup(title string, entries []helpEntry) {
+	maxWidth := 0
+	for _, entry := range entries {
+		if width := terminalTextWidth(entry.command); width > maxWidth {
+			maxWidth = width
+		}
+	}
+	fmt.Printf("\n%s:\n", title)
+	for _, entry := range entries {
+		padding := strings.Repeat(" ", maxWidth-terminalTextWidth(entry.command))
+		fmt.Printf("  sbtun %s%s  %s\n", entry.command, padding, entry.description)
+	}
+}
+
+func terminalTextWidth(value string) int {
+	width := 0
+	for _, char := range value {
+		if char <= 0x7f {
+			width++
+		} else {
+			width += 2
+		}
+	}
+	return width
 }
 
 func runRulesCommand(application *app.App, args []string) error {
@@ -309,7 +356,7 @@ func listNodes(application *app.App) error {
 		return err
 	}
 	if len(cfg.Nodes) == 0 {
-		fmt.Println("no nodes yet; use add-node first")
+		fmt.Println("暂无节点，请先使用 add-node 添加")
 		return nil
 	}
 	for i, node := range cfg.Nodes {
@@ -319,7 +366,7 @@ func listNodes(application *app.App) error {
 		}
 		fmt.Printf("%s %d\t%s\t%s:%d\n", marker, i+1, node.Name, node.Server, node.Port)
 	}
-	fmt.Printf("current: %s\n", cfg.CurrentNodeID)
+	fmt.Printf("当前节点: %s\n", cfg.CurrentNodeID)
 	return nil
 }
 
@@ -327,14 +374,14 @@ func listNodes(application *app.App) error {
 func switchNodeByIndex(application *app.App, arg string) error {
 	index, err := strconv.Atoi(arg)
 	if err != nil || index < 1 {
-		return fmt.Errorf("invalid node index: %s", arg)
+		return fmt.Errorf("节点编号无效: %s", arg)
 	}
 	cfg, err := application.LoadConfig()
 	if err != nil {
 		return err
 	}
 	if index > len(cfg.Nodes) {
-		return fmt.Errorf("node index out of range: %d (max %d)", index, len(cfg.Nodes))
+		return fmt.Errorf("节点编号超出范围: %d（最大 %d）", index, len(cfg.Nodes))
 	}
 	return application.SelectNode(cfg.Nodes[index-1].ID)
 }
@@ -364,7 +411,7 @@ func nodeIDsFromArgs(application *app.App, args []string) ([]string, error) {
 	return ids, nil
 }
 
-func interactiveEdit(application *app.App) error {
+func interactiveEdit(application *app.App, indexArg string) error {
 	cfg, err := application.LoadConfig()
 	if err != nil {
 		return err
@@ -376,9 +423,12 @@ func interactiveEdit(application *app.App) error {
 		return err
 	}
 	reader := bufio.NewReader(os.Stdin)
-	indexText, err := promptLine(reader, "请输入要编辑的节点编号")
-	if err != nil {
-		return err
+	indexText := indexArg
+	if indexText == "" {
+		indexText, err = promptLine(reader, "请输入要编辑的节点编号")
+		if err != nil {
+			return err
+		}
 	}
 	index, err := strconv.Atoi(indexText)
 	if err != nil || index < 1 || index > len(cfg.Nodes) {
