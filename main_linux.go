@@ -236,7 +236,15 @@ func printHelp() {
   sbtun help                        显示帮助
   sbtun version                     显示版本
 
-运行中修改 route 或 rules 会自动重载 sing-box。停止前台运行请按 Ctrl+C。`)
+示例:
+  sbtun nodes                       先查看节点编号
+  sbtun del 1 2 3                   删除第 1、2、3 个节点
+  sbtun test 1 2 3                  顺序测试第 1、2、3 个节点
+  sbtun edit 2 韩国节点 1.2.3.4 443 修改第 2 个节点
+  名称包含空格时请使用引号，例如: sbtun edit 2 "韩国 高速" 1.2.3.4 443
+
+批量测试按顺序执行，不会同时启动大量检测进程；删除当前节点后会自动选择剩余节点。
+ 运行中修改 route 或 rules 会自动重载 sing-box。停止前台运行请按 Ctrl+C。`)
 }
 
 func runRulesCommand(application *app.App, args []string) error {
