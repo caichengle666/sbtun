@@ -1,4 +1,4 @@
-
+﻿
 import './style.css'
 
 const app = document.querySelector('#app')
@@ -23,6 +23,7 @@ const state = {
   nodeHealth: {},
   selectedNodes: new Set(),
   batchTesting: false,
+  nodeFilter: 'all',
   traffic: { up: 0, down: 0 },
   diagnostics: null,
   view: 'overview',
@@ -345,26 +346,50 @@ function formatRuleInfo(rule) {
 }
 
 function renderNodes() {
-  if (!state.config?.nodes?.length) {
-    return '<div class="empty">尚未导入节点</div>'
+  const allNodes = state.config?.nodes || []
+  const filtered = allNodes.filter(n => state.nodeFilter === 'all' || n.protocol === state.nodeFilter)
+  if (!filtered.length) {
+    return '<div class="empty">没有匹配的节点</div>'
   }
-  return `<ul class="node-list">${state.config.nodes.map(n => `
-    <li class="node-item ${state.config.current_node_id === n.id ? 'active' : ''}">
-      <input class="node-select" type="checkbox" data-id="${n.id}" ${state.selectedNodes.has(n.id) ? 'checked' : ''} aria-label="选择 ${escapeHtml(n.name)}" />
-      <span class="badge ${n.id.startsWith('direct') ? 'direct' : 'proxy'}">${n.protocol}</span>
-      <span style="flex:1">
-        <span class="node-name">${escapeHtml(n.name)}</span>
-        <span class="node-server">${escapeHtml(n.server)}:${n.port}</span>
-        ${renderNodeHealth(n.id)}
-      </span>
-      <span class="node-actions">
-        <button class="btn btn-ghost select-node" data-id="${n.id}" ${state.nodeSwitching ? 'disabled' : ''}>${state.config.current_node_id === n.id ? '当前' : '选择'}</button>
-        <button class="btn btn-ghost test-node" data-id="${n.id}">测试</button>
-        <button class="btn btn-danger rm-node" data-id="${n.id}">删除</button>
-        <button class="btn btn-ghost edit-node" data-id="${n.id}">编辑</button>
-      </span>
-    </li>
-  `).join('')}</ul>`
+  const groups = {}
+  for (const n of filtered) {
+    const key = n.protocol || 'unknown'
+    if (!groups[key]) groups[key] = []
+    groups[key].push(n)
+  }
+  const protocolOrder = ['hysteria2', 'vless', 'vmess', 'trojan', 'shadowsocks', 'socks', 'http', 'unknown']
+  const sortedKeys = Object.keys(groups).sort((a, b) => {
+    const ai = protocolOrder.indexOf(a)
+    const bi = protocolOrder.indexOf(b)
+    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
+  })
+  const filterBtns = [['all', '全部'], ['hysteria2', 'Hysteria2'], ['vless', 'VLESS'], ['vmess', 'VMess'], ['trojan', 'Trojan'], ['shadowsocks', 'SS'], ['socks', 'SOCKS'], ['http', 'HTTP']]
+  const filterHtml = `<div class="node-filters">${filterBtns.map(([id, label]) => {
+    const count = id === 'all' ? allNodes.length : allNodes.filter(n => n.protocol === id).length
+    return `<button class="filter-btn ${state.nodeFilter === id ? 'active' : ''}" data-filter="${id}">${label} (${count})</button>`
+  }).join('')}</div>`
+  const groupsHtml = sortedKeys.map(protocol => {
+    const nodes = groups[protocol]
+    const items = nodes.map(n => `
+      <li class="node-item ${state.config.current_node_id === n.id ? 'active' : ''}">
+        <input class="node-select" type="checkbox" data-id="${n.id}" ${state.selectedNodes.has(n.id) ? 'checked' : ''} aria-label="选择 ${escapeHtml(n.name)}" />
+        <div class="node-info">
+          <div class="node-row">
+            <span class="node-name" title="${escapeHtml(n.name)}">${escapeHtml(n.name)}</span>
+            <span class="node-server" title="${escapeHtml(n.server)}:${n.port}">${escapeHtml(n.server)}:${n.port}</span>
+          </div>
+          <div class="node-health-row">${renderNodeHealth(n.id)}</div>
+        </div>
+        <div class="node-actions">
+          <button class="btn btn-ghost select-node" data-id="${n.id}" ${state.nodeSwitching ? 'disabled' : ''}>${state.config.current_node_id === n.id ? '当前' : '选择'}</button>
+          <button class="btn btn-ghost test-node" data-id="${n.id}">测试</button>
+          <button class="btn btn-danger rm-node" data-id="${n.id}">删除</button>
+          <button class="btn btn-ghost edit-node" data-id="${n.id}">编辑</button>
+        </div>
+      </li>`).join('')
+    return `<div class="node-group"><div class="node-group-header"><span class="badge ${protocol === 'direct' ? 'direct' : 'proxy'}">${protocol.toUpperCase()}</span><span class="node-group-count">${nodes.length} 个</span></div><ul class="node-list">${items}</ul></div>`
+  }).join('')
+  return filterHtml + groupsHtml
 }
 
 function renderNodeHealth(id) {
@@ -744,6 +769,12 @@ function bindEvents() {
       showToast('批量健康测试完成', 'success')
     } catch (e) { showToast(e.message || String(e), 'error') }
     finally { state.batchTesting = false; batchTest.disabled = false }
+document.querySelectorAll('.filter-btn').forEach(btn => {
+btn.addEventListener('click', () => {
+state.nodeFilter = btn.dataset.filter
+renderApp()
+})
+})
   })
   document.querySelectorAll('.edit-node').forEach(btn => {
     btn.addEventListener('click', async () => {
