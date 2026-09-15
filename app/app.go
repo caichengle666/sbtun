@@ -24,6 +24,7 @@ type App struct {
 	manager         *config.Manager
 	runtime         *RuntimeCoordinator
 	rulesManager    *rules.Manager
+	trayIcon        []byte
 	trayEnd         func()
 	shutdownOnce    sync.Once
 	operationMu     sync.Mutex
@@ -38,6 +39,10 @@ type App struct {
 const clashAPIBaseURL = "http://127.0.0.1:9090"
 
 func New() *App { return &App{} }
+
+func (a *App) SetTrayIcon(icon []byte) {
+	a.trayIcon = append([]byte(nil), icon...)
+}
 
 func (a *App) Startup(ctx context.Context) {
 	a.startupCore(ctx)

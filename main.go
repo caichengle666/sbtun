@@ -14,6 +14,9 @@ import (
 //go:embed frontend/dist
 var assets embed.FS
 
+//go:embed resources/sbtun.ico
+var trayIcon []byte
+
 func main() {
 	releaseInstance, err := app.AcquireSingleInstance()
 	if err != nil {
@@ -23,6 +26,7 @@ func main() {
 	defer releaseInstance()
 
 	application := app.New()
+	application.SetTrayIcon(trayIcon)
 
 	appOptions := &options.App{
 		Title:             "sbtun",

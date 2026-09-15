@@ -5,6 +5,7 @@ import (
 	"os"
 	"path/filepath"
 	goruntime "runtime"
+	"strings"
 	"sync"
 	"time"
 
@@ -12,7 +13,6 @@ import (
 	"github.com/caichengle666/sbtun/config"
 	"github.com/caichengle666/sbtun/core"
 	"github.com/wailsapp/wails/v2/pkg/runtime"
-	"strings"
 )
 
 var (
@@ -26,11 +26,15 @@ func (a *App) StartTray() {
 		defer goruntime.UnlockOSThread()
 		a.trayEnd = systray.Quit
 		systray.Run(func() {
-			for _, name := range []string{"sbtun.ico", "icon.ico", "icon.png"} {
-				iconPath := filepath.Join(filepath.Dir(a.binary), "resources", name)
-				if _, err := os.Stat(iconPath); err == nil {
-					_ = systray.SetIconFromFilePath(iconPath)
-					break
+			if len(a.trayIcon) > 0 {
+				systray.SetIcon(a.trayIcon)
+			} else {
+				for _, name := range []string{"sbtun.ico", "icon.ico", "icon.png"} {
+					iconPath := filepath.Join(filepath.Dir(a.binary), "resources", name)
+					if _, err := os.Stat(iconPath); err == nil {
+						_ = systray.SetIconFromFilePath(iconPath)
+						break
+					}
 				}
 			}
 			systray.SetTitle("sbtun")

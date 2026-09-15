@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"net"
 	"net/http"
 	"net/url"
 	"strings"
@@ -327,35 +328,45 @@ func parseTrojan(link string) (config.Node, error) {
 
 func parseShadowsocks(link string) (config.Node, error) {
 	payload := strings.TrimPrefix(link, "ss://")
-	decoded, err := tryBase64Decode(payload)
-	if err != nil {
-		decoded = payload
+	name := ""
+	if raw, fragment, ok := strings.Cut(payload, "#"); ok {
+		payload = raw
+		name, _ = url.PathUnescape(fragment)
 	}
-	atIdx := strings.LastIndex(decoded, "@")
+	if !strings.Contains(payload, "@") {
+		decoded, err := tryBase64Decode(payload)
+		if err != nil {
+			return config.Node{}, fmt.Errorf("ss base64 解码失败: %w", err)
+		}
+		payload = decoded
+	}
+	atIdx := strings.LastIndex(payload, "@")
 	if atIdx < 0 {
 		return config.Node{}, fmt.Errorf("ss 格式错误: 缺少 @")
 	}
-	userPart := decoded[:atIdx]
-	rest := decoded[atIdx+1:]
-	hostIdx := strings.LastIndex(rest, ":")
-	if hostIdx < 0 {
-		return config.Node{}, fmt.Errorf("ss 格式错误: 缺少端口")
+	userPart := payload[:atIdx]
+	address := payload[atIdx+1:]
+	if decoded, err := tryBase64Decode(userPart); err == nil && strings.Contains(decoded, ":") {
+		userPart = decoded
 	}
-	server := rest[:hostIdx]
-	portStr := rest[hostIdx+1:]
-	if idx := strings.Index(portStr, "#"); idx >= 0 {
-		portStr = portStr[:idx]
+	method, password, ok := strings.Cut(userPart, ":")
+	if !ok || method == "" || password == "" {
+		return config.Node{}, fmt.Errorf("ss 格式错误: 缺少加密方式或密码")
+	}
+	server, portStr, err := net.SplitHostPort(address)
+	if err != nil {
+		return config.Node{}, fmt.Errorf("ss 地址无效: %w", err)
 	}
 	port, err := parsePort(portStr)
 	if err != nil {
 		return config.Node{}, fmt.Errorf("ss 端口无效: %s", portStr)
 	}
-	colonIdx := strings.LastIndex(userPart, ":")
-	method := userPart[:colonIdx]
-	password := userPart[colonIdx+1:]
+	if name == "" {
+		name = "ss-" + server
+	}
 	return config.Node{
 		ID:       "ss-" + server + "-" + portStr,
-		Name:     "ss-" + server,
+		Name:     name,
 		Protocol: "shadowsocks",
 		Server:   server,
 		Port:     port,

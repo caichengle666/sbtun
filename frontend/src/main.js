@@ -163,7 +163,7 @@ function render() {
           </div>
           <div class="topbar-actions">
             <span class="traffic-chip" id="trafficText">${formatTraffic(state.traffic)}</span>
-            <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">${state.theme === 'dark' ? '☀' : '☾'}</button>
+            <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">${state.theme === 'dark' ? '☀' : '<span class="moon-icon" aria-hidden="true"></span>'}</button>
             <button id="power" class="switch ${state.running ? 'on' : ''}">${state.running ? '关闭 TUN' : '开启 TUN'}</button>
           </div>
         </header>
@@ -218,7 +218,7 @@ function renderOverview() {
 
 function renderNodesPage() {
   return `<section class="page-stack">
-      <div class="section-heading"><div><h2>节点列表</h2><p class="muted">选择节点后可批量测试或删除。</p></div><span><button class="btn btn-ghost" id="batchTestNodes">批量测试</button> <button class="btn btn-danger" id="batchDeleteNodes">批量删除</button> <button class="btn btn-primary" data-scroll="node-import">导入节点</button></span></div>
+      <div class="section-heading"><div><h2>节点列表</h2><p class="muted">选择节点后可批量测试、导出或删除。</p></div><span><button class="btn btn-ghost" id="batchTestNodes">批量测试</button> <button class="btn btn-ghost" id="batchExportNodes">批量导出</button> <button class="btn btn-danger" id="batchDeleteNodes">批量删除</button> <button class="btn btn-primary" data-scroll="node-import">导入节点</button></span></div>
     <div id="nodePanel">${renderNodes()}</div>
     <div class="card node-import" id="node-import"><h2>${state.editingNodeId ? '编辑节点全部参数' : '添加节点'}</h2>
       <div class="row"><input id="nodeUrl" class="input" value="${escapeHtml(state.manualForm.url)}" placeholder="节点链接 vmess:// vless:// ss:// 或订阅" /><button id="importBtn" class="btn btn-primary">导入</button></div>
@@ -347,10 +347,13 @@ function formatRuleInfo(rule) {
 
 function renderNodes() {
   const allNodes = state.config?.nodes || []
+  const filterBtns = [['all', '全部'], ['hysteria2', 'Hysteria2'], ['vless', 'VLESS'], ['vmess', 'VMess'], ['trojan', 'Trojan'], ['shadowsocks', 'SS'], ['socks', 'SOCKS'], ['http', 'HTTP']]
+  const filterHtml = `<div class="node-filters">${filterBtns.map(([id, label]) => {
+    const count = id === 'all' ? allNodes.length : allNodes.filter(n => n.protocol === id).length
+    return `<button class="filter-btn ${state.nodeFilter === id ? 'active' : ''}" data-filter="${id}">${label} (${count})</button>`
+  }).join('')}</div>`
   const filtered = allNodes.filter(n => state.nodeFilter === 'all' || n.protocol === state.nodeFilter)
-  if (!filtered.length) {
-    return '<div class="empty">没有匹配的节点</div>'
-  }
+  if (!filtered.length) return filterHtml + '<div class="empty">没有匹配的节点</div>'
   const groups = {}
   for (const n of filtered) {
     const key = n.protocol || 'unknown'
@@ -363,11 +366,6 @@ function renderNodes() {
     const bi = protocolOrder.indexOf(b)
     return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
   })
-  const filterBtns = [['all', '全部'], ['hysteria2', 'Hysteria2'], ['vless', 'VLESS'], ['vmess', 'VMess'], ['trojan', 'Trojan'], ['shadowsocks', 'SS'], ['socks', 'SOCKS'], ['http', 'HTTP']]
-  const filterHtml = `<div class="node-filters">${filterBtns.map(([id, label]) => {
-    const count = id === 'all' ? allNodes.length : allNodes.filter(n => n.protocol === id).length
-    return `<button class="filter-btn ${state.nodeFilter === id ? 'active' : ''}" data-filter="${id}">${label} (${count})</button>`
-  }).join('')}</div>`
   const groupsHtml = sortedKeys.map(protocol => {
     const nodes = groups[protocol]
     const items = nodes.map(n => `
@@ -383,6 +381,7 @@ function renderNodes() {
         <div class="node-actions">
           <button class="btn btn-ghost select-node" data-id="${n.id}" ${state.nodeSwitching ? 'disabled' : ''}>${state.config.current_node_id === n.id ? '当前' : '选择'}</button>
           <button class="btn btn-ghost test-node" data-id="${n.id}">测试</button>
+          <button class="btn btn-ghost export-node" data-id="${n.id}">导出</button>
           <button class="btn btn-danger rm-node" data-id="${n.id}">删除</button>
           <button class="btn btn-ghost edit-node" data-id="${n.id}">编辑</button>
         </div>
@@ -742,6 +741,26 @@ function bindEvents() {
     })
   })
   const selectedIDs = () => [...state.selectedNodes].filter(id => state.config?.nodes?.some(n => n.id === id))
+  const copyNodeLinks = async ids => {
+    const links = await window.go.app.App.ExportNodes(ids)
+    if (!links?.length) throw new Error('没有可导出的节点')
+    await window.runtime.ClipboardSetText(links.join('\n'))
+    return links.length
+  }
+  const batchExport = document.querySelector('#batchExportNodes')
+  if (batchExport) batchExport.addEventListener('click', async () => {
+    const ids = selectedIDs()
+    if (!ids.length) return showToast('请先选择节点', 'error')
+    batchExport.disabled = true
+    try {
+      const count = await copyNodeLinks(ids)
+      showToast(`已复制 ${count} 个节点链接`, 'success')
+    } catch (e) {
+      showToast(e.message || String(e), 'error')
+    } finally {
+      batchExport.disabled = false
+    }
+  })
   const batchDelete = document.querySelector('#batchDeleteNodes')
   if (batchDelete) batchDelete.addEventListener('click', async () => {
     const ids = selectedIDs()
@@ -767,20 +786,37 @@ function bindEvents() {
       results.forEach(result => { state.nodeHealth[result.node_id] = result })
       renderApp()
       showToast('批量健康测试完成', 'success')
-    } catch (e) { showToast(e.message || String(e), 'error') }
-    finally { state.batchTesting = false; batchTest.disabled = false }
-document.querySelectorAll('.filter-btn').forEach(btn => {
-btn.addEventListener('click', () => {
-state.nodeFilter = btn.dataset.filter
-renderApp()
-})
-})
+    } catch (e) {
+      showToast(e.message || String(e), 'error')
+    } finally {
+      state.batchTesting = false
+      batchTest.disabled = false
+    }
+  })
+  document.querySelectorAll('.filter-btn').forEach(btn => {
+    btn.addEventListener('click', () => {
+      state.nodeFilter = btn.dataset.filter
+      renderApp()
+    })
   })
   document.querySelectorAll('.edit-node').forEach(btn => {
     btn.addEventListener('click', async () => {
       const node = state.config.nodes.find(item => item.id === btn.dataset.id)
       if (!node) return
       beginEditNode(node)
+    })
+  })
+  document.querySelectorAll('.export-node').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      btn.disabled = true
+      try {
+        await copyNodeLinks([btn.dataset.id])
+        showToast('节点链接已复制', 'success')
+      } catch (e) {
+        showToast(e.message || String(e), 'error')
+      } finally {
+        btn.disabled = false
+      }
     })
   })
   const cancelEdit = document.querySelector('#cancelEditNode')
