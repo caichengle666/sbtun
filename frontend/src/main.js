@@ -889,6 +889,14 @@ function bindEvents() {
       }
     })
   }
+  document.querySelectorAll('#node-import input').forEach(input => {
+    input.addEventListener('keydown', event => {
+      if (event.key === 'Enter' && addNodeBtn && !addNodeBtn.disabled) {
+        event.preventDefault()
+        addNodeBtn.click()
+      }
+    })
+  })
 }
 
 function beginEditNode(node) {
