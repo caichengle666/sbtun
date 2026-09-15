@@ -3,12 +3,14 @@
 package main
 
 import (
+	"bufio"
 	"context"
 	"fmt"
 	"os"
 	"os/exec"
 	"os/signal"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 	"syscall"
@@ -120,6 +122,10 @@ func main() {
 			fmt.Printf("%s\t健康=%t\t%s\n", result.NodeID, result.Healthy, result.Message)
 		}
 	case "edit":
+		if len(os.Args) == 2 {
+			err = interactiveEdit(application)
+			break
+		}
 		if len(os.Args) == 4 {
 			index, convErr := strconv.Atoi(os.Args[2])
 			if convErr != nil || index < 1 {
@@ -250,6 +256,7 @@ func printHelp() {
   sbtun nodes                       列出节点编号
   sbtun del <编号...>                批量删除节点，例如 del 1 2 3
   sbtun test <编号...>               按编号顺序测试节点健康
+  sbtun edit                         列出节点并进入交互式编辑
   sbtun edit <编号> <节点链接>       用完整链接覆盖全部参数
   sbtun edit <编号> <名称> <服务器> <端口> 仅修改基本信息
   sbtun switch <编号>                按编号切换节点
@@ -264,6 +271,7 @@ func printHelp() {
   sbtun test 1 2 3                  顺序测试第 1、2、3 个节点
   sbtun edit 2 韩国节点 1.2.3.4 443 修改第 2 个节点
   sbtun edit 2 "vless://UUID@1.2.3.4:443?..." 修改 UUID、TLS、Reality 等全部参数
+  交互编辑中直接按回车保留当前值，输入 - 清空当前参数。
   名称包含空格时请使用引号，例如: sbtun edit 2 "韩国 高速" 1.2.3.4 443
 
 批量测试按顺序执行，不会同时启动大量检测进程；删除当前节点后会自动选择剩余节点。
@@ -354,6 +362,79 @@ func nodeIDsFromArgs(application *app.App, args []string) ([]string, error) {
 		ids = append(ids, id)
 	}
 	return ids, nil
+}
+
+func interactiveEdit(application *app.App) error {
+	cfg, err := application.LoadConfig()
+	if err != nil {
+		return err
+	}
+	if len(cfg.Nodes) == 0 {
+		return fmt.Errorf("暂无节点，请先使用 add-node 添加")
+	}
+	if err := listNodes(application); err != nil {
+		return err
+	}
+	reader := bufio.NewReader(os.Stdin)
+	indexText, err := promptLine(reader, "请输入要编辑的节点编号")
+	if err != nil {
+		return err
+	}
+	index, err := strconv.Atoi(indexText)
+	if err != nil || index < 1 || index > len(cfg.Nodes) {
+		return fmt.Errorf("节点编号无效: %s", indexText)
+	}
+	node := cfg.Nodes[index-1]
+	node.Name = promptKeep(reader, "名称", node.Name)
+	node.Server = promptKeep(reader, "服务器", node.Server)
+	portText := promptKeep(reader, "端口", strconv.Itoa(int(node.Port)))
+	port, err := strconv.Atoi(portText)
+	if err != nil || port < 1 || port > 65535 {
+		return fmt.Errorf("端口无效: %s", portText)
+	}
+	for _, key := range sortedSettingKeys(node.Settings) {
+		value := promptKeep(reader, key, node.Settings[key])
+		if value == "" {
+			delete(node.Settings, key)
+		} else {
+			node.Settings[key] = value
+		}
+	}
+	node.Port = uint16(port)
+	if err := application.UpdateNode(node.ID, node); err != nil {
+		return err
+	}
+	fmt.Println("节点信息已保存")
+	return nil
+}
+
+func promptLine(reader *bufio.Reader, label string) (string, error) {
+	fmt.Printf("%s: ", label)
+	line, err := reader.ReadString('\n')
+	if err != nil {
+		return "", err
+	}
+	return strings.TrimSpace(line), nil
+}
+
+func promptKeep(reader *bufio.Reader, label, current string) string {
+	value, err := promptLine(reader, fmt.Sprintf("%s [%s]", label, current))
+	if err != nil || value == "" {
+		return current
+	}
+	if value == "-" {
+		return ""
+	}
+	return value
+}
+
+func sortedSettingKeys(settings map[string]string) []string {
+	keys := make([]string, 0, len(settings))
+	for key := range settings {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }
 
 // stopRunningInstance scans /proc for running sbtun-cli or sbtun processes
