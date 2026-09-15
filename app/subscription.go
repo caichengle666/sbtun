@@ -493,7 +493,7 @@ func fetchURL(link string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "sbtun/0.1.1")
+	req.Header.Set("User-Agent", "sbtun/"+Version())
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err

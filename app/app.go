@@ -35,6 +35,8 @@ type App struct {
 	downloadRate    uint64
 }
 
+const clashAPIBaseURL = "http://127.0.0.1:9090"
+
 func New() *App { return &App{} }
 
 func (a *App) Startup(ctx context.Context) {
@@ -46,6 +48,13 @@ func (a *App) Startup(ctx context.Context) {
 // StartupCLI initializes the runtime without starting the desktop tray.
 func (a *App) StartupCLI(ctx context.Context) {
 	a.startupCore(ctx)
+}
+
+// StartMonitoring enables health checks for the long-running CLI mode.
+func (a *App) StartMonitoring() {
+	if a.ctx == nil || a.runtime == nil {
+		return
+	}
 	go a.monitorNodes()
 }
 
@@ -145,7 +154,7 @@ func (a *App) refreshTraffic() (uint64, uint64) {
 
 func trafficStats() (uint64, uint64) {
 	client := http.Client{Timeout: 1500 * time.Millisecond}
-	resp, err := client.Get("http://127.0.0.1:9090/traffic?interval=1000")
+	resp, err := client.Get(clashAPIBaseURL + "/traffic?interval=1000")
 	if err != nil {
 		return 0, 0
 	}
@@ -374,7 +383,7 @@ func switchSelector(id string) error {
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPut, "http://127.0.0.1:9090/proxies/proxy", bytes.NewReader(body))
+	req, err := http.NewRequest(http.MethodPut, clashAPIBaseURL+"/proxies/proxy", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -400,7 +409,7 @@ func switchSelector(id string) error {
 
 func currentSelector() (string, error) {
 	client := &http.Client{Timeout: 500 * time.Millisecond}
-	resp, err := client.Get("http://127.0.0.1:9090/proxies/proxy")
+	resp, err := client.Get(clashAPIBaseURL + "/proxies/proxy")
 	if err != nil {
 		return "", err
 	}

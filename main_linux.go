@@ -8,10 +8,10 @@ import (
 	"os"
 	"os/exec"
 	"os/signal"
+	"path/filepath"
 	"strconv"
 	"strings"
 	"syscall"
-	"path/filepath"
 
 	"github.com/caichengle666/sbtun/app"
 	"github.com/caichengle666/sbtun/config"
@@ -32,12 +32,17 @@ func main() {
 		return
 	}
 	if command == "version" || command == "-v" || command == "--version" {
-		fmt.Println("sbtun 0.1.10")
+		fmt.Println("sbtun " + app.Version())
 		return
 	}
-	if err := relaunchElevated(); err != nil {
-		fmt.Fprintln(os.Stderr, err)
-		os.Exit(1)
+	if requiresElevation(command) {
+		if err := relaunchElevated(); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(1)
+		}
+	}
+	if command == "run" || command == "start" {
+		application.StartMonitoring()
 	}
 	if command == "run" || command == "start" {
 		release, err := app.AcquireSingleInstance()
@@ -58,7 +63,6 @@ func main() {
 		}
 		return
 	}
-
 	switch command {
 	case "status":
 		cfg, loadErr := application.LoadConfig()
@@ -128,6 +132,15 @@ func main() {
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
+	}
+}
+
+func requiresElevation(command string) bool {
+	switch command {
+	case "run", "start", "stop", "route", "add-node", "add-rule", "switch":
+		return true
+	default:
+		return false
 	}
 }
 
@@ -243,6 +256,7 @@ func switchNodeByIndex(application *app.App, arg string) error {
 // and sends SIGTERM. It avoids matching its own PID.
 func stopRunningInstance() error {
 	myPid := os.Getpid()
+	myExe, _ := os.Readlink("/proc/self/exe")
 	entries, err := os.ReadDir("/proc")
 	if err != nil {
 		return fmt.Errorf("读取 /proc 失败: %w", err)
@@ -263,6 +277,12 @@ func stopRunningInstance() error {
 		}
 		name := strings.TrimSpace(string(comm))
 		if name == "sbtun-cli" || name == "sbtun" {
+			if myExe != "" {
+				exe, readErr := os.Readlink(filepath.Join("/proc", entry.Name(), "exe"))
+				if readErr != nil || exe != myExe {
+					continue
+				}
+			}
 			targets = append(targets, pid)
 		}
 	}
@@ -274,7 +294,9 @@ func stopRunningInstance() error {
 		if findErr != nil {
 			continue
 		}
-		_ = proc.Signal(syscall.SIGTERM)
+		if sigErr := proc.Signal(syscall.SIGTERM); sigErr == nil {
+			return nil
+		}
 	}
-	return nil
+	return fmt.Errorf("无法停止 sbtun 实例")
 }
