@@ -20,6 +20,8 @@ const state = {
   allRulesUpdating: false,
   nodeSwitching: false,
   nodeHealth: {},
+  selectedNodes: new Set(),
+  batchTesting: false,
   traffic: { up: 0, down: 0 },
   diagnostics: null,
   view: 'overview',
@@ -214,7 +216,7 @@ function renderOverview() {
 
 function renderNodesPage() {
   return `<section class="page-stack">
-      <div class="section-heading"><div><h2>节点列表</h2><p class="muted">选择可用节点，或运行三项健康测试。</p></div><button class="btn btn-primary" data-scroll="node-import">导入节点</button></div>
+      <div class="section-heading"><div><h2>节点列表</h2><p class="muted">选择节点后可批量测试或删除。</p></div><span><button class="btn btn-ghost" id="batchTestNodes">批量测试</button> <button class="btn btn-danger" id="batchDeleteNodes">批量删除</button> <button class="btn btn-primary" data-scroll="node-import">导入节点</button></span></div>
     <div id="nodePanel">${renderNodes()}</div>
     <div class="card node-import" id="node-import"><h2>添加节点</h2>
       <div class="row"><input id="nodeUrl" class="input" value="${escapeHtml(state.manualForm.url)}" placeholder="节点链接 vmess:// vless:// ss:// 或订阅" /><button id="importBtn" class="btn btn-primary">导入</button></div>
@@ -346,6 +348,7 @@ function renderNodes() {
   }
   return `<ul class="node-list">${state.config.nodes.map(n => `
     <li class="node-item ${state.config.current_node_id === n.id ? 'active' : ''}">
+      <input class="node-select" type="checkbox" data-id="${n.id}" ${state.selectedNodes.has(n.id) ? 'checked' : ''} aria-label="选择 ${escapeHtml(n.name)}" />
       <span class="badge ${n.id.startsWith('direct') ? 'direct' : 'proxy'}">${n.protocol}</span>
       <span style="flex:1">
         <span class="node-name">${escapeHtml(n.name)}</span>
@@ -356,6 +359,7 @@ function renderNodes() {
         <button class="btn btn-ghost select-node" data-id="${n.id}" ${state.nodeSwitching ? 'disabled' : ''}>${state.config.current_node_id === n.id ? '当前' : '选择'}</button>
         <button class="btn btn-ghost test-node" data-id="${n.id}">测试</button>
         <button class="btn btn-danger rm-node" data-id="${n.id}">删除</button>
+        <button class="btn btn-ghost edit-node" data-id="${n.id}">编辑</button>
       </span>
     </li>
   `).join('')}</ul>`
@@ -701,6 +705,61 @@ function bindEvents() {
       } catch (e) {
         showToast(e.message, 'error')
       }
+    })
+  })
+
+  document.querySelectorAll('.node-select').forEach(input => {
+    input.addEventListener('change', () => {
+      if (input.checked) state.selectedNodes.add(input.dataset.id)
+      else state.selectedNodes.delete(input.dataset.id)
+    })
+  })
+  const selectedIDs = () => [...state.selectedNodes].filter(id => state.config?.nodes?.some(n => n.id === id))
+  const batchDelete = document.querySelector('#batchDeleteNodes')
+  if (batchDelete) batchDelete.addEventListener('click', async () => {
+    const ids = selectedIDs()
+    if (!ids.length) return showToast('请先选择节点', 'error')
+    if (!confirm(`确定删除选中的 ${ids.length} 个节点吗？`)) return
+    batchDelete.disabled = true
+    try {
+      await window.go.app.App.RemoveNodes(ids)
+      ids.forEach(id => state.selectedNodes.delete(id))
+      await refreshConfig()
+      showToast('批量删除成功', 'success')
+    } catch (e) { showToast(e.message || String(e), 'error') }
+    finally { batchDelete.disabled = false }
+  })
+  const batchTest = document.querySelector('#batchTestNodes')
+  if (batchTest) batchTest.addEventListener('click', async () => {
+    const ids = selectedIDs()
+    if (!ids.length) return showToast('请先选择节点', 'error')
+    batchTest.disabled = true
+    state.batchTesting = true
+    try {
+      const results = await window.go.app.App.TestNodes(ids)
+      results.forEach(result => { state.nodeHealth[result.node_id] = result })
+      renderApp()
+      showToast('批量健康测试完成', 'success')
+    } catch (e) { showToast(e.message || String(e), 'error') }
+    finally { state.batchTesting = false; batchTest.disabled = false }
+  })
+  document.querySelectorAll('.edit-node').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const node = state.config.nodes.find(item => item.id === btn.dataset.id)
+      if (!node) return
+      const name = prompt('节点名称', node.name)
+      if (name === null) return
+      const server = prompt('服务器地址', node.server)
+      if (server === null) return
+      const portText = prompt('端口', String(node.port))
+      if (portText === null) return
+      const port = Number(portText)
+      if (!name.trim() || !server.trim() || !Number.isInteger(port) || port < 1 || port > 65535) return showToast('节点信息无效', 'error')
+      try {
+        await window.go.app.App.UpdateNode(node.id, { ...node, name: name.trim(), server: server.trim(), port })
+        await refreshConfig()
+        showToast('节点信息已更新', 'success')
+      } catch (e) { showToast(e.message || String(e), 'error') }
     })
   })
 

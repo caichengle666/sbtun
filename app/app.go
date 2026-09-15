@@ -324,6 +324,98 @@ func (a *App) RemoveNode(id string) error {
 	return a.reloadIfRunningLocked()
 }
 
+// RemoveNodes removes several nodes atomically by ID.
+func (a *App) RemoveNodes(ids []string) error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	cfg, err := a.manager.Load()
+	if err != nil {
+		return err
+	}
+	wanted := make(map[string]struct{}, len(ids))
+	for _, id := range ids {
+		if id != "" {
+			wanted[id] = struct{}{}
+		}
+	}
+	if len(wanted) == 0 {
+		return errors.New("未选择节点")
+	}
+	filtered := make([]config.Node, 0, len(cfg.Nodes))
+	removed := 0
+	for _, node := range cfg.Nodes {
+		if _, ok := wanted[node.ID]; ok {
+			removed++
+			continue
+		}
+		filtered = append(filtered, node)
+	}
+	if removed == 0 {
+		return errors.New("未找到要删除的节点")
+	}
+	cfg.Nodes = filtered
+	if _, ok := wanted[cfg.CurrentNodeID]; ok {
+		cfg.CurrentNodeID = ""
+		if len(cfg.Nodes) > 0 {
+			cfg.CurrentNodeID = cfg.Nodes[0].ID
+		}
+	}
+	if err := a.manager.Save(cfg); err != nil {
+		return err
+	}
+	if len(cfg.Nodes) == 0 {
+		if a.runtime != nil && a.runtime.State.IsRunning() {
+			return a.stopLocked()
+		}
+		return nil
+	}
+	if a.runtime != nil {
+		if _, err := a.runtime.SyncConfig(cfg); err != nil {
+			return fmt.Errorf("节点已删除，但生成运行配置失败: %w", err)
+		}
+	}
+	return a.reloadIfRunningLocked()
+}
+
+// UpdateNode replaces editable fields while preserving the node ID.
+func (a *App) UpdateNode(id string, node config.Node) error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	if id == "" || node.Server == "" || node.Port == 0 || node.Protocol == "" {
+		return errors.New("节点信息不完整")
+	}
+	cfg, err := a.manager.Load()
+	if err != nil {
+		return err
+	}
+	for i := range cfg.Nodes {
+		if cfg.Nodes[i].ID != id {
+			continue
+		}
+		node.ID = id
+		cfg.Nodes[i] = node
+		if err := a.manager.Save(cfg); err != nil {
+			return err
+		}
+		if a.runtime != nil {
+			if _, err := a.runtime.SyncConfig(cfg); err != nil {
+				return fmt.Errorf("节点已保存，但生成运行配置失败: %w", err)
+			}
+		}
+		return a.reloadIfRunningLocked()
+	}
+	return fmt.Errorf("节点不存在: %s", id)
+}
+
+// TestNodes checks nodes sequentially to keep resource usage bounded.
+func (a *App) TestNodes(ids []string) []NodeHealthDTO {
+	results := make([]NodeHealthDTO, 0, len(ids))
+	for _, id := range ids {
+		results = append(results, a.TestNode(id))
+	}
+	return results
+}
+
 func (a *App) reloadIfRunningLocked() error {
 	if a.runtime == nil || !a.runtime.State.IsRunning() {
 		return nil

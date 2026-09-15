@@ -100,6 +100,51 @@ func main() {
 		}
 	case "nodes":
 		err = listNodes(application)
+	case "del", "delete":
+		ids, parseErr := nodeIDsFromArgs(application, os.Args[2:])
+		if parseErr != nil {
+			err = parseErr
+			break
+		}
+		err = application.RemoveNodes(ids)
+		if err == nil {
+			fmt.Printf("已删除 %d 个节点\n", len(ids))
+		}
+	case "test":
+		ids, parseErr := nodeIDsFromArgs(application, os.Args[2:])
+		if parseErr != nil {
+			err = parseErr
+			break
+		}
+		for _, result := range application.TestNodes(ids) {
+			fmt.Printf("%s\t健康=%t\t%s\n", result.NodeID, result.Healthy, result.Message)
+		}
+	case "edit":
+		if len(os.Args) < 6 {
+			err = fmt.Errorf("用法: %s edit <编号> <名称> <服务器> <端口>", os.Args[0])
+			break
+		}
+		index, convErr := strconv.Atoi(os.Args[2])
+		port, portErr := strconv.Atoi(os.Args[5])
+		if convErr != nil || index < 1 || portErr != nil || port < 1 || port > 65535 {
+			err = fmt.Errorf("节点编号或端口无效")
+			break
+		}
+		cfg, loadErr := application.LoadConfig()
+		if loadErr != nil {
+			err = loadErr
+			break
+		}
+		if index > len(cfg.Nodes) || strings.TrimSpace(os.Args[3]) == "" || strings.TrimSpace(os.Args[4]) == "" {
+			err = fmt.Errorf("节点编号或节点信息无效")
+			break
+		}
+		node := cfg.Nodes[index-1]
+		node.Name, node.Server, node.Port = strings.TrimSpace(os.Args[3]), strings.TrimSpace(os.Args[4]), uint16(port)
+		err = application.UpdateNode(node.ID, node)
+		if err == nil {
+			fmt.Println("节点信息已更新")
+		}
 	case "switch":
 		if len(os.Args) < 3 {
 			err = fmt.Errorf("usage: %s switch <index>", os.Args[0])
@@ -137,7 +182,7 @@ func main() {
 
 func requiresElevation(command string) bool {
 	switch command {
-	case "run", "start", "stop", "route", "add-node", "add-rule", "switch":
+	case "run", "start", "stop", "route", "add-node", "add-rule", "switch", "del", "delete", "edit":
 		return true
 	default:
 		return false
@@ -182,6 +227,9 @@ func printHelp() {
   sbtun rules list                  列出规则集
   sbtun rules update <id>           更新规则集
   sbtun nodes                       列出节点编号
+  sbtun del <编号...>                批量删除节点，例如 del 1 2 3
+  sbtun test <编号...>               按编号顺序测试节点健康
+  sbtun edit <编号> <名称> <服务器> <端口> 修改节点基本信息
   sbtun switch <编号>                按编号切换节点
   sbtun rules update-all            更新全部规则集
   sbtun stop                        停止运行中的实例
@@ -250,6 +298,31 @@ func switchNodeByIndex(application *app.App, arg string) error {
 		return fmt.Errorf("node index out of range: %d (max %d)", index, len(cfg.Nodes))
 	}
 	return application.SelectNode(cfg.Nodes[index-1].ID)
+}
+
+func nodeIDsFromArgs(application *app.App, args []string) ([]string, error) {
+	if len(args) == 0 {
+		return nil, fmt.Errorf("请提供节点编号，例如: sbtun del 1 2 3")
+	}
+	cfg, err := application.LoadConfig()
+	if err != nil {
+		return nil, err
+	}
+	seen := make(map[string]struct{}, len(args))
+	ids := make([]string, 0, len(args))
+	for _, arg := range args {
+		index, convErr := strconv.Atoi(arg)
+		if convErr != nil || index < 1 || index > len(cfg.Nodes) {
+			return nil, fmt.Errorf("节点编号无效: %s", arg)
+		}
+		id := cfg.Nodes[index-1].ID
+		if _, exists := seen[id]; exists {
+			continue
+		}
+		seen[id] = struct{}{}
+		ids = append(ids, id)
+	}
+	return ids, nil
 }
 
 // stopRunningInstance scans /proc for running sbtun-cli or sbtun processes
