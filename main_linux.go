@@ -120,8 +120,29 @@ func main() {
 			fmt.Printf("%s\t健康=%t\t%s\n", result.NodeID, result.Healthy, result.Message)
 		}
 	case "edit":
+		if len(os.Args) == 4 {
+			index, convErr := strconv.Atoi(os.Args[2])
+			if convErr != nil || index < 1 {
+				err = fmt.Errorf("节点编号无效: %s", os.Args[2])
+				break
+			}
+			cfg, loadErr := application.LoadConfig()
+			if loadErr != nil {
+				err = loadErr
+				break
+			}
+			if index > len(cfg.Nodes) {
+				err = fmt.Errorf("节点编号超出范围: %d", index)
+				break
+			}
+			err = application.UpdateNodeFromLink(cfg.Nodes[index-1].ID, os.Args[3])
+			if err == nil {
+				fmt.Println("节点全部参数已更新")
+			}
+			break
+		}
 		if len(os.Args) < 6 {
-			err = fmt.Errorf("用法: %s edit <编号> <名称> <服务器> <端口>", os.Args[0])
+			err = fmt.Errorf("用法: %s edit <编号> <节点链接> 或 edit <编号> <名称> <服务器> <端口>", os.Args[0])
 			break
 		}
 		index, convErr := strconv.Atoi(os.Args[2])
@@ -229,7 +250,8 @@ func printHelp() {
   sbtun nodes                       列出节点编号
   sbtun del <编号...>                批量删除节点，例如 del 1 2 3
   sbtun test <编号...>               按编号顺序测试节点健康
-  sbtun edit <编号> <名称> <服务器> <端口> 修改节点基本信息
+  sbtun edit <编号> <节点链接>       用完整链接覆盖全部参数
+  sbtun edit <编号> <名称> <服务器> <端口> 仅修改基本信息
   sbtun switch <编号>                按编号切换节点
   sbtun rules update-all            更新全部规则集
   sbtun stop                        停止运行中的实例
@@ -241,6 +263,7 @@ func printHelp() {
   sbtun del 1 2 3                   删除第 1、2、3 个节点
   sbtun test 1 2 3                  顺序测试第 1、2、3 个节点
   sbtun edit 2 韩国节点 1.2.3.4 443 修改第 2 个节点
+  sbtun edit 2 "vless://UUID@1.2.3.4:443?..." 修改 UUID、TLS、Reality 等全部参数
   名称包含空格时请使用引号，例如: sbtun edit 2 "韩国 高速" 1.2.3.4 443
 
 批量测试按顺序执行，不会同时启动大量检测进程；删除当前节点后会自动选择剩余节点。

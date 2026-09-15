@@ -12,6 +12,7 @@ const state = {
   config: null,
   selectedNode: '',
   manualProtocol: 'vless',
+  editingNodeId: '',
   manualForm: { url: '', name: '', server: '', port: '', password: '', username: '', method: '', network: '', server_name: '', alpn: '', flow: '', alter_id: '', security: '', packet_encoding: '', reality_public_key: '', reality_short_id: '', utls_fingerprint: '', transport_type: '', transport_path: '', transport_host: '', transport_service_name: '', plugin: '', plugin_opts: '', version: '5', up_mbps: '', down_mbps: '', server_ports: '', hop_interval: '', path: '', obfs_type: '', obfs_password: '', disable_path_mtu_discovery: false, udp_over_tcp: false, multiplex: false, insecure: false, tls: false },
   customRuleForm: { match_type: 'domain_suffix', value: '', action: 'proxy' },
   customRuleImport: '',
@@ -218,13 +219,14 @@ function renderNodesPage() {
   return `<section class="page-stack">
       <div class="section-heading"><div><h2>节点列表</h2><p class="muted">选择节点后可批量测试或删除。</p></div><span><button class="btn btn-ghost" id="batchTestNodes">批量测试</button> <button class="btn btn-danger" id="batchDeleteNodes">批量删除</button> <button class="btn btn-primary" data-scroll="node-import">导入节点</button></span></div>
     <div id="nodePanel">${renderNodes()}</div>
-    <div class="card node-import" id="node-import"><h2>添加节点</h2>
+    <div class="card node-import" id="node-import"><h2>${state.editingNodeId ? '编辑节点全部参数' : '添加节点'}</h2>
       <div class="row"><input id="nodeUrl" class="input" value="${escapeHtml(state.manualForm.url)}" placeholder="节点链接 vmess:// vless:// ss:// 或订阅" /><button id="importBtn" class="btn btn-primary">导入</button></div>
       <div class="row"><select id="nodeProtocol" class="select"><option value="vless" ${state.manualProtocol === 'vless' ? 'selected' : ''}>VLESS</option><option value="vmess" ${state.manualProtocol === 'vmess' ? 'selected' : ''}>VMess</option><option value="trojan" ${state.manualProtocol === 'trojan' ? 'selected' : ''}>Trojan</option><option value="shadowsocks" ${state.manualProtocol === 'shadowsocks' ? 'selected' : ''}>Shadowsocks</option><option value="socks" ${state.manualProtocol === 'socks' ? 'selected' : ''}>SOCKS</option><option value="http" ${state.manualProtocol === 'http' ? 'selected' : ''}>HTTP</option><option value="hysteria2" ${state.manualProtocol === 'hysteria2' ? 'selected' : ''}>Hysteria2</option></select></div>
       <div class="row"><input id="nodeName" class="input" value="${escapeHtml(state.manualForm.name)}" placeholder="节点名称" /></div>
       <div class="row"><input id="nodeServer" class="input" value="${escapeHtml(state.manualForm.server)}" placeholder="服务器地址" /><input id="nodePort" class="input port-input" value="${escapeHtml(state.manualForm.port)}" placeholder="端口" /></div>
       ${renderManualAdvancedFields()}
-      <button id="addNodeBtn" class="btn btn-ghost">手动添加节点</button>
+      <button id="addNodeBtn" class="btn btn-ghost">${state.editingNodeId ? '保存节点修改' : '手动添加节点'}</button>
+      ${state.editingNodeId ? '<button id="cancelEditNode" class="btn btn-ghost">取消编辑</button>' : ''}
     </div>
   </section>`
 }
@@ -747,20 +749,13 @@ function bindEvents() {
     btn.addEventListener('click', async () => {
       const node = state.config.nodes.find(item => item.id === btn.dataset.id)
       if (!node) return
-      const name = prompt('节点名称', node.name)
-      if (name === null) return
-      const server = prompt('服务器地址', node.server)
-      if (server === null) return
-      const portText = prompt('端口', String(node.port))
-      if (portText === null) return
-      const port = Number(portText)
-      if (!name.trim() || !server.trim() || !Number.isInteger(port) || port < 1 || port > 65535) return showToast('节点信息无效', 'error')
-      try {
-        await window.go.app.App.UpdateNode(node.id, { ...node, name: name.trim(), server: server.trim(), port })
-        await refreshConfig()
-        showToast('节点信息已更新', 'success')
-      } catch (e) { showToast(e.message || String(e), 'error') }
+      beginEditNode(node)
     })
+  })
+  const cancelEdit = document.querySelector('#cancelEditNode')
+  if (cancelEdit) cancelEdit.addEventListener('click', () => {
+    state.editingNodeId = ''
+    renderApp()
   })
 
   document.querySelectorAll('.test-node').forEach(btn => {
@@ -865,11 +860,18 @@ function bindEvents() {
         showToast('请填写名称、服务器和端口', 'error'); return
       }
       try {
-        await window.go.app.App.AddNode({
+        const node = {
           id: 'manual-' + Date.now(),
           name, server, port, protocol,
           settings: buildManualSettings(protocol, password),
-        })
+        }
+        if (state.editingNodeId) {
+          node.id = state.editingNodeId
+          await window.go.app.App.UpdateNode(state.editingNodeId, node)
+          state.editingNodeId = ''
+        } else {
+          await window.go.app.App.AddNode(node)
+        }
         await refreshConfig()
     await refreshRules()
         showToast('节点已添加', 'success')
@@ -887,6 +889,25 @@ function bindEvents() {
       }
     })
   }
+}
+
+function beginEditNode(node) {
+  const form = { ...state.manualForm }
+  for (const key of Object.keys(form)) form[key] = typeof form[key] === 'boolean' ? false : ''
+  form.name = node.name || ''
+  form.server = node.server || ''
+  form.port = String(node.port || '')
+  for (const [key, value] of Object.entries(node.settings || {})) {
+    if (key in form) form[key] = value === 'true' ? true : value
+  }
+  if (node.protocol === 'vless' || node.protocol === 'vmess') form.password = node.settings?.uuid || ''
+  if (node.protocol === 'hysteria2') form.server_name = node.settings?.sni || ''
+  state.manualProtocol = node.protocol
+  state.manualForm = form
+  state.editingNodeId = node.id
+  state.view = 'nodes'
+  renderApp()
+  document.querySelector('#node-import')?.scrollIntoView({ behavior: 'smooth' })
 }
 
 // Wails runtime ready

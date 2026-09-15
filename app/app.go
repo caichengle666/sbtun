@@ -407,6 +407,19 @@ func (a *App) UpdateNode(id string, node config.Node) error {
 	return fmt.Errorf("节点不存在: %s", id)
 }
 
+// UpdateNodeFromLink replaces all node parameters parsed from a share link.
+func (a *App) UpdateNodeFromLink(id, link string) error {
+	nodes, err := parseSubscription(link)
+	if err != nil {
+		return err
+	}
+	if len(nodes) != 1 {
+		return errors.New("编辑节点时必须提供单个节点链接")
+	}
+	nodes[0].ID = id
+	return a.UpdateNode(id, nodes[0])
+}
+
 // TestNodes checks nodes sequentially to keep resource usage bounded.
 func (a *App) TestNodes(ids []string) []NodeHealthDTO {
 	results := make([]NodeHealthDTO, 0, len(ids))
