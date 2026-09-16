@@ -36,20 +36,13 @@ func NewRuntimeCoordinator(workDir, binary string) *RuntimeCoordinator {
 	return r
 }
 
-// watchSingBoxExit 将 sing-box 的非预期退出同步到 sbtun 状态，避免界面继续显示“运行中”。
 func (r *RuntimeCoordinator) watchSingBoxExit() {
 	for event := range r.SingBox.Exited() {
 		if event.Expected {
 			continue
 		}
-		if exitErr, ok := event.Err.(*exec.ExitError); ok && exitErr.ExitCode() == -1 {
-			r.TUN.MarkStopped()
-			r.State.Set(core.StateStopped, "")
-			r.cleanupTUN()
-			continue
-		}
 		state, _ := r.State.Get()
-		if state == core.StateStopping || state == core.StateStopped {
+		if state == core.StateStopping || state == core.StateStopped || state == core.StateIdle {
 			continue
 		}
 		r.TUN.MarkStopped()
@@ -85,8 +78,11 @@ func (r *RuntimeCoordinator) Start(ctx context.Context, cfg config.Config) error
 		err = r.ReadyCheck(readyCtx)
 		cancel()
 		if err != nil {
-			_ = r.SingBox.Stop()
+			stopErr := r.SingBox.Stop()
 			r.cleanupTUN()
+			if stopErr != nil {
+				err = fmt.Errorf("%w; 停止失败: %v", err, stopErr)
+			}
 			return r.fail(ErrTunNotReady, err)
 		}
 	}
@@ -95,9 +91,6 @@ func (r *RuntimeCoordinator) Start(ctx context.Context, cfg config.Config) error
 	return nil
 }
 
-// SyncConfig rebuilds runtime.json from the persisted configuration without
-// starting sing-box. This keeps the generated artifact inspectable after CLI
-// changes while config.json remains the source of truth.
 func (r *RuntimeCoordinator) SyncConfig(cfg config.Config) (string, error) {
 	exeDir := filepath.Dir(r.Binary)
 	if exeDir == "." || exeDir == "" {
@@ -127,11 +120,11 @@ func (r *RuntimeCoordinator) Stop() error {
 	state, _ := r.State.Get()
 	if state == core.StateStopped || state == core.StateIdle {
 		r.TUN.MarkStopped()
+		r.cleanupTUN()
 		return nil
 	}
 	r.State.Set(core.StateStopping, "")
 	err := r.SingBox.Stop()
-	// sing-box 被 kill 后不会自己清理路由和 TUN 网卡，必须由我们来做
 	r.cleanupTUN()
 	r.TUN.MarkStopped()
 	if err != nil {
@@ -144,6 +137,7 @@ func (r *RuntimeCoordinator) Stop() error {
 
 func (r *RuntimeCoordinator) fail(code string, err error) error {
 	r.TUN.MarkStopped()
+	r.cleanupTUN()
 	r.State.Set(core.StateError, code+": "+err.Error())
 	return fmt.Errorf("%s: %w", code, err)
 }
