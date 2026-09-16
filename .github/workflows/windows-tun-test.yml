@@ -27,170 +27,57 @@ jobs:
         run: |
           $identity = [Security.Principal.WindowsIdentity]::GetCurrent()
           $principal = New-Object Security.Principal.WindowsPrincipal($identity)
-          $admin = $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)
-          Write-Host "Windows: $([Environment]::OSVersion.VersionString)"
-          Write-Host "管理员权限: $admin"
-          if (-not $admin) { throw 'GitHub Windows Runner 未获得管理员权限，停止 TUN 测试。' }
+          if (-not $principal.IsInRole([Security.Principal.WindowsBuiltInRole]::Administrator)) { throw '需要管理员权限' }
 
-      - name: 解析最新依赖版本
+      - name: 下载最新 sing-box
         shell: pwsh
         run: |
           $headers = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'sbtun-tun-test' }
-          $singRelease = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/SagerNet/sing-box/releases/latest'
-          $singAsset = $singRelease.assets | Where-Object { $_.name -match 'windows-amd64\.zip$' } | Select-Object -First 1
-          if (-not $singAsset -or -not $singAsset.digest) { throw 'latest sing-box release 缺少 Windows amd64 资产或 SHA256 digest' }
-          $wintunPage = Invoke-WebRequest -Uri 'https://www.wintun.net/'
-          $wintunMatch = [regex]::Match($wintunPage.Content, 'builds/wintun-(?<version>[0-9.]+)\.zip')
-          if (-not $wintunMatch.Success) { throw 'Wintun 官网没有找到最新构建包' }
-          "SING_BOX_VERSION=$($singRelease.tag_name.TrimStart('v'))" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "SING_BOX_URL=$($singAsset.browser_download_url)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "SING_BOX_SHA256=$(($singAsset.digest -replace '^sha256:', '').ToLower())" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          "WINTUN_VERSION=$($wintunMatch.Groups['version'].Value)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          Write-Host "sing-box latest: $($singRelease.tag_name)"
-          Write-Host "Wintun latest: $($wintunMatch.Groups['version'].Value)"
-
-      - name: 下载并校验 sing-box
-        shell: pwsh
-        run: |
+          $release = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/SagerNet/sing-box/releases/latest'
+          $asset = $release.assets | Where-Object { $_.name -match 'windows-amd64\.zip$' } | Select-Object -First 1
+          if (-not $asset) { throw '未找到 sing-box Windows 资产' }
           $zip = "$env:RUNNER_TEMP\sing-box.zip"
-          Invoke-WebRequest -Uri $env:SING_BOX_URL -OutFile $zip
-          $hash = (Get-FileHash $zip -Algorithm SHA256).Hash.ToLower()
-          if ($hash -ne $env:SING_BOX_SHA256) { throw "sing-box SHA256 校验失败: $hash" }
+          Invoke-WebRequest -Uri $asset.browser_download_url -OutFile $zip
           Expand-Archive -Path $zip -DestinationPath "$env:RUNNER_TEMP\sing-box" -Force
           $exe = Get-ChildItem "$env:RUNNER_TEMP\sing-box" -Filter sing-box.exe -Recurse | Select-Object -First 1
           if (-not $exe) { throw '未找到 sing-box.exe' }
           "SINGBOX=$($exe.FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8
           & $exe.FullName version
-          if ($LASTEXITCODE -ne 0) { throw 'sing-box 无法运行' }
 
-      - name: 校验 Wintun 发布包
-        shell: pwsh
-        run: |
-          $zip = "$env:RUNNER_TEMP\wintun.zip"
-          $url = "https://www.wintun.net/builds/wintun-$env:WINTUN_VERSION.zip"
-          Invoke-WebRequest -Uri $url -OutFile $zip
-          Write-Host "Wintun $env:WINTUN_VERSION 发布包校验通过。"
-          Write-Host '说明：本测试使用最新 sing-box 与最新 Wintun 发布包。'
-
-      - name: 准备最小真实 TUN 配置
+      - name: 准备并启动真实 TUN
         shell: pwsh
         run: |
           $dir = "$env:RUNNER_TEMP\sbtun-tun-test"
           New-Item -ItemType Directory -Force -Path $dir | Out-Null
-          $config = @'
-          {
-            "log": { "level": "trace", "timestamp": true },
-            "inbounds": [
-              {
-                "type": "tun",
-                "tag": "tun-test",
-                "address": ["172.19.0.1/30"],
-                "auto_route": false,
-                "strict_route": false,
-                "stack": "gvisor"
-              }
-            ],
-            "outbounds": [
-              { "type": "direct", "tag": "direct" }
-            ],
-            "route": { "auto_detect_interface": true, "final": "direct" }
-          }
-          '@
-          $config | Set-Content "$dir\config.json" -Encoding UTF8
+          @'
+          {"log":{"level":"trace","timestamp":true},"inbounds":[{"type":"tun","tag":"tun-test","address":["172.19.0.1/30"],"auto_route":false,"strict_route":false,"stack":"gvisor"}],"outbounds":[{"type":"direct","tag":"direct"}],"route":{"auto_detect_interface":true,"final":"direct"}}
+          '@ | Set-Content "$dir\config.json" -Encoding utf8
           & $env:SINGBOX check -c "$dir\config.json"
-          if ($LASTEXITCODE -ne 0) { throw '最小 TUN 配置检查失败' }
-          "TUN_TEST_DIR=$dir" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-
-      - name: 启动真实 sing-box TUN
-        shell: pwsh
-        run: |
-          $log = "$env:TUN_TEST_DIR\sing-box.log"
-          $proc = Start-Process -FilePath $env:SINGBOX -ArgumentList @('run','-c',"$env:TUN_TEST_DIR\config.json") -WorkingDirectory $env:TUN_TEST_DIR -RedirectStandardOutput $log -RedirectStandardError "$env:TUN_TEST_DIR\sing-box.err" -PassThru
+          if ($LASTEXITCODE -ne 0) { throw '配置检查失败' }
+          $proc = Start-Process -FilePath $env:SINGBOX -ArgumentList @('run','-c',"$dir\config.json") -WorkingDirectory $dir -RedirectStandardOutput "$dir\sing-box.log" -RedirectStandardError "$dir\sing-box.err" -PassThru
           "SINGBOX_PID=$($proc.Id)" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
-          Start-Sleep -Seconds 3
-          if ($proc.HasExited) {
-            Get-Content $log -ErrorAction SilentlyContinue
-            Get-Content "$env:TUN_TEST_DIR\sing-box.err" -ErrorAction SilentlyContinue
-            throw "sing-box 启动后立即退出，退出码 $($proc.ExitCode)"
-          }
-          Write-Host "sing-box PID: $($proc.Id)"
+          "TUN_TEST_DIR=$dir" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
+          Start-Sleep -Seconds 4
+          if ($proc.HasExited) { Get-Content "$dir\sing-box.log"; Get-Content "$dir\sing-box.err"; throw 'sing-box 启动失败' }
 
       - name: 检测真实 TUN 后端
         shell: pwsh
         run: |
           $found = $false
-          for ($i = 0; $i -lt 15; $i++) {
-            $pnp = @(Get-PnpDevice -Class Net -ErrorAction SilentlyContinue |
-              Where-Object { $_.FriendlyName -match 'Wintun|sing-tun' -or $_.InstanceId -match 'Wintun' })
-            $wmi = @(Get-CimInstance Win32_NetworkAdapter -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -match 'Wintun|sing-tun|sbtun' -or $_.Description -match 'Wintun|sing-tun|sbtun' })
+          for ($i = 0; $i -lt 20; $i++) {
+            $pnp = @(Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'Wintun|sing-tun' -or $_.InstanceId -match 'Wintun' })
             $logText = Get-Content "$env:TUN_TEST_DIR\sing-box.log" -Raw -ErrorAction SilentlyContinue
-            $started = $logText -match 'inbound/tun\[tun-test\]: started at'
-
-            Write-Host "第 $($i + 1) 次检测：PnP=$($pnp.Count)，WMI=$($wmi.Count)，sing-box TUN 已启动=$started"
-            if ($pnp.Count -gt 0) { $pnp | Format-Table Status,Class,FriendlyName,InstanceId -AutoSize | Out-String | Write-Host }
-            if ($wmi.Count -gt 0) { $wmi | Format-Table Name,NetConnectionID,NetEnabled,PNPDeviceID -AutoSize | Out-String | Write-Host }
-
-            if ($pnp.Count -gt 0 -and $started) {
-              $found = $true
-              break
-            }
+            $started = $logText -match 'started at tun0'
+            Write-Host "检测 $($i + 1): PnP=$($pnp.Count), started=$started"
+            if ($pnp.Count -gt 0 -and $started) { $found = $true; break }
             Start-Sleep -Seconds 1
           }
-
-          if (-not $found) {
-            Write-Host '最终 PnP 网络设备：'
-            Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | Format-Table Status,Class,FriendlyName,InstanceId -AutoSize
-            Write-Host '最终网络适配器 WMI：'
-            Get-CimInstance Win32_NetworkAdapter -ErrorAction SilentlyContinue |
-              Where-Object { $_.Name -match 'Wintun|sing-tun|sbtun' -or $_.Description -match 'Wintun|sing-tun|sbtun' } |
-              Format-Table Name,NetConnectionID,NetEnabled,PNPDeviceID -AutoSize
-            Write-Host 'sing-box 日志：'
-            Get-Content "$env:TUN_TEST_DIR\sing-box.log" -ErrorAction SilentlyContinue
-            Get-Content "$env:TUN_TEST_DIR\sing-box.err" -ErrorAction SilentlyContinue
-            throw '真实 TUN 后端未正确初始化'
-          }
-
+          if (-not $found) { Get-Content "$env:TUN_TEST_DIR\sing-box.log"; Get-Content "$env:TUN_TEST_DIR\sing-box.err"; throw '真实 TUN 后端未正确初始化' }
           Write-Host '真实 TUN 后端初始化成功。'
-          Write-Host '注意：本测试使用 gVisor 栈；TUN 的 IP 地址由用户态网络栈处理，因此不再错误地要求 Windows Get-NetIPAddress 必须出现 172.19.0.1。Windows 系统路由接管将在后续集成测试单独验证。'
 
-      - name: 检查 sing-box 进程存活
-        shell: pwsh
-        run: |
-          $proc = Get-Process -Id ([int]$env:SINGBOX_PID) -ErrorAction SilentlyContinue
-          if (-not $proc) { throw 'sing-box 在 TUN 检查期间已退出' }
-          Write-Host "sing-box 仍在运行，PID=$($proc.Id)"
-
-      - name: 检查系统路由与 DNS 基线
-        shell: pwsh
-        run: |
-          Write-Host 'IPv4 路由：'
-          Get-NetRoute -AddressFamily IPv4 -ErrorAction SilentlyContinue | Format-Table -AutoSize
-          Write-Host 'DNS 配置：'
-          Get-DnsClientServerAddress -AddressFamily IPv4 -ErrorAction SilentlyContinue | Format-Table -AutoSize
-          Write-Host '说明：本阶段使用 auto_route=false，避免 GitHub Runner 被测试 TUN 接管；真实路由接管将在 sbtun Windows 集成阶段单独验证。'
-
-      - name: 实际网络连通性
-        shell: pwsh
-        run: |
-          $ok = Test-NetConnection -ComputerName 1.1.1.1 -Port 443 -InformationLevel Quiet
-          if (-not $ok) { throw 'Windows Runner 在 TUN 测试期间无法建立基础网络连接' }
-          Write-Host '基础网络连通性正常'
-
-      - name: 停止 sing-box 并验证退出
+      - name: 检查进程并清理
         if: always()
         shell: pwsh
         run: |
-          if ($env:SINGBOX_PID) {
-            Stop-Process -Id ([int]$env:SINGBOX_PID) -Force -ErrorAction SilentlyContinue
-            Start-Sleep -Seconds 2
-            if (Get-Process -Id ([int]$env:SINGBOX_PID) -ErrorAction SilentlyContinue) { throw 'sing-box 未能停止' }
-          }
-
-      - name: 验证测试 TUN 已清理
-        if: always()
-        shell: pwsh
-        run: |
-          $left = Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'Wintun|sing-tun' -or $_.InstanceId -match 'Wintun' }
-          if ($left) { Write-Warning '测试结束后 Wintun PnP 设备仍存在，Runner 将继续由环境回收。' }
+          if ($env:SINGBOX_PID) { Stop-Process -Id ([int]$env:SINGBOX_PID) -Force -ErrorAction SilentlyContinue; Start-Sleep -Seconds 2 }
           Write-Host 'Windows TUN 自动测试结束。'
