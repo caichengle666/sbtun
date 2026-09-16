@@ -502,24 +502,31 @@ func (a *App) selectNodeLocked(id string) error {
 		return fmt.Errorf("节点不存在: %s", id)
 	}
 	previousID := cfg.CurrentNodeID
-	running := a.runtime.State.IsRunning()
-	selectorErr := error(nil)
-	if running && previousID != id {
-		selectorErr = switchSelector(id)
+	running := a.runtime != nil && a.runtime.State.IsRunning()
+	// CLI invocations create a fresh App, so its in-memory runtime state is
+	// stopped even when another sbtun process is serving Clash API requests.
+	apiRunning := false
+	if !running {
+		_, apiErr := currentSelector()
+		apiRunning = apiErr == nil
+	}
+	selectorActive := running || apiRunning
+	if selectorActive && previousID != id {
+		if err := switchSelector(id); err != nil {
+			if !running {
+				return err
+			}
+			if reloadErr := a.reloadIfRunningLocked(); reloadErr != nil {
+				return fmt.Errorf("节点切换失败（无缝切换和自动重启均失败）: %w", reloadErr)
+			}
+		}
 	}
 	cfg.CurrentNodeID = id
 	if err := a.manager.Save(cfg); err != nil {
-		if running && selectorErr == nil && previousID != "" {
+		if selectorActive && previousID != "" && previousID != id {
 			_ = switchSelector(previousID)
 		}
 		return err
-	}
-	if running && selectorErr != nil {
-		if err := a.reloadIfRunningLocked(); err != nil {
-			cfg.CurrentNodeID = previousID
-			_ = a.manager.Save(cfg)
-			return fmt.Errorf("节点切换失败（无缝切换和自动重启均失败）: %w", err)
-		}
 	}
 	return nil
 }
