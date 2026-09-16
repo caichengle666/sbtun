@@ -124,6 +124,11 @@ func (r *RuntimeCoordinator) cleanupTUN() {
 }
 
 func (r *RuntimeCoordinator) Stop() error {
+	state, _ := r.State.Get()
+	if state == core.StateStopped || state == core.StateIdle {
+		r.TUN.MarkStopped()
+		return nil
+	}
 	r.State.Set(core.StateStopping, "")
 	err := r.SingBox.Stop()
 	// sing-box 被 kill 后不会自己清理路由和 TUN 网卡，必须由我们来做
