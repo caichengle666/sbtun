@@ -36,14 +36,12 @@ func NewRuntimeCoordinator(workDir, binary string) *RuntimeCoordinator {
 	return r
 }
 
-// watchSingBoxExit 将 sing-box 的非预期退出同步到 sbtun 状态，避免界面继续显示"运行中"。
+// watchSingBoxExit 将 sing-box 的非预期退出同步到 sbtun 状态，避免界面继续显示“运行中”。
 func (r *RuntimeCoordinator) watchSingBoxExit() {
 	for event := range r.SingBox.Exited() {
 		if event.Expected {
 			continue
 		}
-		// Windows reports externally terminated GUI child processes as 0xffffffff.
-		// This is not a useful configuration error and should not poison the UI state.
 		if exitErr, ok := event.Err.(*exec.ExitError); ok && exitErr.ExitCode() == -1 {
 			r.TUN.MarkStopped()
 			r.State.Set(core.StateStopped, "")
@@ -65,6 +63,9 @@ func (r *RuntimeCoordinator) watchSingBoxExit() {
 }
 
 func (r *RuntimeCoordinator) Start(ctx context.Context, cfg config.Config) error {
+	if ctx == nil {
+		ctx = context.Background()
+	}
 	r.State.Set(core.StateStarting, "")
 	if err := config.Validate(cfg); err != nil {
 		return r.fail(ErrConfigInvalid, err)
@@ -150,15 +151,18 @@ func atomicWrite(path string, data []byte) error {
 	name := tmp.Name()
 	defer os.Remove(name)
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return err
 	}
 	if err := tmp.Close(); err != nil {
 		return err
 	}
-	return os.Rename(name, path)
+	if err := os.Rename(name, path); err != nil {
+		return fmt.Errorf("替换运行配置失败: %w", err)
+	}
+	return nil
 }
