@@ -71,6 +71,18 @@ func (m *Manager) Save(cfg Config) error {
 	if err := tmp.Close(); err != nil {
 		return fmt.Errorf("关闭配置失败: %w", err)
 	}
+	info, statErr := os.Stat(m.Path)
+	if statErr == nil {
+		if err := preserveFileMetadata(tmpName, info); err != nil {
+			return fmt.Errorf("保留配置权限失败: %w", err)
+		}
+	} else if os.IsNotExist(statErr) {
+		if err := applyInvokerOwnership(tmpName); err != nil {
+			return fmt.Errorf("设置配置归属失败: %w", err)
+		}
+	} else {
+		return fmt.Errorf("读取配置文件权限失败: %w", statErr)
+	}
 	if err := os.Rename(tmpName, m.Path); err != nil {
 		return fmt.Errorf("替换配置失败: %w", err)
 	}
