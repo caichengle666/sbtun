@@ -19,37 +19,52 @@ type ExitEvent struct {
 type Manager struct {
 	mu       sync.Mutex
 	cmd      *exec.Cmd
+	logFile  *os.File
 	exited   chan ExitEvent
 	stopping bool
+	starting bool
 }
 
 func NewManager() *Manager { return &Manager{exited: make(chan ExitEvent, 1)} }
 
 func (m *Manager) Start(ctx context.Context, binary, configPath string) error {
-	m.mu.Lock()
-	if m.cmd != nil && m.cmd.Process != nil {
-		m.mu.Unlock()
-		return fmt.Errorf("sing-box 已经在运行")
+	if ctx == nil {
+		ctx = context.Background()
 	}
+	m.mu.Lock()
+	if m.starting || (m.cmd != nil && m.cmd.Process != nil) {
+		m.mu.Unlock()
+		return fmt.Errorf("sing-box 已经在运行或正在启动")
+	}
+	m.starting = true
 	cmd := exec.CommandContext(ctx, binary, "run", "-c", configPath)
 	m.stopping = false
 	configureProcess(cmd)
-	// Set working directory to where sing-box.exe lives so relative paths resolve
-	cmd.Dir = filepath.Dir(binary) // CREATE_NO_WINDOW
-	// Capture logs to file for debugging
+	cmd.Dir = filepath.Dir(binary)
 	logFile := filepath.Join(filepath.Dir(configPath), "sing-box.log")
-	if f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644); err == nil {
-		cmd.Stdout = f
-		cmd.Stderr = f
+	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
+	if err != nil {
+		m.starting = false
+		m.mu.Unlock()
+		return fmt.Errorf("打开 sing-box 日志失败: %w", err)
 	}
+	cmd.Stdout = f
+	cmd.Stderr = f
+	m.logFile = f
 	m.mu.Unlock()
 
 	if err := cmd.Start(); err != nil {
+		_ = f.Close()
+		m.mu.Lock()
+		m.logFile = nil
+		m.starting = false
+		m.mu.Unlock()
 		return fmt.Errorf("启动 sing-box 失败: %w", err)
 	}
 
 	m.mu.Lock()
 	m.cmd = cmd
+	m.starting = false
 	m.mu.Unlock()
 	go m.wait(cmd)
 	return nil
@@ -61,6 +76,10 @@ func (m *Manager) wait(cmd *exec.Cmd) {
 	expected := m.stopping
 	if m.cmd == cmd {
 		m.cmd = nil
+	}
+	if m.logFile != nil {
+		_ = m.logFile.Close()
+		m.logFile = nil
 	}
 	m.stopping = false
 	m.mu.Unlock()
