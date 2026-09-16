@@ -101,12 +101,34 @@ jobs:
           $rules = "dist\rules"
           New-Item -ItemType Directory -Force -Path $rules | Out-Null
           $items = @{
-            'geosite-geolocation-cn.srs' = 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-cn.srs'
-            'geosite-geolocation-!cn.srs' = 'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-!cn.srs'
-            'geoip-cn.srs' = 'https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs'
+            'geosite-geolocation-cn.srs' = @(
+              'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-cn.srs',
+              'https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-geolocation-cn.srs'
+            )
+            'geosite-geolocation-!cn.srs' = @(
+              'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-%21cn.srs',
+              'https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-geolocation-%21cn.srs'
+            )
+            'geoip-cn.srs' = @(
+              'https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs',
+              'https://cdn.jsdelivr.net/gh/SagerNet/sing-geoip@rule-set/geoip-cn.srs'
+            )
           }
           foreach ($item in $items.GetEnumerator()) {
-            Invoke-WebRequest -Uri $item.Value -OutFile (Join-Path $rules $item.Key)
+            $destination = Join-Path $rules $item.Key
+            $downloaded = $false
+            foreach ($url in $item.Value) {
+              try {
+                Invoke-WebRequest -Uri $url -OutFile $destination -MaximumRetryCount 3 -RetryIntervalSec 2
+                $downloaded = $true
+                break
+              } catch {
+                Write-Warning "规则下载失败，尝试备用源: $url"
+              }
+            }
+            if (-not $downloaded) {
+              throw "规则下载失败: $($item.Key)"
+            }
           }
           Get-ChildItem $rules -Filter *.srs | ForEach-Object {
             (Get-FileHash $_.FullName -Algorithm SHA256).Hash.ToLower() + '  ' + $_.Name

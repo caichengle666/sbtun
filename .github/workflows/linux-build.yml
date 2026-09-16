@@ -71,9 +71,25 @@ jobs:
         run: |
           set -euo pipefail
           mkdir -p dist/rules
-          curl -fL https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-cn.srs -o dist/rules/geosite-geolocation-cn.srs
-          curl -fL https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-\!cn.srs -o 'dist/rules/geosite-geolocation-!cn.srs'
-          curl -fL https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs -o dist/rules/geoip-cn.srs
+          download_rule() {
+            local raw_url="$1"
+            local fallback_url="$2"
+            local output="$3"
+            curl -fL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 "$raw_url" -o "$output" ||
+              curl -fL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 "$fallback_url" -o "$output"
+          }
+          download_rule \
+            https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-cn.srs \
+            https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-geolocation-cn.srs \
+            dist/rules/geosite-geolocation-cn.srs
+          download_rule \
+            'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-%21cn.srs' \
+            'https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-geolocation-%21cn.srs' \
+            'dist/rules/geosite-geolocation-!cn.srs'
+          download_rule \
+            https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs \
+            https://cdn.jsdelivr.net/gh/SagerNet/sing-geoip@rule-set/geoip-cn.srs \
+            dist/rules/geoip-cn.srs
           sha256sum dist/rules/*.srs > dist/rules/SHA256SUMS.txt
 
       - name: 准备可携带 WebKitGTK 运行库
