@@ -143,21 +143,26 @@ func (a *App) GetStatus() StatusDTO {
 	up, down := a.uploadRate, a.downloadRate
 	a.trafficMu.RUnlock()
 	result := StatusDTO{State: string(state), Message: message, Running: state == core.StateRunning, UploadBytes: up, DownloadBytes: down}
-	if result.Running {
-		if cfg, err := a.manager.Load(); err == nil {
-			if selector, selectorErr := currentSelector(); selectorErr == nil {
-				result.Selector = selector
-				if id := nodeIDFromSelector(cfg, selector); id != "" {
-					result.CurrentNodeID = id
-					if id != cfg.CurrentNodeID {
-						a.operationMu.Lock()
-						latest, loadErr := a.manager.Load()
-						if loadErr == nil && nodeIDFromSelector(latest, selector) == id && latest.CurrentNodeID != id {
-							latest.CurrentNodeID = id
-							_ = a.manager.Save(latest)
-						}
-						a.operationMu.Unlock()
+	if cfg, err := a.manager.Load(); err == nil {
+		if selector, selectorErr := currentSelector(); selectorErr == nil {
+			if !result.Running {
+				// A CLI status invocation has no in-memory runtime state, but it
+				// must still report an already-running sing-box process.
+				result.State = string(core.StateRunning)
+				result.Message = "sing-box 运行中"
+				result.Running = true
+			}
+			result.Selector = selector
+			if id := nodeIDFromSelector(cfg, selector); id != "" {
+				result.CurrentNodeID = id
+				if id != cfg.CurrentNodeID {
+					a.operationMu.Lock()
+					latest, loadErr := a.manager.Load()
+					if loadErr == nil && nodeIDFromSelector(latest, selector) == id && latest.CurrentNodeID != id {
+						latest.CurrentNodeID = id
+						_ = a.manager.Save(latest)
 					}
+					a.operationMu.Unlock()
 				}
 			}
 		}
