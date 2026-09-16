@@ -136,16 +136,23 @@ func probeURL(ctx context.Context, binary string, node config.Node) HealthCheckD
 		return HealthCheckDTO{Message: fmt.Sprintf("URL 启动 sing-box 失败: %v", err)}
 	}
 	defer func() {
-		_ = cmd.Process.Kill()
+		if cmd.Process != nil && cmd.ProcessState == nil {
+			_ = cmd.Process.Kill()
+		}
 		_ = cmd.Wait()
 	}()
 	proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
+	transportConfig := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
+	defer transportConfig.CloseIdleConnections()
 	client := &http.Client{
 		Timeout:   8 * time.Second,
-		Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)},
+		Transport: transportConfig,
 	}
-	request, _ := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.gstatic.com/generate_204", nil)
-	response, err := waitForURL(client, request, cmd, 10*time.Second)
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.gstatic.com/generate_204", nil)
+	if err != nil {
+		return HealthCheckDTO{Message: fmt.Sprintf("URL 请求创建失败: %v", err)}
+	}
+	response, err := waitForURL(ctx, client, request, cmd, 10*time.Second)
 	if err != nil {
 		message := logs.String()
 		if len(message) > 240 {
@@ -160,17 +167,27 @@ func probeURL(ctx context.Context, binary string, node config.Node) HealthCheckD
 	return HealthCheckDTO{OK: true, StatusCode: response.StatusCode, Message: "URL 访问成功", Latency: time.Since(started).Milliseconds()}
 }
 
-func waitForURL(client *http.Client, request *http.Request, cmd *exec.Cmd, timeout time.Duration) (*http.Response, error) {
-	deadline := time.Now().Add(timeout)
-	for time.Now().Before(deadline) {
+func waitForURL(ctx context.Context, client *http.Client, request *http.Request, cmd *exec.Cmd, timeout time.Duration) (*http.Response, error) {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	waitCtx, cancel := context.WithTimeout(ctx, timeout)
+	defer cancel()
+	for {
 		if cmd.ProcessState != nil {
 			return nil, fmt.Errorf("sing-box 已退出")
 		}
-		response, err := client.Do(request)
+		response, err := client.Do(request.WithContext(waitCtx))
 		if err == nil {
 			return response, nil
 		}
-		time.Sleep(150 * time.Millisecond)
+		select {
+		case <-waitCtx.Done():
+			if ctx.Err() != nil {
+				return nil, ctx.Err()
+			}
+			return nil, fmt.Errorf("等待 URL 代理超时: %w", waitCtx.Err())
+		case <-time.After(150 * time.Millisecond):
+		}
 	}
-	return nil, fmt.Errorf("等待 URL 代理超时")
 }
