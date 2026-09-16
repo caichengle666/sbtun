@@ -109,6 +109,11 @@ func (a *App) StartTray() {
 							}
 							lastNodeSignature = signature
 						}
+						// Use sing-box's live selector when available so tray state follows
+						// automatic failover, not only the persisted configuration.
+						if status := a.GetStatus(); status.CurrentNodeID != "" {
+							currentNodeID = status.CurrentNodeID
+						}
 						for nodeID, item := range nodeItems {
 							if nodeID == currentNodeID {
 								item.Check()
