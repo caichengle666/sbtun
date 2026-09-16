@@ -10,7 +10,7 @@ import (
 
 	"github.com/caichengle666/sbtun/config"
 	"github.com/caichengle666/sbtun/core"
-	"github.com/caichengle666/sbtun/core/singbox
+	"github.com/caichengle666/sbtun/core/singbox"
 	"github.com/caichengle666/sbtun/core/tun"
 )
 
