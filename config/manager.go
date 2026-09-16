@@ -51,21 +51,22 @@ func (m *Manager) Save(cfg Config) error {
 	if err != nil {
 		return fmt.Errorf("编码配置失败: %w", err)
 	}
-	if err := os.MkdirAll(filepath.Dir(m.Path), 0o755); err != nil {
+	dir := filepath.Dir(m.Path)
+	if err := os.MkdirAll(dir, 0o755); err != nil {
 		return fmt.Errorf("创建配置目录失败: %w", err)
 	}
-	tmp, err := os.CreateTemp(filepath.Dir(m.Path), ".sbtun-config-*.tmp")
+	tmp, err := os.CreateTemp(dir, ".sbtun-config-*.tmp")
 	if err != nil {
 		return fmt.Errorf("创建临时配置失败: %w", err)
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
 	if _, err := tmp.Write(data); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("写入配置失败: %w", err)
 	}
 	if err := tmp.Sync(); err != nil {
-		tmp.Close()
+		_ = tmp.Close()
 		return fmt.Errorf("同步配置失败: %w", err)
 	}
 	if err := tmp.Close(); err != nil {
@@ -83,7 +84,7 @@ func (m *Manager) Save(cfg Config) error {
 	} else {
 		return fmt.Errorf("读取配置文件权限失败: %w", statErr)
 	}
-	if err := os.Rename(tmpName, m.Path); err != nil {
+	if err := replaceConfigFile(tmpName, m.Path); err != nil {
 		return fmt.Errorf("替换配置失败: %w", err)
 	}
 	return nil
