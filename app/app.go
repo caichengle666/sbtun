@@ -106,6 +106,8 @@ type StatusDTO struct {
 	Running       bool   `json:"running"`
 	UploadBytes   uint64 `json:"upload_bytes"`
 	DownloadBytes uint64 `json:"download_bytes"`
+	Selector      string `json:"selector,omitempty"`
+	CurrentNodeID string `json:"current_node_id,omitempty"`
 }
 
 type DiagnosticsDTO struct {
@@ -140,7 +142,41 @@ func (a *App) GetStatus() StatusDTO {
 	a.trafficMu.RLock()
 	up, down := a.uploadRate, a.downloadRate
 	a.trafficMu.RUnlock()
-	return StatusDTO{State: string(state), Message: message, Running: state == core.StateRunning, UploadBytes: up, DownloadBytes: down}
+	result := StatusDTO{State: string(state), Message: message, Running: state == core.StateRunning, UploadBytes: up, DownloadBytes: down}
+	if result.Running {
+		if cfg, err := a.manager.Load(); err == nil {
+			if selector, selectorErr := currentSelector(); selectorErr == nil {
+				result.Selector = selector
+				if id := nodeIDFromSelector(cfg, selector); id != "" {
+					result.CurrentNodeID = id
+					if id != cfg.CurrentNodeID {
+						a.operationMu.Lock()
+						latest, loadErr := a.manager.Load()
+						if loadErr == nil && nodeIDFromSelector(latest, selector) == id && latest.CurrentNodeID != id {
+							latest.CurrentNodeID = id
+							_ = a.manager.Save(latest)
+						}
+						a.operationMu.Unlock()
+					}
+				}
+			}
+		}
+	}
+	return result
+}
+
+func nodeIDFromSelector(cfg config.Config, selector string) string {
+	const prefix = "node-"
+	if len(selector) <= len(prefix) || selector[:len(prefix)] != prefix {
+		return ""
+	}
+	id := selector[len(prefix):]
+	for _, node := range cfg.Nodes {
+		if node.ID == id {
+			return id
+		}
+	}
+	return ""
 }
 
 func (a *App) refreshTraffic() (uint64, uint64) {

@@ -72,7 +72,15 @@ func main() {
 			err = fmt.Errorf("读取配置失败: %w", loadErr)
 			break
 		}
-		fmt.Printf("路由模式: %s\nDNS 模式: %s\n当前节点: %s\n节点数量: %d\n", cfg.RoutingMode, cfg.DNSMode, cfg.CurrentNodeID, len(cfg.Nodes))
+		status := application.GetStatus()
+		currentID := cfg.CurrentNodeID
+		if status.CurrentNodeID != "" {
+			currentID = status.CurrentNodeID
+		}
+		fmt.Printf("路由模式: %s\nDNS 模式: %s\n当前节点: %s\n节点数量: %d\n", cfg.RoutingMode, cfg.DNSMode, currentID, len(cfg.Nodes))
+		if status.Selector != "" {
+			fmt.Printf("运行时 selector: %s\n", status.Selector)
+		}
 	case "route":
 		if len(os.Args) < 3 {
 			err = fmt.Errorf("用法: %s route <smart|global|direct|custom>", os.Args[0])
@@ -359,14 +367,18 @@ func listNodes(application *app.App) error {
 		fmt.Println("暂无节点，请先使用 add-node 添加")
 		return nil
 	}
+	currentID := cfg.CurrentNodeID
+	if status := application.GetStatus(); status.CurrentNodeID != "" {
+		currentID = status.CurrentNodeID
+	}
 	for i, node := range cfg.Nodes {
 		marker := " "
-		if node.ID == cfg.CurrentNodeID {
+		if node.ID == currentID {
 			marker = "*"
 		}
 		fmt.Printf("%s %d\t%s\t%s:%d\n", marker, i+1, node.Name, node.Server, node.Port)
 	}
-	fmt.Printf("当前节点: %s\n", cfg.CurrentNodeID)
+	fmt.Printf("当前节点: %s\n", currentID)
 	return nil
 }
 

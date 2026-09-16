@@ -427,6 +427,10 @@ async function refreshStatus() {
     state.statusState = s.state
     state.statusMessage = s.message
     state.traffic = { up: s.upload_bytes || 0, down: s.download_bytes || 0 }
+    if (s.current_node_id && state.config && state.config.current_node_id !== s.current_node_id) {
+      state.config.current_node_id = s.current_node_id
+      renderApp()
+    }
     updateStatusView()
   } catch (e) {
     showToast('获取状态失败: ' + e.message, 'error')
