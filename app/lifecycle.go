@@ -10,7 +10,7 @@ import (
 
 	"github.com/caichengle666/sbtun/config"
 	"github.com/caichengle666/sbtun/core"
-	"github.com/caichengle666/sbtun/core/singbox"
+	"github.com/caichengle666/sbtun/core/singbox
 	"github.com/caichengle666/sbtun/core/tun"
 )
 
@@ -42,7 +42,7 @@ func (r *RuntimeCoordinator) watchSingBoxExit() {
 			continue
 		}
 		state, _ := r.State.Get()
-		if state == core.StateStopping || state == core.StateStopped || state == core.StateIdle {
+		if state == core.StateStopping || state == core.StateStopped {
 			continue
 		}
 		r.TUN.MarkStopped()
@@ -118,7 +118,7 @@ func (r *RuntimeCoordinator) cleanupTUN() {
 
 func (r *RuntimeCoordinator) Stop() error {
 	state, _ := r.State.Get()
-	if state == core.StateStopped || state == core.StateIdle {
+	if state == core.StateStopped {
 		r.TUN.MarkStopped()
 		r.cleanupTUN()
 		return nil
