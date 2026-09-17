@@ -130,18 +130,21 @@ func (r *RuntimeCoordinator) Stop() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	state, _ := r.State.Get()
-	if state == core.StateStopped || state == core.StateError {
+	if state == core.StateStopped {
 		r.TUN.MarkStopped()
 		r.cleanupTUN()
 		return nil
 	}
 	r.State.Set(core.StateStopping, "")
-	err := r.SingBox.Stop()
+	var stopErr error
+	if r.SingBox != nil {
+		stopErr = r.SingBox.Stop()
+	}
 	r.cleanupTUN()
 	r.TUN.MarkStopped()
-	if err != nil {
-		r.State.Set(core.StateError, err.Error())
-		return err
+	if stopErr != nil {
+		r.State.Set(core.StateError, stopErr.Error())
+		return stopErr
 	}
 	r.State.Set(core.StateStopped, "")
 	return nil
