@@ -9,20 +9,30 @@ import (
 	"path/filepath"
 	"strconv"
 	"strings"
+	"sync"
 )
 
-type Manager struct{ Path string }
+type Manager struct {
+	Path string
+	mu   sync.RWMutex
+}
 
 func NewManager(path string) *Manager { return &Manager{Path: path} }
 
 func (m *Manager) Load() (Config, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.loadLocked()
+}
+
+func (m *Manager) loadLocked() (Config, error) {
 	if m.Path == "" {
 		return Config{}, errors.New("配置文件路径不能为空")
 	}
 	data, err := os.ReadFile(m.Path)
 	if os.IsNotExist(err) {
 		cfg := Default()
-		if err := m.Save(cfg); err != nil {
+		if err := m.saveLocked(cfg); err != nil {
 			return Config{}, err
 		}
 		return cfg, nil
@@ -41,6 +51,12 @@ func (m *Manager) Load() (Config, error) {
 }
 
 func (m *Manager) Save(cfg Config) error {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	return m.saveLocked(cfg)
+}
+
+func (m *Manager) saveLocked(cfg Config) error {
 	if m.Path == "" {
 		return errors.New("配置文件路径不能为空")
 	}
