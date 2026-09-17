@@ -95,6 +95,8 @@ func (m *Manager) Stop() error {
 		return nil
 	}
 	if err := cmd.Process.Kill(); err != nil {
+		// Kill 失败时不能继续保留 stopping=true，否则后续异常退出会被误判为预期退出。
+		m.stopping = false
 		return err
 	}
 	return nil
