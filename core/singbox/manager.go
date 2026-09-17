@@ -32,8 +32,8 @@ func (m *Manager) Start(ctx context.Context, binary, configPath string) error {
 		ctx = context.Background()
 	}
 	m.mu.Lock()
+	defer m.mu.Unlock()
 	if m.starting || (m.cmd != nil && m.cmd.Process != nil) {
-		m.mu.Unlock()
 		return fmt.Errorf("sing-box 已经在运行或正在启动")
 	}
 	m.starting = true
@@ -45,27 +45,21 @@ func (m *Manager) Start(ctx context.Context, binary, configPath string) error {
 	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {
 		m.starting = false
-		m.mu.Unlock()
 		return fmt.Errorf("打开 sing-box 日志失败: %w", err)
 	}
 	cmd.Stdout = f
 	cmd.Stderr = f
 	m.logFile = f
-	m.mu.Unlock()
 
 	if err := cmd.Start(); err != nil {
 		_ = f.Close()
-		m.mu.Lock()
 		m.logFile = nil
 		m.starting = false
-		m.mu.Unlock()
 		return fmt.Errorf("启动 sing-box 失败: %w", err)
 	}
 
-	m.mu.Lock()
 	m.cmd = cmd
 	m.starting = false
-	m.mu.Unlock()
 	go m.wait(cmd)
 	return nil
 }
@@ -91,9 +85,12 @@ func (m *Manager) wait(cmd *exec.Cmd) {
 
 func (m *Manager) Stop() error {
 	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.starting {
+		return fmt.Errorf("sing-box 正在启动，暂时无法停止")
+	}
 	cmd := m.cmd
 	m.stopping = cmd != nil
-	m.mu.Unlock()
 	if cmd == nil || cmd.Process == nil {
 		return nil
 	}
