@@ -42,8 +42,10 @@ func (r *RuntimeCoordinator) watchSingBoxExit() {
 		if event.Expected {
 			continue
 		}
+		r.mu.Lock()
 		state, _ := r.State.Get()
 		if state == core.StateStopping || state == core.StateStopped {
+			r.mu.Unlock()
 			continue
 		}
 		r.TUN.MarkStopped()
@@ -53,6 +55,7 @@ func (r *RuntimeCoordinator) watchSingBoxExit() {
 		}
 		r.State.Set(core.StateError, message)
 		r.cleanupTUN()
+		r.mu.Unlock()
 	}
 }
 
