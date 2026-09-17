@@ -159,6 +159,9 @@ func atomicWrite(path string, data []byte) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	if err := os.Remove(path); err != nil && !os.IsNotExist(err) {
+		return fmt.Errorf("删除旧运行配置失败: %w", err)
+	}
 	if err := os.Rename(name, path); err != nil {
 		return fmt.Errorf("替换运行配置失败: %w", err)
 	}
