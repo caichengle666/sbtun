@@ -38,6 +38,9 @@ func NewRuntimeCoordinator(workDir, binary string) *RuntimeCoordinator {
 }
 
 func (r *RuntimeCoordinator) watchSingBoxExit() {
+	if r.SingBox == nil || r.State == nil {
+		return
+	}
 	for event := range r.SingBox.Exited() {
 		if event.Expected {
 			continue
@@ -48,7 +51,9 @@ func (r *RuntimeCoordinator) watchSingBoxExit() {
 			r.mu.Unlock()
 			continue
 		}
-		r.TUN.MarkStopped()
+		if r.TUN != nil {
+			r.TUN.MarkStopped()
+		}
 		message := ErrSingBoxExited
 		if event.Err != nil {
 			message += ": " + event.Err.Error()
@@ -62,6 +67,9 @@ func (r *RuntimeCoordinator) watchSingBoxExit() {
 func (r *RuntimeCoordinator) Start(ctx context.Context, cfg config.Config) error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.State == nil || r.SingBox == nil || r.TUN == nil {
+		return errors.New("runtime 未完整初始化")
+	}
 	if ctx == nil {
 		ctx = context.Background()
 	}
@@ -133,8 +141,14 @@ func (r *RuntimeCoordinator) cleanupTUN() error {
 func (r *RuntimeCoordinator) Stop() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
+	if r.State == nil {
+		return errors.New("runtime 状态未初始化")
+	}
 	state, _ := r.State.Get()
 	if state == core.StateStopped {
+		if r.TUN == nil {
+			return nil
+		}
 		r.TUN.MarkStopped()
 		return r.cleanupTUN()
 	}
@@ -174,9 +188,18 @@ func (r *RuntimeCoordinator) fail(code string, err error) error {
 	}
 	cleanupErr := r.cleanupTUN()
 	if cleanupErr != nil {
-		err = fmt.Errorf("%w; 清理失败: %v", err, cleanupErr)
+		if err == nil {
+			err = cleanupErr
+		} else {
+			err = fmt.Errorf("%w; 清理失败: %v", err, cleanupErr)
+		}
 	}
-	r.State.Set(core.StateError, code+": "+err.Error())
+	if err == nil {
+		err = errors.New("未知运行时错误")
+	}
+	if r.State != nil {
+		r.State.Set(core.StateError, code+": "+err.Error())
+	}
 	return fmt.Errorf("%s: %w", code, err)
 }
 
