@@ -54,7 +54,7 @@ func (r *RuntimeCoordinator) watchSingBoxExit() {
 			message += ": " + event.Err.Error()
 		}
 		r.State.Set(core.StateError, message)
-		r.cleanupTUN()
+		_ = r.cleanupTUN()
 		r.mu.Unlock()
 	}
 }
@@ -89,9 +89,12 @@ func (r *RuntimeCoordinator) Start(ctx context.Context, cfg config.Config) error
 		cancel()
 		if err != nil {
 			stopErr := r.SingBox.Stop()
-			r.cleanupTUN()
+			cleanupErr := r.cleanupTUN()
 			if stopErr != nil {
 				err = fmt.Errorf("%w; 停止失败: %v", err, stopErr)
+			}
+			if cleanupErr != nil {
+				err = fmt.Errorf("%w; 清理失败: %v", err, cleanupErr)
 			}
 			return r.fail(ErrTunNotReady, err)
 		}
@@ -120,10 +123,11 @@ func (r *RuntimeCoordinator) SyncConfig(cfg config.Config) (string, error) {
 	return configPath, nil
 }
 
-func (r *RuntimeCoordinator) cleanupTUN() {
-	if err := r.TUN.Cleanup(); err != nil {
-		fmt.Printf("清理 TUN 路由失败: %v\n", err)
+func (r *RuntimeCoordinator) cleanupTUN() error {
+	if r.TUN == nil {
+		return nil
 	}
+	return r.TUN.Cleanup()
 }
 
 func (r *RuntimeCoordinator) Stop() error {
@@ -132,27 +136,46 @@ func (r *RuntimeCoordinator) Stop() error {
 	state, _ := r.State.Get()
 	if state == core.StateStopped {
 		r.TUN.MarkStopped()
-		r.cleanupTUN()
-		return nil
+		return r.cleanupTUN()
 	}
 	r.State.Set(core.StateStopping, "")
 	var stopErr error
 	if r.SingBox != nil {
 		stopErr = r.SingBox.Stop()
 	}
-	r.cleanupTUN()
-	r.TUN.MarkStopped()
-	if stopErr != nil {
-		r.State.Set(core.StateError, stopErr.Error())
-		return stopErr
+	cleanupErr := r.cleanupTUN()
+	if r.TUN != nil {
+		r.TUN.MarkStopped()
+	}
+	if stopErr != nil || cleanupErr != nil {
+		message := ""
+		if stopErr != nil {
+			message = stopErr.Error()
+		}
+		if cleanupErr != nil {
+			if message != "" {
+				message += "; "
+			}
+			message += "清理失败: " + cleanupErr.Error()
+		}
+		r.State.Set(core.StateError, message)
+		if stopErr != nil {
+			return stopErr
+		}
+		return cleanupErr
 	}
 	r.State.Set(core.StateStopped, "")
 	return nil
 }
 
 func (r *RuntimeCoordinator) fail(code string, err error) error {
-	r.TUN.MarkStopped()
-	r.cleanupTUN()
+	if r.TUN != nil {
+		r.TUN.MarkStopped()
+	}
+	cleanupErr := r.cleanupTUN()
+	if cleanupErr != nil {
+		err = fmt.Errorf("%w; 清理失败: %v", err, cleanupErr)
+	}
 	r.State.Set(core.StateError, code+": "+err.Error())
 	return fmt.Errorf("%s: %w", code, err)
 }
