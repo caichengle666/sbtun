@@ -98,6 +98,7 @@ func TestImportSubscriptionSelectsFirstNode(t *testing.T) {
 
 	a := New()
 	a.manager = config.NewManager(filepath.Join(t.TempDir(), "config.json"))
+	a.runtime = NewRuntimeCoordinator(filepath.Join(t.TempDir(), "runtime-data"), "sing-box")
 	added, err := a.ImportSubscription(server.URL + "/sub")
 	if err != nil {
 		t.Fatal(err)

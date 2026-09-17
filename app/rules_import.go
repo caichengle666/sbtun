@@ -23,21 +23,12 @@ func (a *App) ImportCustomRules(source string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
-	cfg, err := a.manager.Load()
+	err = a.mutateConfigAndSyncLocked(func(_ config.Config, next *config.Config) error {
+		next.CustomRules = append(next.CustomRules, rules...)
+		return nil
+	}, true)
 	if err != nil {
 		return 0, err
-	}
-	cfg.CustomRules = append(cfg.CustomRules, rules...)
-	if err := a.manager.Save(cfg); err != nil {
-		return 0, err
-	}
-	if a.runtime != nil {
-		if _, err := a.runtime.SyncConfig(cfg); err != nil {
-			return len(rules), fmt.Errorf("规则已写入配置，但生成运行配置失败: %w", err)
-		}
-		if err := a.reloadIfRunningLocked(); err != nil {
-			return len(rules), err
-		}
 	}
 	return len(rules), nil
 }

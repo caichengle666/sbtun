@@ -8,6 +8,8 @@ import "net"
 // device, so cleanup does not need to mutate the user's default route.
 func cleanupPlatform(name string) error { return nil }
 
+func cleanupRoutesPlatform(name string) error { return nil }
+
 func interfaceExists(name string) bool {
 	_, err := net.InterfaceByName(name)
 	return err == nil

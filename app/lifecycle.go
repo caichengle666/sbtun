@@ -18,6 +18,7 @@ import (
 const (
 	ErrConfigInvalid      = "CONFIG_INVALID"
 	ErrSingBoxStartFailed = "SINGBOX_START_FAILED"
+	ErrSingBoxReload      = "SINGBOX_RELOAD_FAILED"
 	ErrTunNotReady        = "TUN_NOT_READY"
 	ErrSingBoxExited      = "SINGBOX_EXITED"
 )
@@ -78,6 +79,38 @@ func (r *RuntimeCoordinator) Start(ctx context.Context, cfg config.Config) error
 	if state == core.StateStarting || state == core.StateRunning || state == core.StateStopping {
 		return fmt.Errorf("runtime already active: %s", state)
 	}
+	return r.startConfigLocked(ctx, cfg)
+}
+
+// Reload restarts sing-box without disabling the existing TUN adapter. This
+// keeps rule and routing changes fast while still replacing the running config.
+func (r *RuntimeCoordinator) Reload(ctx context.Context, cfg config.Config) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.State == nil || r.SingBox == nil || r.TUN == nil {
+		return errors.New("runtime 未完整初始化")
+	}
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	state, _ := r.State.Get()
+	if state == core.StateStopped {
+		return r.startConfigLocked(ctx, cfg)
+	}
+	if state != core.StateRunning && state != core.StateError {
+		return fmt.Errorf("runtime cannot reload from state: %s", state)
+	}
+	r.State.Set(core.StateStopping, "")
+	if err := r.SingBox.Stop(); err != nil {
+		return r.fail(ErrSingBoxReload, fmt.Errorf("停止旧 sing-box 失败: %w", err))
+	}
+	if err := r.TUN.CleanupRoutes(); err != nil {
+		return r.fail(ErrSingBoxReload, fmt.Errorf("清理旧 TUN 路由失败: %w", err))
+	}
+	return r.startConfigLocked(ctx, cfg)
+}
+
+func (r *RuntimeCoordinator) startConfigLocked(ctx context.Context, cfg config.Config) error {
 	r.State.Set(core.StateStarting, "")
 	if err := config.Validate(cfg); err != nil {
 		return r.fail(ErrConfigInvalid, err)

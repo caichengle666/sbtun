@@ -118,9 +118,19 @@ type DiagnosticsDTO struct {
 }
 
 func (a *App) GetDiagnostics() DiagnosticsDTO {
-	cfg := a.GetConfig()
+	if a.manager == nil {
+		return DiagnosticsDTO{Message: "配置管理器未初始化"}
+	}
+	cfg, err := a.manager.Load()
+	if err != nil {
+		return DiagnosticsDTO{Message: err.Error()}
+	}
 	result := DiagnosticsDTO{Enabled: cfg.DiagnosticsEnabled, CurrentNodeID: cfg.CurrentNodeID}
 	if !cfg.DiagnosticsEnabled {
+		return result
+	}
+	if a.runtime == nil || a.runtime.State == nil {
+		result.Message = "运行时未初始化"
 		return result
 	}
 	if !a.runtime.State.IsRunning() {
@@ -138,33 +148,39 @@ func (a *App) GetDiagnostics() DiagnosticsDTO {
 }
 
 func (a *App) GetStatus() StatusDTO {
+	if a.runtime == nil || a.runtime.State == nil {
+		return StatusDTO{State: string(core.StateStopped), Message: "运行时未初始化"}
+	}
 	state, message := a.runtime.State.Get()
 	a.trafficMu.RLock()
 	up, down := a.uploadRate, a.downloadRate
 	a.trafficMu.RUnlock()
 	result := StatusDTO{State: string(state), Message: message, Running: state == core.StateRunning, UploadBytes: up, DownloadBytes: down}
-	if cfg, err := a.manager.Load(); err == nil {
-		if selector, selectorErr := currentSelector(); selectorErr == nil {
-			if !result.Running {
-				// A CLI status invocation has no in-memory runtime state, but it
-				// must still report an already-running sing-box process.
-				result.State = string(core.StateRunning)
-				result.Message = "sing-box 运行中"
-				result.Running = true
-			}
-			result.Selector = selector
-			if id := nodeIDFromSelector(cfg, selector); id != "" {
-				result.CurrentNodeID = id
-				if id != cfg.CurrentNodeID {
-					a.operationMu.Lock()
-					latest, loadErr := a.manager.Load()
-					if loadErr == nil && nodeIDFromSelector(latest, selector) == id && latest.CurrentNodeID != id {
-						latest.CurrentNodeID = id
-						_ = a.manager.Save(latest)
-					}
-					a.operationMu.Unlock()
-				}
-			}
+	if a.manager == nil {
+		if result.Message == "" {
+			result.Message = "配置管理器未初始化"
+		}
+		return result
+	}
+	cfg, err := a.manager.Load()
+	if err != nil {
+		if result.Message == "" {
+			result.Message = err.Error()
+		}
+		return result
+	}
+	result.CurrentNodeID = cfg.CurrentNodeID
+	if selector, selectorErr := currentSelector(); selectorErr == nil {
+		if !result.Running {
+			// A CLI status invocation has no in-memory runtime state, but it
+			// must still report an already-running sing-box process.
+			result.State = string(core.StateRunning)
+			result.Message = "sing-box 运行中"
+			result.Running = true
+		}
+		result.Selector = selector
+		if id := nodeIDFromSelector(cfg, selector); id != "" {
+			result.CurrentNodeID = id
 		}
 	}
 	return result
@@ -185,7 +201,7 @@ func nodeIDFromSelector(cfg config.Config, selector string) string {
 }
 
 func (a *App) refreshTraffic() (uint64, uint64) {
-	if a.runtime == nil || !a.runtime.SingBox.Running() {
+	if a.runtime == nil || a.runtime.SingBox == nil || !a.runtime.SingBox.Running() {
 		a.trafficMu.Lock()
 		a.uploadRate, a.downloadRate = 0, 0
 		a.trafficMu.Unlock()
@@ -244,10 +260,10 @@ func (a *App) LoadConfig() (config.Config, error) {
 func (a *App) SaveConfig(cfg config.Config) error {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
-	if err := a.manager.Save(cfg); err != nil {
-		return err
-	}
-	return a.reloadIfRunningLocked()
+	return a.mutateConfigAndSyncLocked(func(_ config.Config, next *config.Config) error {
+		*next = cfg
+		return nil
+	}, true)
 }
 
 func (a *App) Start() error {
@@ -257,9 +273,22 @@ func (a *App) Start() error {
 }
 
 func (a *App) startLocked() error {
+	if a.manager == nil {
+		return errors.New("配置管理器未初始化")
+	}
+	if a.runtime == nil {
+		return errors.New("运行时未初始化")
+	}
 	cfg, err := a.manager.Load()
 	if err != nil {
 		return err
+	}
+	return a.startWithConfigLocked(cfg)
+}
+
+func (a *App) startWithConfigLocked(cfg config.Config) error {
+	if a.runtime == nil {
+		return errors.New("运行时未初始化")
 	}
 	if a.binary == "" || !fileExists(a.binary) {
 		return fmt.Errorf("未找到 %s，请把它放在 sbtun 同目录下", singBoxBinaryName())
@@ -275,7 +304,70 @@ func (a *App) startLocked() error {
 	return a.runtime.Start(a.ctx, cfg)
 }
 
+func (a *App) mutateConfigAndSyncLocked(mutate func(before config.Config, next *config.Config) error, reload bool) error {
+	if a.manager == nil {
+		return errors.New("配置管理器未初始化")
+	}
+	if a.runtime == nil || a.runtime.State == nil {
+		return errors.New("运行时未初始化")
+	}
+	wasRunning := a.runtime.State.IsRunning()
+	before, after, err := a.manager.UpdateResult(mutate)
+	if err != nil {
+		return err
+	}
+	if err := a.applyRuntimeConfigLocked(after, wasRunning, reload); err != nil {
+		if rollbackErr := a.rollbackConfigAndRuntimeLocked(before, wasRunning); rollbackErr != nil {
+			return fmt.Errorf("%w; 回滚失败: %v", err, rollbackErr)
+		}
+		return err
+	}
+	return nil
+}
+
+func (a *App) applyRuntimeConfigLocked(next config.Config, wasRunning, reload bool) error {
+	if len(next.Nodes) == 0 {
+		if wasRunning {
+			if err := a.runtime.Stop(); err != nil {
+				return fmt.Errorf("停止旧运行配置失败: %w", err)
+			}
+		}
+		return nil
+	}
+	if reload && wasRunning {
+		if err := a.runtime.Reload(a.ctx, next); err != nil {
+			return fmt.Errorf("重载运行配置失败: %w", err)
+		}
+		return nil
+	}
+	if _, err := a.runtime.SyncConfig(next); err != nil {
+		return fmt.Errorf("生成运行配置失败: %w", err)
+	}
+	return nil
+}
+
+func (a *App) rollbackConfigAndRuntimeLocked(before config.Config, wasRunning bool) error {
+	var rollbackErrs []error
+	if err := a.manager.Save(before); err != nil {
+		rollbackErrs = append(rollbackErrs, fmt.Errorf("恢复配置失败: %w", err))
+	}
+	if len(before.Nodes) > 0 {
+		if _, err := a.runtime.SyncConfig(before); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("恢复运行配置失败: %w", err))
+		}
+	}
+	if wasRunning && !a.runtime.State.IsRunning() {
+		if err := a.startWithConfigLocked(before); err != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("恢复运行节点失败: %w", err))
+		}
+	}
+	return errors.Join(rollbackErrs...)
+}
+
 func (a *App) TestNode(id string) NodeHealthDTO {
+	if a.manager == nil {
+		return NodeHealthDTO{NodeID: id, Message: "配置管理器未初始化"}
+	}
 	cfg, err := a.manager.Load()
 	if err != nil {
 		return NodeHealthDTO{NodeID: id, Message: err.Error()}
@@ -303,81 +395,62 @@ func (a *App) Stop() error {
 	return a.stopLocked()
 }
 
-func (a *App) stopLocked() error { return a.runtime.Stop() }
+func (a *App) stopLocked() error {
+	if a.runtime == nil {
+		return errors.New("运行时未初始化")
+	}
+	return a.runtime.Stop()
+}
 
 func (a *App) AddNode(node config.Node) error {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
-	cfg, err := a.manager.Load()
-	if err != nil {
-		return err
-	}
-	for i := range cfg.Nodes {
-		if cfg.Nodes[i].ID == node.ID {
-			cfg.Nodes[i] = node
-			if err := a.manager.Save(cfg); err != nil {
-				return err
+	return a.mutateConfigAndSyncLocked(func(_ config.Config, next *config.Config) error {
+		for i := range next.Nodes {
+			if next.Nodes[i].ID == node.ID {
+				next.Nodes[i] = node
+				return nil
 			}
-			if a.runtime != nil {
-				if _, err := a.runtime.SyncConfig(cfg); err != nil {
-					return fmt.Errorf("节点已写入配置，但生成运行配置失败: %w", err)
-				}
-			}
-			return a.reloadIfRunningLocked()
 		}
-	}
-	cfg.Nodes = append(cfg.Nodes, node)
-	if cfg.CurrentNodeID == "" {
-		cfg.CurrentNodeID = node.ID
-	}
-	if err := a.manager.Save(cfg); err != nil {
-		return err
-	}
-	if a.runtime != nil {
-		if _, err := a.runtime.SyncConfig(cfg); err != nil {
-			return fmt.Errorf("节点已写入配置，但生成运行配置失败: %w", err)
+		next.Nodes = append(next.Nodes, node)
+		if next.CurrentNodeID == "" {
+			next.CurrentNodeID = node.ID
 		}
-	}
-	return a.reloadIfRunningLocked()
+		return nil
+	}, true)
 }
 
 func (a *App) RemoveNode(id string) error {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
-	cfg, err := a.manager.Load()
-	if err != nil {
-		return err
-	}
-	found := false
-	filtered := make([]config.Node, 0, len(cfg.Nodes))
-	for _, n := range cfg.Nodes {
-		if n.ID == id {
-			found = true
-			continue
+	return a.mutateConfigAndSyncLocked(func(_ config.Config, next *config.Config) error {
+		found := false
+		filtered := make([]config.Node, 0, len(next.Nodes))
+		for _, n := range next.Nodes {
+			if n.ID == id {
+				found = true
+				continue
+			}
+			filtered = append(filtered, n)
 		}
-		filtered = append(filtered, n)
-	}
-	if !found {
-		return fmt.Errorf("节点不存在: %s", id)
-	}
-	cfg.Nodes = filtered
-	if cfg.CurrentNodeID == id {
-		cfg.CurrentNodeID = ""
-	}
-	if err := a.manager.Save(cfg); err != nil {
-		return err
-	}
-	return a.reloadIfRunningLocked()
+		if !found {
+			return fmt.Errorf("节点不存在: %s", id)
+		}
+		next.Nodes = filtered
+		if next.CurrentNodeID == id {
+			next.CurrentNodeID = ""
+			if len(next.Nodes) > 0 {
+				next.CurrentNodeID = next.Nodes[0].ID
+			}
+		}
+		return nil
+	}, true)
 }
 
 // RemoveNodes removes several nodes atomically by ID.
 func (a *App) RemoveNodes(ids []string) error {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
-	cfg, err := a.manager.Load()
-	if err != nil {
-		return err
-	}
 	wanted := make(map[string]struct{}, len(ids))
 	for _, id := range ids {
 		if id != "" {
@@ -387,40 +460,28 @@ func (a *App) RemoveNodes(ids []string) error {
 	if len(wanted) == 0 {
 		return errors.New("未选择节点")
 	}
-	filtered := make([]config.Node, 0, len(cfg.Nodes))
-	removed := 0
-	for _, node := range cfg.Nodes {
-		if _, ok := wanted[node.ID]; ok {
-			removed++
-			continue
+	return a.mutateConfigAndSyncLocked(func(_ config.Config, next *config.Config) error {
+		filtered := make([]config.Node, 0, len(next.Nodes))
+		removed := 0
+		for _, node := range next.Nodes {
+			if _, ok := wanted[node.ID]; ok {
+				removed++
+				continue
+			}
+			filtered = append(filtered, node)
 		}
-		filtered = append(filtered, node)
-	}
-	if removed == 0 {
-		return errors.New("未找到要删除的节点")
-	}
-	cfg.Nodes = filtered
-	if _, ok := wanted[cfg.CurrentNodeID]; ok {
-		cfg.CurrentNodeID = ""
-		if len(cfg.Nodes) > 0 {
-			cfg.CurrentNodeID = cfg.Nodes[0].ID
+		if removed == 0 {
+			return errors.New("未找到要删除的节点")
 		}
-	}
-	if err := a.manager.Save(cfg); err != nil {
-		return err
-	}
-	if len(cfg.Nodes) == 0 {
-		if a.runtime != nil && a.runtime.State.IsRunning() {
-			return a.stopLocked()
+		next.Nodes = filtered
+		if _, ok := wanted[next.CurrentNodeID]; ok {
+			next.CurrentNodeID = ""
+			if len(next.Nodes) > 0 {
+				next.CurrentNodeID = next.Nodes[0].ID
+			}
 		}
 		return nil
-	}
-	if a.runtime != nil {
-		if _, err := a.runtime.SyncConfig(cfg); err != nil {
-			return fmt.Errorf("节点已删除，但生成运行配置失败: %w", err)
-		}
-	}
-	return a.reloadIfRunningLocked()
+	}, true)
 }
 
 // UpdateNode replaces editable fields while preserving the node ID.
@@ -430,27 +491,17 @@ func (a *App) UpdateNode(id string, node config.Node) error {
 	if id == "" || node.Server == "" || node.Port == 0 || node.Protocol == "" {
 		return errors.New("节点信息不完整")
 	}
-	cfg, err := a.manager.Load()
-	if err != nil {
-		return err
-	}
-	for i := range cfg.Nodes {
-		if cfg.Nodes[i].ID != id {
-			continue
-		}
-		node.ID = id
-		cfg.Nodes[i] = node
-		if err := a.manager.Save(cfg); err != nil {
-			return err
-		}
-		if a.runtime != nil {
-			if _, err := a.runtime.SyncConfig(cfg); err != nil {
-				return fmt.Errorf("节点已保存，但生成运行配置失败: %w", err)
+	return a.mutateConfigAndSyncLocked(func(_ config.Config, next *config.Config) error {
+		for i := range next.Nodes {
+			if next.Nodes[i].ID != id {
+				continue
 			}
+			node.ID = id
+			next.Nodes[i] = node
+			return nil
 		}
-		return a.reloadIfRunningLocked()
-	}
-	return fmt.Errorf("节点不存在: %s", id)
+		return fmt.Errorf("节点不存在: %s", id)
+	}, true)
 }
 
 // UpdateNodeFromLink replaces all node parameters parsed from a share link.
@@ -476,13 +527,17 @@ func (a *App) TestNodes(ids []string) []NodeHealthDTO {
 }
 
 func (a *App) reloadIfRunningLocked() error {
-	if a.runtime == nil || !a.runtime.State.IsRunning() {
+	if a.runtime == nil || a.runtime.State == nil || !a.runtime.State.IsRunning() {
 		return nil
 	}
-	if err := a.stopLocked(); err != nil {
+	if a.manager == nil {
+		return errors.New("配置管理器未初始化")
+	}
+	cfg, err := a.manager.Load()
+	if err != nil {
 		return err
 	}
-	return a.startLocked()
+	return a.runtime.Reload(a.ctx, cfg)
 }
 
 func (a *App) SelectNode(id string) error {
@@ -492,6 +547,12 @@ func (a *App) SelectNode(id string) error {
 }
 
 func (a *App) selectNodeLocked(id string) error {
+	if a.manager == nil {
+		return errors.New("配置管理器未初始化")
+	}
+	if a.runtime == nil || a.runtime.State == nil {
+		return errors.New("运行时未初始化")
+	}
 	cfg, err := a.manager.Load()
 	if err != nil {
 		return err
@@ -507,7 +568,7 @@ func (a *App) selectNodeLocked(id string) error {
 		return fmt.Errorf("节点不存在: %s", id)
 	}
 	previousID := cfg.CurrentNodeID
-	running := a.runtime != nil && a.runtime.State.IsRunning()
+	running := a.runtime.State.IsRunning()
 	// CLI invocations create a fresh App, so its in-memory runtime state is
 	// stopped even when another sbtun process is serving Clash API requests.
 	apiRunning := false
@@ -516,22 +577,48 @@ func (a *App) selectNodeLocked(id string) error {
 		apiRunning = apiErr == nil
 	}
 	selectorActive := running || apiRunning
+	switchedSelector := false
 	if selectorActive && previousID != id {
 		if err := switchSelector(id); err != nil {
 			if !running {
 				return err
 			}
-			if reloadErr := a.reloadIfRunningLocked(); reloadErr != nil {
-				return fmt.Errorf("节点切换失败（无缝切换和自动重启均失败）: %w", reloadErr)
-			}
+			// Without a live selector update, restart the runtime with the
+			// selected node instead of leaving the old outbound active.
+			return a.mutateConfigAndSyncLocked(func(before config.Config, next *config.Config) error {
+				if before.CurrentNodeID != previousID {
+					return errors.New("节点配置已变化，请重试")
+				}
+				next.CurrentNodeID = id
+				return nil
+			}, true)
 		}
+		switchedSelector = true
 	}
-	cfg.CurrentNodeID = id
-	if err := a.manager.Save(cfg); err != nil {
-		if selectorActive && previousID != "" && previousID != id {
+	before, after, err := a.manager.UpdateResult(func(before config.Config, next *config.Config) error {
+		if before.CurrentNodeID != previousID {
+			return errors.New("节点配置已变化，请重试")
+		}
+		next.CurrentNodeID = id
+		return nil
+	})
+	if err != nil {
+		if switchedSelector && previousID != "" {
 			_ = switchSelector(previousID)
 		}
 		return err
+	}
+	if _, err := a.runtime.SyncConfig(after); err != nil {
+		rollbackErrs := []error{fmt.Errorf("生成运行配置失败: %w", err)}
+		if saveErr := a.manager.Save(before); saveErr != nil {
+			rollbackErrs = append(rollbackErrs, fmt.Errorf("恢复配置失败: %w", saveErr))
+		}
+		if switchedSelector && previousID != "" {
+			if switchErr := switchSelector(previousID); switchErr != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Errorf("恢复节点选择失败: %w", switchErr))
+			}
+		}
+		return errors.Join(rollbackErrs...)
 	}
 	return nil
 }
@@ -604,7 +691,7 @@ func (a *App) monitorNodes() {
 }
 
 func (a *App) autoSwitchNode() {
-	if a.runtime == nil || !a.runtime.State.IsRunning() {
+	if a.runtime == nil || a.runtime.State == nil || a.manager == nil || !a.runtime.State.IsRunning() {
 		return
 	}
 	a.failoverMu.Lock()
@@ -675,15 +762,10 @@ func (a *App) testNodeHealthy(node config.Node) bool {
 func (a *App) SetRoutingMode(mode config.RoutingMode) error {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
-	cfg, err := a.manager.Load()
-	if err != nil {
-		return err
-	}
-	cfg.RoutingMode = mode
-	if err := a.manager.Save(cfg); err != nil {
-		return err
-	}
-	return a.reloadIfRunningLocked()
+	return a.mutateConfigAndSyncLocked(func(_ config.Config, next *config.Config) error {
+		next.RoutingMode = mode
+		return nil
+	}, true)
 }
 
 func (a *App) ImportSubscription(link string) (int, error) {
@@ -696,41 +778,36 @@ func (a *App) ImportSubscription(link string) (int, error) {
 	if len(nodes) == 0 {
 		return 0, errors.New("订阅中未识别到任何节点")
 	}
-	cfg, err := a.manager.Load()
+	added := 0
+	err = a.mutateConfigAndSyncLocked(func(_ config.Config, next *config.Config) error {
+		existing := make(map[string]struct{}, len(next.Nodes))
+		for _, n := range next.Nodes {
+			existing[n.ID] = struct{}{}
+		}
+		added = 0
+		for _, n := range nodes {
+			if _, ok := existing[n.ID]; ok {
+				continue
+			}
+			next.Nodes = append(next.Nodes, n)
+			existing[n.ID] = struct{}{}
+			added++
+		}
+		if next.CurrentNodeID == "" && len(next.Nodes) > 0 {
+			next.CurrentNodeID = next.Nodes[0].ID
+		}
+		return nil
+	}, true)
 	if err != nil {
 		return 0, err
-	}
-	existing := make(map[string]struct{}, len(cfg.Nodes))
-	for _, n := range cfg.Nodes {
-		existing[n.ID] = struct{}{}
-	}
-	added := 0
-	for _, n := range nodes {
-		if _, ok := existing[n.ID]; ok {
-			continue
-		}
-		cfg.Nodes = append(cfg.Nodes, n)
-		existing[n.ID] = struct{}{}
-		added++
-	}
-	if cfg.CurrentNodeID == "" && len(cfg.Nodes) > 0 {
-		cfg.CurrentNodeID = cfg.Nodes[0].ID
-	}
-	if err := a.manager.Save(cfg); err != nil {
-		return 0, err
-	}
-	if a.runtime != nil {
-		if _, err := a.runtime.SyncConfig(cfg); err != nil {
-			return added, fmt.Errorf("节点已写入配置，但生成运行配置失败: %w", err)
-		}
-	}
-	if err := a.reloadIfRunningLocked(); err != nil {
-		return added, err
 	}
 	return added, nil
 }
 
 func (a *App) checkReady(ctx context.Context) error {
+	if a.runtime == nil || a.runtime.SingBox == nil || a.runtime.TUN == nil {
+		return errors.New("运行时未初始化")
+	}
 	if !a.runtime.SingBox.Running() {
 		return errors.New("sing-box 进程未存活，请检查节点配置")
 	}
@@ -746,12 +823,18 @@ func fileExists(path string) bool {
 }
 
 func (a *App) ListRules() []rules.RuleInfo {
+	if a.rulesManager == nil {
+		return nil
+	}
 	return a.rulesManager.List()
 }
 
 func (a *App) UpdateRule(id string) error {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
+	if a.rulesManager == nil {
+		return errors.New("规则管理器未初始化")
+	}
 	if err := a.rulesManager.Update(id); err != nil {
 		return err
 	}
@@ -761,6 +844,9 @@ func (a *App) UpdateRule(id string) error {
 func (a *App) UpdateAllRules() []error {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
+	if a.rulesManager == nil {
+		return []error{errors.New("规则管理器未初始化")}
+	}
 	errs := a.rulesManager.UpdateAll()
 	if err := a.reloadIfRunningLocked(); err != nil {
 		errs = append(errs, err)

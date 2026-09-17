@@ -16,6 +16,9 @@ func (a *App) ExportNodes(ids []string) ([]string, error) {
 	if len(ids) == 0 {
 		return nil, fmt.Errorf("请选择需要导出的节点")
 	}
+	if a.manager == nil {
+		return nil, fmt.Errorf("配置管理器未初始化")
+	}
 	cfg, err := a.manager.Load()
 	if err != nil {
 		return nil, err

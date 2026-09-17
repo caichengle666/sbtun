@@ -84,6 +84,10 @@ func (a *App) StartTray() {
 			// 状态同步
 			go func() {
 				for {
+					if a.runtime == nil || a.runtime.State == nil || a.manager == nil {
+						time.Sleep(time.Second)
+						continue
+					}
 					state, _ := a.runtime.State.Get()
 					up, down := a.refreshTraffic()
 					currentNodeID := ""

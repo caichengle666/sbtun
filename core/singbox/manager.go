@@ -7,6 +7,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"sync"
+	"time"
 )
 
 // ExitEvent 描述 sing-box 进程退出。
@@ -21,6 +22,7 @@ type Manager struct {
 	cmd      *exec.Cmd
 	logFile  *os.File
 	exited   chan ExitEvent
+	done     chan struct{}
 	stopping bool
 	starting bool
 }
@@ -59,6 +61,7 @@ func (m *Manager) Start(ctx context.Context, binary, configPath string) error {
 	}
 
 	m.cmd = cmd
+	m.done = make(chan struct{})
 	m.starting = false
 	go m.wait(cmd)
 	return nil
@@ -68,8 +71,11 @@ func (m *Manager) wait(cmd *exec.Cmd) {
 	err := cmd.Wait()
 	m.mu.Lock()
 	expected := m.stopping
-	if m.cmd == cmd {
+	done := m.done
+	ownsProcess := m.cmd == cmd
+	if ownsProcess {
 		m.cmd = nil
+		m.done = nil
 	}
 	if m.logFile != nil {
 		_ = m.logFile.Close()
@@ -81,25 +87,42 @@ func (m *Manager) wait(cmd *exec.Cmd) {
 	case m.exited <- ExitEvent{Err: err, Expected: expected}:
 	default:
 	}
+	if done != nil {
+		close(done)
+	}
 }
 
 func (m *Manager) Stop() error {
 	m.mu.Lock()
-	defer m.mu.Unlock()
 	if m.starting {
+		m.mu.Unlock()
 		return fmt.Errorf("sing-box 正在启动，暂时无法停止")
 	}
 	cmd := m.cmd
+	done := m.done
 	m.stopping = cmd != nil
 	if cmd == nil || cmd.Process == nil {
+		m.mu.Unlock()
 		return nil
 	}
 	if err := cmd.Process.Kill(); err != nil {
 		// Kill 失败时不能继续保留 stopping=true，否则后续异常退出会被误判为预期退出。
 		m.stopping = false
+		m.mu.Unlock()
 		return err
 	}
-	return nil
+	m.mu.Unlock()
+	if done == nil {
+		return nil
+	}
+	timer := time.NewTimer(5 * time.Second)
+	defer timer.Stop()
+	select {
+	case <-done:
+		return nil
+	case <-timer.C:
+		return fmt.Errorf("等待 sing-box 退出超时")
+	}
 }
 
 func (m *Manager) Running() bool {

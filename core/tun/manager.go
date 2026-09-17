@@ -69,6 +69,19 @@ func (m *Manager) Cleanup() error {
 	return cleanupPlatform(name)
 }
 
+// CleanupRoutes removes routes and DNS settings without disabling the TUN
+// adapter. It is used for an in-process configuration reload, where the new
+// sing-box process immediately recreates the adapter.
+func (m *Manager) CleanupRoutes() error {
+	m.mu.RLock()
+	name := m.tunName
+	m.mu.RUnlock()
+	if name == "" {
+		name = "tun0"
+	}
+	return cleanupRoutesPlatform(name)
+}
+
 // waitForInterface 等待 TUN 网卡出现。
 func waitForInterface(name string, timeout time.Duration) bool {
 	deadline := time.Now().Add(timeout)

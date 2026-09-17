@@ -22,7 +22,13 @@ func NewManager(path string) *Manager { return &Manager{Path: path} }
 func (m *Manager) Load() (Config, error) {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.loadLocked()
+	var cfg Config
+	err := withConfigLock(m.Path, func() error {
+		var loadErr error
+		cfg, loadErr = m.loadLocked()
+		return loadErr
+	})
+	return cfg, err
 }
 
 func (m *Manager) loadLocked() (Config, error) {
@@ -53,7 +59,41 @@ func (m *Manager) loadLocked() (Config, error) {
 func (m *Manager) Save(cfg Config) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	return m.saveLocked(cfg)
+	return withConfigLock(m.Path, func() error {
+		return m.saveLocked(cfg)
+	})
+}
+
+// Update serializes a read-modify-write operation across processes.
+func (m *Manager) Update(mutate func(before Config, next *Config) error) error {
+	_, _, err := m.UpdateResult(mutate)
+	return err
+}
+
+// UpdateResult is like Update but also returns the configuration snapshots on
+// both sides of the mutation. Callers can use them to roll back a later runtime
+// synchronization failure.
+func (m *Manager) UpdateResult(mutate func(before Config, next *Config) error) (Config, Config, error) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	var before, next Config
+	err := withConfigLock(m.Path, func() error {
+		var err error
+		before, err = m.loadLocked()
+		if err != nil {
+			return err
+		}
+		cloned, err := cloneConfig(before)
+		if err != nil {
+			return err
+		}
+		if err := mutate(before, &cloned); err != nil {
+			return err
+		}
+		next = cloned
+		return m.saveLocked(cloned)
+	})
+	return before, next, err
 }
 
 func (m *Manager) saveLocked(cfg Config) error {
@@ -179,4 +219,16 @@ func validateRule(r Rule) error {
 		}
 	}
 	return nil
+}
+
+func cloneConfig(cfg Config) (Config, error) {
+	data, err := json.Marshal(cfg)
+	if err != nil {
+		return Config{}, fmt.Errorf("复制配置失败: %w", err)
+	}
+	var cloned Config
+	if err := json.Unmarshal(data, &cloned); err != nil {
+		return Config{}, fmt.Errorf("复制配置失败: %w", err)
+	}
+	return cloned, nil
 }

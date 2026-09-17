@@ -33,3 +33,48 @@ func TestValidateRejectsDuplicateID(t *testing.T) {
 		t.Fatal("重复节点 ID 应该校验失败")
 	}
 }
+
+func TestManagerUpdatePersistsMutation(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	m := NewManager(path)
+	if err := m.Save(Default()); err != nil {
+		t.Fatal(err)
+	}
+	var beforeMode RoutingMode
+	err := m.Update(func(before Config, next *Config) error {
+		beforeMode = before.RoutingMode
+		next.RoutingMode = RoutingGlobal
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if beforeMode != RoutingSmart {
+		t.Fatalf("before routing mode = %q, want %q", beforeMode, RoutingSmart)
+	}
+	got, err := m.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if got.RoutingMode != RoutingGlobal {
+		t.Fatalf("saved routing mode = %q, want %q", got.RoutingMode, RoutingGlobal)
+	}
+}
+
+func TestManagerUpdateResultReturnsBothSnapshots(t *testing.T) {
+	path := filepath.Join(t.TempDir(), "config.json")
+	m := NewManager(path)
+	if err := m.Save(Default()); err != nil {
+		t.Fatal(err)
+	}
+	before, after, err := m.UpdateResult(func(_ Config, next *Config) error {
+		next.RoutingMode = RoutingDirect
+		return nil
+	})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if before.RoutingMode != RoutingSmart || after.RoutingMode != RoutingDirect {
+		t.Fatalf("snapshots = %q -> %q", before.RoutingMode, after.RoutingMode)
+	}
+}
