@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sync"
 	"time"
 
 	"github.com/caichengle666/sbtun/config"
@@ -21,6 +22,7 @@ const (
 )
 
 type RuntimeCoordinator struct {
+	mu         sync.Mutex
 	State      *core.StateStore
 	SingBox    *singbox.Manager
 	TUN        *tun.Manager
@@ -55,8 +57,14 @@ func (r *RuntimeCoordinator) watchSingBoxExit() {
 }
 
 func (r *RuntimeCoordinator) Start(ctx context.Context, cfg config.Config) error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	if ctx == nil {
 		ctx = context.Background()
+	}
+	state, _ := r.State.Get()
+	if state == core.StateStarting || state == core.StateRunning || state == core.StateStopping {
+		return fmt.Errorf("runtime already active: %s", state)
 	}
 	r.State.Set(core.StateStarting, "")
 	if err := config.Validate(cfg); err != nil {
@@ -116,8 +124,10 @@ func (r *RuntimeCoordinator) cleanupTUN() {
 }
 
 func (r *RuntimeCoordinator) Stop() error {
+	r.mu.Lock()
+	defer r.mu.Unlock()
 	state, _ := r.State.Get()
-	if state == core.StateStopped {
+	if state == core.StateStopped || state == core.StateError {
 		r.TUN.MarkStopped()
 		r.cleanupTUN()
 		return nil
