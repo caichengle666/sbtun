@@ -31,8 +31,10 @@ jobs:
 
       - name: 下载最新 sing-box
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $headers = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'sbtun-tun-test' }
+          $headers = @{ Accept = 'application/vnd.github+json'; Authorization = "Bearer $env:GH_TOKEN"; 'User-Agent' = 'sbtun-tun-test' }
           $release = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/SagerNet/sing-box/releases/latest'
           $asset = $release.assets | Where-Object { $_.name -match 'windows-amd64\.zip$' } | Select-Object -First 1
           if (-not $asset) { throw '未找到 sing-box Windows 资产' }
@@ -66,10 +68,9 @@ jobs:
           $found = $false
           for ($i = 0; $i -lt 20; $i++) {
             $pnp = @(Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'Wintun|sing-tun' -or $_.InstanceId -match 'Wintun' })
-            $logText = Get-Content "$env:TUN_TEST_DIR\sing-box.log" -Raw -ErrorAction SilentlyContinue
-            $started = $logText -match 'started at tun0'
-            Write-Host "检测 $($i + 1): PnP=$($pnp.Count), started=$started"
-            if ($pnp.Count -gt 0 -and $started) { $found = $true; break }
+            $process = Get-Process -Id ([int]$env:SINGBOX_PID) -ErrorAction SilentlyContinue
+            Write-Host "检测 $($i + 1): PnP=$($pnp.Count), process=$([bool]$process)"
+            if ($pnp.Count -gt 0 -and $process) { $found = $true; break }
             Start-Sleep -Seconds 1
           }
           if (-not $found) { Get-Content "$env:TUN_TEST_DIR\sing-box.log"; Get-Content "$env:TUN_TEST_DIR\sing-box.err"; throw '真实 TUN 后端未正确初始化' }

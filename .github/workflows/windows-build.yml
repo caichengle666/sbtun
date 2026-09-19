@@ -55,8 +55,10 @@ jobs:
 
       - name: 解析最新依赖版本
         shell: pwsh
+        env:
+          GH_TOKEN: ${{ github.token }}
         run: |
-          $headers = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'sbtun-build' }
+          $headers = @{ Accept = 'application/vnd.github+json'; Authorization = "Bearer $env:GH_TOKEN"; 'User-Agent' = 'sbtun-build' }
           $singRelease = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/SagerNet/sing-box/releases/latest'
           $singAsset = $singRelease.assets | Where-Object { $_.name -match "windows-$env:TARGET_ARCH\.zip$" } | Select-Object -First 1
           if (-not $singAsset) { throw "latest sing-box release 没有 Windows $env:TARGET_ARCH zip 资产" }
