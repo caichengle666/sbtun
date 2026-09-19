@@ -34,6 +34,18 @@ func TestValidateRejectsDuplicateID(t *testing.T) {
 	}
 }
 
+func TestValidateCaptureRequiresDomain(t *testing.T) {
+	cfg := Default()
+	cfg.CaptureEnabled = true
+	if err := Validate(cfg); err == nil {
+		t.Fatal("启用流量分析但没有域名时应校验失败")
+	}
+	cfg.CaptureDomains = []string{"example.com"}
+	if err := Validate(cfg); err != nil {
+		t.Fatalf("有效分析域名不应失败: %v", err)
+	}
+}
+
 func TestManagerUpdatePersistsMutation(t *testing.T) {
 	path := filepath.Join(t.TempDir(), "config.json")
 	m := NewManager(path)

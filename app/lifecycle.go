@@ -11,6 +11,7 @@ import (
 
 	"github.com/caichengle666/sbtun/config"
 	"github.com/caichengle666/sbtun/core"
+	"github.com/caichengle666/sbtun/core/capture"
 	"github.com/caichengle666/sbtun/core/singbox"
 	"github.com/caichengle666/sbtun/core/tun"
 )
@@ -21,6 +22,7 @@ const (
 	ErrSingBoxReload      = "SINGBOX_RELOAD_FAILED"
 	ErrTunNotReady        = "TUN_NOT_READY"
 	ErrSingBoxExited      = "SINGBOX_EXITED"
+	ErrCaptureStartFailed = "CAPTURE_START_FAILED"
 )
 
 type RuntimeCoordinator struct {
@@ -28,13 +30,18 @@ type RuntimeCoordinator struct {
 	State      *core.StateStore
 	SingBox    *singbox.Manager
 	TUN        *tun.Manager
+	Capture    *capture.Manager
 	WorkDir    string
 	Binary     string
 	ReadyCheck func(context.Context) error
 }
 
 func NewRuntimeCoordinator(workDir, binary string) *RuntimeCoordinator {
-	r := &RuntimeCoordinator{State: core.NewStateStore(), SingBox: singbox.NewManager(), TUN: tun.NewManager(), WorkDir: workDir, Binary: binary}
+	r := &RuntimeCoordinator{
+		State: core.NewStateStore(), SingBox: singbox.NewManager(), TUN: tun.NewManager(),
+		Capture: capture.NewManager(filepath.Join(workDir, "capture"), "127.0.0.1:9081", "127.0.0.1:9082"),
+		WorkDir: workDir, Binary: binary,
+	}
 	go r.watchSingBoxExit()
 	return r
 }
@@ -61,6 +68,9 @@ func (r *RuntimeCoordinator) watchSingBoxExit() {
 			message += ": " + event.Err.Error()
 		}
 		r.State.Set(core.StateError, message)
+		if r.Capture != nil {
+			_ = r.Capture.Stop()
+		}
 		_ = r.cleanupTUN()
 		r.mu.Unlock()
 	}
@@ -104,6 +114,11 @@ func (r *RuntimeCoordinator) Reload(ctx context.Context, cfg config.Config) erro
 	if err := r.SingBox.Stop(); err != nil {
 		return r.fail(ErrSingBoxReload, fmt.Errorf("停止旧 sing-box 失败: %w", err))
 	}
+	if r.Capture != nil {
+		if err := r.Capture.Stop(); err != nil {
+			return r.fail(ErrSingBoxReload, fmt.Errorf("停止流量分析器失败: %w", err))
+		}
+	}
 	if err := r.TUN.CleanupRoutes(); err != nil {
 		return r.fail(ErrSingBoxReload, fmt.Errorf("清理旧 TUN 路由失败: %w", err))
 	}
@@ -115,14 +130,32 @@ func (r *RuntimeCoordinator) startConfigLocked(ctx context.Context, cfg config.C
 	if err := config.Validate(cfg); err != nil {
 		return r.fail(ErrConfigInvalid, err)
 	}
+	if r.Capture != nil {
+		if cfg.CaptureEnabled && len(cfg.CaptureDomains) > 0 {
+			if err := r.Capture.Start(ctx, cfg.CaptureDomains); err != nil {
+				return r.fail(ErrCaptureStartFailed, err)
+			}
+		} else if err := r.Capture.Stop(); err != nil {
+			return r.fail(ErrCaptureStartFailed, err)
+		}
+	}
 	configPath, err := r.SyncConfig(cfg)
 	if err != nil {
+		if r.Capture != nil {
+			_ = r.Capture.Stop()
+		}
 		return r.fail(ErrConfigInvalid, err)
 	}
 	if err := singbox.ValidateConfig(ctx, r.Binary, configPath); err != nil {
+		if r.Capture != nil {
+			_ = r.Capture.Stop()
+		}
 		return r.fail(ErrConfigInvalid, err)
 	}
 	if err := r.SingBox.Start(ctx, r.Binary, configPath); err != nil {
+		if r.Capture != nil {
+			_ = r.Capture.Stop()
+		}
 		return r.fail(ErrSingBoxStartFailed, err)
 	}
 	if r.ReadyCheck != nil {
@@ -132,6 +165,9 @@ func (r *RuntimeCoordinator) startConfigLocked(ctx context.Context, cfg config.C
 		if err != nil {
 			stopErr := r.SingBox.Stop()
 			cleanupErr := r.cleanupTUN()
+			if r.Capture != nil {
+				_ = r.Capture.Stop()
+			}
 			if stopErr != nil {
 				err = fmt.Errorf("%w; 停止失败: %v", err, stopErr)
 			}
@@ -191,6 +227,11 @@ func (r *RuntimeCoordinator) Stop() error {
 	if r.SingBox != nil {
 		stopErr = r.SingBox.Stop()
 	}
+	if r.Capture != nil {
+		if err := r.Capture.Stop(); stopErr == nil {
+			stopErr = err
+		}
+	}
 	cleanupErr := r.cleanupTUN()
 	if r.TUN != nil {
 		r.TUN.MarkStopped()
@@ -217,6 +258,9 @@ func (r *RuntimeCoordinator) Stop() error {
 }
 
 func (r *RuntimeCoordinator) fail(code string, err error) error {
+	if r.Capture != nil {
+		_ = r.Capture.Stop()
+	}
 	if r.TUN != nil {
 		r.TUN.MarkStopped()
 	}

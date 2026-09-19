@@ -21,6 +21,11 @@ type RuntimeConfig struct {
 	Experimental map[string]any   `json:"experimental,omitempty"`
 }
 
+const (
+	captureProxyPort    = 9081
+	captureUpstreamPort = 9082
+)
+
 // BuildConfig 将用户配置转换为 sing-box 运行配置。
 // 四种模式在这里形成明确、可验证的路由闭环：智能分流、全局代理、全局直连、自定义规则。
 func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
@@ -38,17 +43,30 @@ func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 		return nil, err
 	}
 
+	outbounds := append(proxy, map[string]any{"type": "direct", "tag": "direct", "domain_resolver": "dns-local"}, map[string]any{"type": "block", "tag": "block"})
+	if cfg.CaptureEnabled && len(normalizeCaptureDomains(cfg.CaptureDomains)) > 0 {
+		outbounds = append(outbounds, map[string]any{
+			"type": "http", "tag": "capture", "server": "127.0.0.1", "server_port": captureProxyPort,
+		})
+	}
+	inbounds := []map[string]any{{
+		"type": "tun", "tag": "tun-in",
+		"address":    []string{"172.18.0.1/30"},
+		"auto_route": true, "strict_route": false, "stack": "system",
+	}}
+	if cfg.CaptureEnabled && len(normalizeCaptureDomains(cfg.CaptureDomains)) > 0 {
+		inbounds = append(inbounds, map[string]any{
+			"type": "mixed", "tag": "capture-upstream",
+			"listen": "127.0.0.1", "listen_port": captureUpstreamPort,
+		})
+	}
 	result := RuntimeConfig{
 		Schema: "https://sing-box.sagernet.org/schema.json",
 		Log:    map[string]any{"level": "info", "timestamp": true},
 		DNS:    buildDNS(cfg.DNSMode, cfg.RoutingMode),
-		Inbounds: []map[string]any{{
-			"type": "tun", "tag": "tun-in",
-			"address":    []string{"172.18.0.1/30"},
-			"auto_route": true, "strict_route": false, "stack": "system",
-		}},
-		Outbounds: append(proxy, map[string]any{"type": "direct", "tag": "direct", "domain_resolver": "dns-local"}, map[string]any{"type": "block", "tag": "block"}),
-		Route:     routeForMode(cfg.RoutingMode, cfg.CustomRules, exeDir),
+		Inbounds:  inbounds,
+		Outbounds: outbounds,
+		Route:     routeForMode(cfg.RoutingMode, cfg.CustomRules, cfg.CaptureEnabled, cfg.CaptureDomains, exeDir),
 		Experimental: map[string]any{
 			"cache_file": map[string]any{"enabled": true},
 			"clash_api":  map[string]any{"external_controller": "127.0.0.1:9090"},
@@ -129,13 +147,28 @@ func buildDNS(mode config.DNSMode, routeMode config.RoutingMode) map[string]any 
 	return map[string]any{"servers": servers, "rules": rules, "final": final, "strategy": "prefer_ipv4"}
 }
 
-func routeForMode(mode config.RoutingMode, custom []config.Rule, exeDir string) map[string]any {
+func routeForMode(mode config.RoutingMode, custom []config.Rule, captureEnabled bool, captureDomains []string, exeDir string) map[string]any {
 	private := map[string]any{"ip_is_private": true, "outbound": "direct"}
 	dns := map[string]any{"protocol": "dns", "action": "hijack-dns"}
 	base := []map[string]any{
 		{"inbound": []string{"tun-in"}, "action": "sniff", "timeout": "1s"},
 		{"inbound": []string{"tun-in"}, "action": "resolve", "strategy": "prefer_ipv4"},
 		dns,
+	}
+	domains, keywords := splitCapturePatterns(captureDomains)
+	if captureEnabled {
+		if len(domains) > 0 {
+			base = append(base,
+				map[string]any{"inbound": []string{"tun-in"}, "domain_suffix": domains, "network": "udp", "port": []int{443}, "outbound": "block"},
+				map[string]any{"inbound": []string{"tun-in"}, "domain_suffix": domains, "network": "tcp", "port": []int{80, 443}, "outbound": "capture"},
+			)
+		}
+		if len(keywords) > 0 {
+			base = append(base,
+				map[string]any{"inbound": []string{"tun-in"}, "domain_keyword": keywords, "network": "udp", "port": []int{443}, "outbound": "block"},
+				map[string]any{"inbound": []string{"tun-in"}, "domain_keyword": keywords, "network": "tcp", "port": []int{80, 443}, "outbound": "capture"},
+			)
+		}
 	}
 	for _, r := range custom {
 		if rr, ok := customRule(r); ok {
@@ -181,6 +214,34 @@ func routeForMode(mode config.RoutingMode, custom []config.Rule, exeDir string) 
 		"rules":                   base,
 		"final":                   final,
 	}
+}
+
+func normalizeCaptureDomains(domains []string) []string {
+	seen := make(map[string]struct{}, len(domains))
+	result := make([]string, 0, len(domains))
+	for _, domain := range domains {
+		domain = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(domain)), ".")
+		if domain == "" {
+			continue
+		}
+		if _, ok := seen[domain]; ok {
+			continue
+		}
+		seen[domain] = struct{}{}
+		result = append(result, domain)
+	}
+	return result
+}
+
+func splitCapturePatterns(patterns []string) (domains, keywords []string) {
+	for _, pattern := range normalizeCaptureDomains(patterns) {
+		if strings.Contains(pattern, ".") {
+			domains = append(domains, pattern)
+		} else {
+			keywords = append(keywords, pattern)
+		}
+	}
+	return domains, keywords
 }
 
 func ruleSetExists(exeDir, name string) bool {

@@ -189,6 +189,15 @@ func Validate(cfg Config) error {
 			return fmt.Errorf("第 %d 条自定义规则无效: %w", i+1, err)
 		}
 	}
+	if cfg.CaptureEnabled && len(cfg.CaptureDomains) == 0 {
+		return errors.New("启用流量分析时至少需要一个域名")
+	}
+	for i, domain := range cfg.CaptureDomains {
+		domain = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(domain)), ".")
+		if domain == "" || strings.ContainsAny(domain, " /:@") {
+			return fmt.Errorf("第 %d 个分析域名无效: %q", i+1, domain)
+		}
+	}
 	return nil
 }
 

@@ -34,6 +34,8 @@ type Config struct {
 	DNSMode            DNSMode     `json:"dns_mode"`
 	TUNEnabled         bool        `json:"tun_enabled"`
 	DiagnosticsEnabled bool        `json:"diagnostics_enabled,omitempty"`
+	CaptureEnabled     bool        `json:"capture_enabled,omitempty"`
+	CaptureDomains     []string    `json:"capture_domains,omitempty"`
 	CurrentNodeID      string      `json:"current_node_id"`
 	Nodes              []Node      `json:"nodes"`
 	CustomRules        []Rule      `json:"custom_rules,omitempty"`
@@ -51,10 +53,11 @@ type Node struct {
 
 func Default() Config {
 	return Config{
-		Version:     1,
-		RoutingMode: RoutingSmart,
-		DNSMode:     DNSAuto,
-		Nodes:       []Node{},
-		CustomRules: []Rule{},
+		Version:        1,
+		RoutingMode:    RoutingSmart,
+		DNSMode:        DNSAuto,
+		Nodes:          []Node{},
+		CustomRules:    []Rule{},
+		CaptureDomains: []string{},
 	}
 }

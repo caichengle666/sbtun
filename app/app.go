@@ -14,6 +14,7 @@ import (
 
 	"github.com/caichengle666/sbtun/config"
 	"github.com/caichengle666/sbtun/core"
+	"github.com/caichengle666/sbtun/core/capture"
 	"github.com/caichengle666/sbtun/core/rules"
 )
 
@@ -145,6 +146,66 @@ func (a *App) GetDiagnostics() DiagnosticsDTO {
 	result.Selector = selector
 	result.Message = "selector 已连接"
 	return result
+}
+
+func (a *App) GetCaptureStatus() capture.Status {
+	if a.runtime == nil || a.runtime.Capture == nil {
+		return capture.Status{Message: "流量分析器未初始化"}
+	}
+	cfg := a.GetConfig()
+	status := a.runtime.Capture.Status(cfg.CaptureEnabled)
+	if !cfg.CaptureEnabled {
+		status.Message = "分析功能未启用"
+	} else if status.Running {
+		status.Message = "分析器运行中"
+	} else if a.runtime.State == nil || !a.runtime.State.IsRunning() {
+		status.Message = "等待 TUN 启动"
+	} else {
+		status.Message = "分析器启动异常"
+	}
+	return status
+}
+
+func (a *App) GetCaptureFlows() ([]capture.Flow, error) {
+	if a.runtime == nil || a.runtime.Capture == nil {
+		return []capture.Flow{}, nil
+	}
+	return a.runtime.Capture.Flows()
+}
+
+func (a *App) GetCaptureFlow(id uint64) (capture.Flow, error) {
+	if a.runtime == nil || a.runtime.Capture == nil {
+		return capture.Flow{}, errors.New("流量分析器未初始化")
+	}
+	return a.runtime.Capture.Flow(id)
+}
+
+func (a *App) ClearCaptureFlows() error {
+	if a.runtime != nil && a.runtime.Capture != nil {
+		return a.runtime.Capture.Clear()
+	}
+	return nil
+}
+
+func (a *App) SaveCaptureFlows() error {
+	if a.runtime == nil || a.runtime.Capture == nil {
+		return errors.New("流量分析器未初始化")
+	}
+	return a.runtime.Capture.Save()
+}
+
+func (a *App) InstallCaptureCertificate() error {
+	if a.runtime == nil || a.runtime.Capture == nil {
+		return errors.New("流量分析器未初始化")
+	}
+	return a.runtime.Capture.InstallCertificate()
+}
+
+func (a *App) UninstallCaptureCertificate() error {
+	if a.runtime == nil || a.runtime.Capture == nil {
+		return errors.New("流量分析器未初始化")
+	}
+	return a.runtime.Capture.UninstallCertificate()
 }
 
 func (a *App) GetStatus() StatusDTO {

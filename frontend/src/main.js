@@ -26,6 +26,14 @@ const state = {
   nodeFilter: 'all',
   traffic: { up: 0, down: 0 },
   diagnostics: null,
+  captureStatus: null,
+  captureFlows: [],
+  captureDraft: '',
+  captureDraftDirty: false,
+  captureEnabledDraft: false,
+  captureEnabledDirty: false,
+  selectedCaptureID: 0,
+  selectedCaptureFlow: null,
   view: 'overview',
   statusRefreshing: false,
   configRefreshing: false,
@@ -147,6 +155,7 @@ function render() {
             ['nodes', '节点'],
             ['routing', '路由模式'],
             ['rules', '规则集'],
+            ['capture', '流量分析'],
           ].map(([id, label]) => `<button class="nav-item ${state.view === id ? 'active' : ''}" data-view="${id}">${label}</button>`).join('')}
         </nav>
         <div class="sidebar-status">
@@ -180,17 +189,18 @@ function render() {
 }
 
 function viewLabel(view) {
-  return { overview: '概览', nodes: '节点', routing: '路由模式', rules: '规则集' }[view] || '概览'
+  return { overview: '概览', nodes: '节点', routing: '路由模式', rules: '规则集', capture: '流量分析' }[view] || '概览'
 }
 
 function viewTitle(view) {
-  return { overview: '运行概览', nodes: '节点管理', routing: '路由模式', rules: '智能分流规则集' }[view] || '运行概览'
+  return { overview: '运行概览', nodes: '节点管理', routing: '路由模式', rules: '智能分流规则集', capture: 'HTTP 请求分析' }[view] || '运行概览'
 }
 
 function renderView() {
   if (state.view === 'nodes') return renderNodesPage()
   if (state.view === 'routing') return renderRoutingPage()
   if (state.view === 'rules') return renderRulesPage()
+  if (state.view === 'capture') return renderCapturePage()
   return renderOverview()
 }
 
@@ -217,8 +227,10 @@ function renderOverview() {
 }
 
 function renderNodesPage() {
+  const nodes = state.config?.nodes || []
+  const allSelected = nodes.length > 0 && nodes.every(node => state.selectedNodes.has(node.id))
   return `<section class="page-stack">
-      <div class="section-heading"><div><h2>节点列表</h2><p class="muted">选择节点后可批量测试、导出或删除。</p></div><span><button class="btn btn-ghost" id="batchTestNodes">批量测试</button> <button class="btn btn-ghost" id="batchExportNodes">批量导出</button> <button class="btn btn-danger" id="batchDeleteNodes">批量删除</button> <button class="btn btn-primary" data-scroll="node-import">导入节点</button></span></div>
+      <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">选择节点后可批量测试、导出或删除。</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="toggleSelectNodes" ${nodes.length ? '' : 'disabled'}>${allSelected ? '反选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes">批量测试</button><button class="btn btn-ghost" id="batchExportNodes">批量导出</button><button class="btn btn-danger" id="batchDeleteNodes">批量删除</button><button class="btn btn-primary" data-scroll="node-import">导入节点</button></span></div>
     <div id="nodePanel">${renderNodes()}</div>
     <div class="card node-import" id="node-import"><h2>${state.editingNodeId ? '编辑节点全部参数' : '添加节点'}</h2>
       <div class="row"><input id="nodeUrl" class="input" value="${escapeHtml(state.manualForm.url)}" placeholder="节点链接 vmess:// vless:// ss:// 或订阅" /><button id="importBtn" class="btn btn-primary">导入</button></div>
@@ -293,6 +305,69 @@ function renderRoutingPage() {
 
 function renderRulesPage() {
   return `<div class="page-stack"><section class="card"><div id="rulesPanel">${renderRules()}</div><button id="updateAllRules" class="btn btn-primary">${state.allRulesUpdating ? '更新中...' : '更新全部规则集'}</button></section></div>`
+}
+
+function renderCapturePage() {
+  const status = state.captureStatus || {}
+  const enabled = state.captureEnabledDirty ? state.captureEnabledDraft : Boolean(state.config?.capture_enabled)
+  const domains = state.captureDraftDirty ? state.captureDraft : (state.config?.capture_domains || []).join('\n')
+  const selected = state.selectedCaptureFlow?.id === state.selectedCaptureID ? state.selectedCaptureFlow : state.captureFlows.find(flow => flow.id === state.selectedCaptureID) || state.captureFlows[0]
+  return `<div class="page-stack">
+    <section class="card capture-settings">
+      <div class="section-heading"><div><h2>分析域名或关键词</h2><p class="muted">example.com 匹配域名及子域名，google 匹配域名关键词。</p></div><label class="toggle-field"><input id="captureEnabled" type="checkbox" ${enabled ? 'checked' : ''}><span>启用分析</span></label></div>
+      <textarea id="captureDomains" class="input" rows="4" placeholder="每行一个域名或关键词，例如 example.com 或 google">${escapeHtml(domains)}</textarea>
+      <div class="capture-toolbar">
+        <button id="saveCapture" class="btn btn-primary">保存并应用</button>
+        <span class="badge ${status.running ? 'direct' : ''}">${escapeHtml(status.message || (status.running ? '分析器运行中' : '分析器未运行'))}</span>
+        <span class="badge ${status.certificate_installed ? 'direct' : ''}">${status.certificate_installed ? '证书已安装' : '证书未安装'}</span>
+        <span class="capture-storage" title="${escapeHtml(status.storage_path || '')}">${status.unsaved ? '有未保存内容 · ' : ''}${escapeHtml(status.storage_path || 'capture.json')}</span>
+        <button id="installCaptureCA" class="btn btn-ghost">安装证书</button>
+        <button id="uninstallCaptureCA" class="btn btn-ghost">卸载证书</button>
+        <button id="saveCaptureFile" class="btn btn-ghost">保存抓包</button>
+        <button id="clearCapture" class="btn btn-ghost">删除抓包</button>
+      </div>
+    </section>
+    <section class="capture-workspace">
+      <div class="capture-list">
+        <div class="capture-list-head"><strong>请求</strong><span>${state.captureFlows.length}/500</span></div>
+        ${state.captureFlows.length ? state.captureFlows.map(flow => `<button class="capture-row ${selected?.id === flow.id ? 'active' : ''}" data-capture-id="${flow.id}"><span class="capture-method">${escapeHtml(flow.method)}</span><span class="capture-url" title="${escapeHtml(flow.url)}">${escapeHtml(flow.host)}${escapeHtml(capturePath(flow.url))}</span><span class="capture-status">${flow.status_code || '—'}</span><span class="capture-time">${flow.duration_ms || 0} ms</span></button>`).join('') : '<div class="empty">暂无请求记录</div>'}
+      </div>
+      <div class="capture-detail">${selected ? renderCaptureDetail(selected) : '<div class="empty">选择一条请求查看头信息</div>'}</div>
+    </section>
+  </div>`
+}
+
+function renderCaptureDetail(flow) {
+  return `<div class="capture-detail-head"><span class="capture-method">${escapeHtml(flow.method)}</span><strong>${escapeHtml(flow.url)}</strong></div>
+    <div class="capture-meta"><span>HTTP ${escapeHtml(flow.protocol)}</span><span>状态 ${flow.status_code || '—'}</span><span>${flow.duration_ms || 0} ms</span><span>↑ ${formatBytes(flow.request_bytes)} ↓ ${formatBytes(flow.response_bytes)}</span></div>
+    <div class="capture-headers"><section><h2>请求头</h2>${renderHeaders(flow.request_headers)}</section><section><h2>响应头</h2>${renderHeaders(flow.response_headers)}</section></div>
+    <div class="capture-bodies"><section><h2>请求正文${flow.request_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.request_body, flow.request_encoding)}</section><section><h2>响应正文${flow.response_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.response_body, flow.response_encoding)}</section></div>`
+}
+
+function renderCaptureBody(body, encoding) {
+  if (!body) return '<div class="empty">无</div>'
+  return `<pre>${encoding === 'base64' ? 'Base64\n' : ''}${escapeHtml(body)}</pre>`
+}
+
+function renderHeaders(headers) {
+  const entries = Object.entries(headers || {}).sort(([a], [b]) => a.localeCompare(b))
+  if (!entries.length) return '<div class="empty">无</div>'
+  return `<dl>${entries.map(([name, values]) => `<dt>${escapeHtml(name)}</dt><dd>${escapeHtml((values || []).join('\n'))}</dd>`).join('')}</dl>`
+}
+
+function capturePath(rawURL) {
+  try {
+    const url = new URL(rawURL)
+    return url.pathname + url.search
+  } catch { return '' }
+}
+
+function formatBytes(value) {
+  const n = Number(value)
+  if (!Number.isFinite(n) || n < 0) return '—'
+  if (n < 1024) return n + ' B'
+  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
+  return (n / 1024 / 1024).toFixed(1) + ' MB'
 }
 
 function dotClass(s) {
@@ -512,6 +587,28 @@ async function refreshDiagnostics() {
   }
 }
 
+async function refreshCapture() {
+  try {
+    const [status, flows] = await Promise.all([
+      window.go.app.App.GetCaptureStatus(),
+      window.go.app.App.GetCaptureFlows(),
+    ])
+    state.captureStatus = status
+    state.captureFlows = flows || []
+    if (state.selectedCaptureID && !state.captureFlows.some(flow => flow.id === state.selectedCaptureID)) {
+      state.selectedCaptureID = 0
+      state.selectedCaptureFlow = null
+    }
+    if (!state.selectedCaptureID && state.captureFlows.length) state.selectedCaptureID = state.captureFlows[0].id
+    if (state.selectedCaptureID && state.selectedCaptureFlow?.id !== state.selectedCaptureID) {
+      state.selectedCaptureFlow = await window.go.app.App.GetCaptureFlow(state.selectedCaptureID)
+    }
+    if (state.view === 'capture' && document.activeElement?.id !== 'captureDomains') renderApp()
+  } catch (e) {
+    console.error('capture refresh failed:', e)
+  }
+}
+
 async function refreshRules() {
   try {
     state.rules = await window.go.app.App.ListRules()
@@ -552,8 +649,9 @@ function bindEvents() {
     })
   }
   document.querySelectorAll('[data-view]').forEach(item => {
-    item.addEventListener('click', () => {
+    item.addEventListener('click', async () => {
       state.view = item.dataset.view
+      if (state.view === 'capture') await refreshCapture()
       renderApp()
     })
   })
@@ -706,6 +804,95 @@ function bindEvents() {
     })
   }
 
+  const captureDomains = document.querySelector('#captureDomains')
+  if (captureDomains) captureDomains.addEventListener('input', () => {
+    state.captureDraft = captureDomains.value
+    state.captureDraftDirty = true
+  })
+  const readCaptureDomains = () => (captureDomains?.value || '').split(/\r?\n|,/).map(item => item.trim().replace(/^\./, '')).filter(Boolean)
+  const applyCaptureSettings = async enabled => {
+    const domains = [...new Set(readCaptureDomains())]
+    if (enabled && !domains.length) throw new Error('启用分析前请添加域名或关键词')
+    const cfg = JSON.parse(JSON.stringify(state.config))
+    cfg.capture_enabled = enabled
+    cfg.capture_domains = domains
+    await window.go.app.App.SaveConfig(cfg)
+    state.config = cfg
+    state.captureDraft = domains.join('\n')
+    state.captureDraftDirty = false
+    state.captureEnabledDraft = enabled
+    state.captureEnabledDirty = false
+    await refreshCapture()
+  }
+  const captureEnabled = document.querySelector('#captureEnabled')
+  if (captureEnabled) captureEnabled.addEventListener('change', async () => {
+    state.captureEnabledDraft = captureEnabled.checked
+    state.captureEnabledDirty = true
+    captureEnabled.disabled = true
+    try {
+      await applyCaptureSettings(captureEnabled.checked)
+      showToast(captureEnabled.checked ? (state.captureStatus?.running ? '分析器已启动' : '已启用，开启 TUN 后开始分析') : '分析器已关闭', 'success')
+    } catch (e) {
+      state.captureEnabledDraft = Boolean(state.config?.capture_enabled)
+      state.captureEnabledDirty = false
+      showToast(e.message || String(e), 'error')
+      renderApp()
+    } finally { captureEnabled.disabled = false }
+  })
+  const saveCapture = document.querySelector('#saveCapture')
+  if (saveCapture) saveCapture.addEventListener('click', async () => {
+    const enabled = state.captureEnabledDirty ? state.captureEnabledDraft : Boolean(captureEnabled?.checked)
+    saveCapture.disabled = true
+    try {
+      await applyCaptureSettings(enabled)
+      showToast(enabled && !state.captureStatus?.running ? '配置已保存，开启 TUN 后开始分析' : '分析配置已应用', 'success')
+    } catch (e) { showToast(e.message || String(e), 'error') }
+    finally { saveCapture.disabled = false }
+  })
+  const installCaptureCA = document.querySelector('#installCaptureCA')
+  if (installCaptureCA) installCaptureCA.addEventListener('click', async () => {
+    installCaptureCA.disabled = true
+    try {
+      await window.go.app.App.InstallCaptureCertificate()
+      await refreshCapture()
+      showToast('分析证书已安装', 'success')
+    } catch (e) { showToast(e.message || String(e), 'error') }
+    finally { installCaptureCA.disabled = false }
+  })
+  const uninstallCaptureCA = document.querySelector('#uninstallCaptureCA')
+  if (uninstallCaptureCA) uninstallCaptureCA.addEventListener('click', async () => {
+    uninstallCaptureCA.disabled = true
+    try {
+      await window.go.app.App.UninstallCaptureCertificate()
+      await refreshCapture()
+      showToast('分析证书已卸载', 'success')
+    } catch (e) { showToast(e.message || String(e), 'error') }
+    finally { uninstallCaptureCA.disabled = false }
+  })
+  const clearCapture = document.querySelector('#clearCapture')
+  if (clearCapture) clearCapture.addEventListener('click', async () => {
+    await window.go.app.App.ClearCaptureFlows()
+    state.selectedCaptureID = 0
+    state.selectedCaptureFlow = null
+    await refreshCapture()
+  })
+  const saveCaptureFile = document.querySelector('#saveCaptureFile')
+  if (saveCaptureFile) saveCaptureFile.addEventListener('click', async () => {
+    saveCaptureFile.disabled = true
+    try {
+      await window.go.app.App.SaveCaptureFlows()
+      await refreshCapture()
+      showToast('抓包已保存为 JSON', 'success')
+    } catch (e) { showToast(e.message || String(e), 'error') }
+    finally { saveCaptureFile.disabled = false }
+  })
+  document.querySelectorAll('[data-capture-id]').forEach(row => row.addEventListener('click', async () => {
+    state.selectedCaptureID = Number(row.dataset.captureId)
+    try { state.selectedCaptureFlow = await window.go.app.App.GetCaptureFlow(state.selectedCaptureID) }
+    catch (e) { return showToast(e.message || String(e), 'error') }
+    renderApp()
+  }))
+
   document.querySelectorAll('.select-node').forEach(btn => {
     btn.addEventListener('click', async () => {
       if (state.nodeSwitching) return
@@ -738,11 +925,27 @@ function bindEvents() {
     })
   })
 
+  const toggleSelectNodes = document.querySelector('#toggleSelectNodes')
+  const syncToggleSelectLabel = () => {
+    if (!toggleSelectNodes) return
+    const nodes = state.config?.nodes || []
+    toggleSelectNodes.textContent = nodes.length > 0 && nodes.every(node => state.selectedNodes.has(node.id)) ? '反选' : '全选'
+  }
   document.querySelectorAll('.node-select').forEach(input => {
     input.addEventListener('change', () => {
       if (input.checked) state.selectedNodes.add(input.dataset.id)
       else state.selectedNodes.delete(input.dataset.id)
+      syncToggleSelectLabel()
     })
+  })
+  if (toggleSelectNodes) toggleSelectNodes.addEventListener('click', () => {
+    const nodes = state.config?.nodes || []
+    const allSelected = nodes.length > 0 && nodes.every(node => state.selectedNodes.has(node.id))
+    nodes.forEach(node => {
+      if (allSelected) state.selectedNodes.delete(node.id)
+      else state.selectedNodes.add(node.id)
+    })
+    renderApp()
   })
   const selectedIDs = () => [...state.selectedNodes].filter(id => state.config?.nodes?.some(n => n.id === id))
   const copyNodeLinks = async ids => {
@@ -996,9 +1199,11 @@ window.addEventListener('DOMContentLoaded', async () => {
     await refreshConfig()
     await refreshRules()
     await refreshDiagnostics()
+    await refreshCapture()
     setInterval(refreshStatus, 2000)
     setInterval(refreshConfig, 1500)
     setInterval(refreshDiagnostics, 1500)
+    setInterval(refreshCapture, 1500)
   } else {
     showToast('Wails 运行时未加载', 'error')
     renderApp()

@@ -149,6 +149,74 @@ func TestCustomRoutingRule(t *testing.T) {
 	}
 }
 
+func TestCaptureRulesHavePriorityAndAvoidLoop(t *testing.T) {
+	cfg := testConfig(config.RoutingSmart)
+	cfg.CaptureEnabled = true
+	cfg.CaptureDomains = []string{"example.com", "google"}
+	cfg.CustomRules = []config.Rule{{MatchType: "domain_suffix", Value: "example.com", Action: "direct"}}
+	data, err := BuildConfig(cfg, "D:\\test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runtime RuntimeConfig
+	if err := json.Unmarshal(data, &runtime); err != nil {
+		t.Fatal(err)
+	}
+	rules := runtime.Route["rules"].([]any)
+	if rules[3].(map[string]any)["domain_suffix"] == nil || rules[3].(map[string]any)["outbound"] != "block" {
+		t.Fatalf("capture domain UDP rule missing: %+v", rules[3])
+	}
+	if rules[4].(map[string]any)["outbound"] != "capture" || rules[4].(map[string]any)["inbound"] == nil {
+		t.Fatalf("capture domain TCP rule missing or not limited to tun-in: %+v", rules[4])
+	}
+	if rules[5].(map[string]any)["domain_keyword"] == nil || rules[5].(map[string]any)["outbound"] != "block" || rules[6].(map[string]any)["outbound"] != "capture" {
+		t.Fatalf("capture keyword rules missing: %+v", rules[5:7])
+	}
+	if rules[7].(map[string]any)["outbound"] != "direct" {
+		t.Fatalf("custom rule must run after capture on the second inbound: %+v", rules[7])
+	}
+	foundCapture := false
+	for _, raw := range runtime.Outbounds {
+		if raw["tag"] == "capture" && raw["server_port"] == float64(captureProxyPort) {
+			foundCapture = true
+		}
+	}
+	if !foundCapture {
+		t.Fatal("capture outbound missing")
+	}
+	foundUpstream := false
+	for _, inbound := range runtime.Inbounds {
+		if inbound["tag"] == "capture-upstream" && inbound["type"] == "mixed" && inbound["listen_port"] == float64(captureUpstreamPort) {
+			foundUpstream = true
+		}
+	}
+	if !foundUpstream {
+		t.Fatal("capture mixed upstream inbound missing")
+	}
+}
+
+func TestCaptureConfigPassesSingBoxCheck(t *testing.T) {
+	binary := filepath.Join("..", "..", "dist", "downloads", "sing-box", "sing-box-1.14.0-windows-amd64", "sing-box.exe")
+	if _, err := os.Stat(binary); err != nil {
+		t.Skip("local sing-box binary not available")
+	}
+	cfg := testConfig(config.RoutingGlobal)
+	cfg.CaptureEnabled = true
+	cfg.CaptureDomains = []string{"example.com"}
+	data, err := BuildConfig(cfg, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	path := filepath.Join(t.TempDir(), "capture.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	cmd := exec.Command(binary, "check", "-c", path)
+	if output, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("capture config failed sing-box check: %v\n%s\n%s", err, output, data)
+	}
+}
+
 func TestCustomDNSUsesModernServerShape(t *testing.T) {
 	cfg := testConfig(config.RoutingGlobal)
 	cfg.DNSMode = config.DNSCustom
