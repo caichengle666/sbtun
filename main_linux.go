@@ -5,7 +5,9 @@ package main
 import (
 	"bufio"
 	"context"
+	"encoding/json"
 	"fmt"
+	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -14,6 +16,7 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
 
 	"github.com/caichengle666/sbtun/app"
 	"github.com/caichengle666/sbtun/config"
@@ -37,16 +40,23 @@ func main() {
 		fmt.Println("sbtun " + app.Version())
 		return
 	}
-	if requiresElevation(command) {
+	captureRun := command == "capture" && len(os.Args) > 2 && os.Args[2] == "run"
+	if requiresElevation(command, os.Args[2:]) {
 		if err := relaunchElevated(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 	}
-	if command == "run" || command == "start" {
+	if captureRun {
+		if err := enableCapture(application, os.Args[3:]); err != nil {
+			fmt.Fprintln(os.Stderr, err)
+			os.Exit(2)
+		}
+	}
+	if command == "run" || command == "start" || captureRun {
 		application.StartMonitoring()
 	}
-	if command == "run" || command == "start" {
+	if command == "run" || command == "start" || captureRun {
 		release, err := app.AcquireSingleInstance()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
@@ -59,6 +69,11 @@ func main() {
 		}
 		fmt.Println("sbtun 已启动，按 Ctrl+C 停止")
 		<-ctx.Done()
+		if application.GetConfig().CaptureEnabled {
+			if saveErr := application.SaveCaptureFlows(); saveErr != nil {
+				fmt.Fprintln(os.Stderr, "保存抓包失败:", saveErr)
+			}
+		}
 		if err := application.Stop(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -210,6 +225,8 @@ func main() {
 		}
 	case "rules":
 		err = runRulesCommand(application, os.Args[2:])
+	case "capture":
+		err = runCaptureCommand(application, os.Args[2:])
 	default:
 		err = fmt.Errorf("未知命令: %s", command)
 	}
@@ -219,13 +236,22 @@ func main() {
 	}
 }
 
-func requiresElevation(command string) bool {
+func requiresElevation(command string, args []string) bool {
 	switch command {
 	case "run", "start", "stop", "route", "add-node", "add-rule", "switch", "del", "delete", "edit":
 		return true
+	case "capture":
+		if len(args) == 0 {
+			return false
+		}
+		switch args[0] {
+		case "run", "enable", "disable", "clear", "cert":
+			return true
+		}
 	default:
 		return false
 	}
+	return false
 }
 
 // relaunchElevated keeps the CLI convenient for TUN and root-owned runtime
@@ -279,6 +305,16 @@ func printHelp() {
 		{"rules list", "列出规则集"},
 		{"rules update <id>", "更新指定规则集"},
 		{"rules update-all", "更新全部规则集"},
+	})
+	printHelpGroup("流量分析", []helpEntry{
+		{"capture run [关键词...]", "启用抓包并前台启动 TUN"},
+		{"capture enable <关键词...>", "保存抓包关键词，下次启动生效"},
+		{"capture disable", "关闭抓包，下次启动生效"},
+		{"capture status", "查看抓包配置和运行状态"},
+		{"capture list", "列出已保存请求"},
+		{"capture show <ID>", "查看一条已保存请求的完整内容"},
+		{"capture clear", "删除已保存请求"},
+		{"capture cert <install|uninstall>", "安装或卸载抓包根证书"},
 	})
 	printHelpGroup("其他", []helpEntry{
 		{"help", "显示帮助"},
@@ -355,6 +391,148 @@ func runRulesCommand(application *app.App, args []string) error {
 	default:
 		return fmt.Errorf("用法: sbtun rules [list|update <id>|update-all]")
 	}
+}
+
+func runCaptureCommand(application *app.App, args []string) error {
+	if len(args) == 0 {
+		return fmt.Errorf("用法: sbtun capture <run|enable|disable|status|list|show|clear|cert>")
+	}
+	switch args[0] {
+	case "run":
+		return nil
+	case "enable":
+		if len(args) < 2 {
+			return fmt.Errorf("用法: sbtun capture enable <域名或关键词...>")
+		}
+		if err := enableCapture(application, args[1:]); err != nil {
+			return err
+		}
+		fmt.Println("抓包已启用，下次启动生效")
+		return nil
+	case "disable":
+		cfg, err := application.LoadConfig()
+		if err != nil {
+			return err
+		}
+		cfg.CaptureEnabled = false
+		if err := application.SaveConfig(cfg); err != nil {
+			return err
+		}
+		fmt.Println("抓包已关闭，下次启动生效")
+		return nil
+	case "status":
+		cfg, err := application.LoadConfig()
+		if err != nil {
+			return err
+		}
+		status := application.GetCaptureStatus()
+		fmt.Printf("启用: %t\n运行: %t\n关键词: %s\n已保存请求: %d\n证书已安装: %t\n存储文件: %s\n",
+			cfg.CaptureEnabled, captureProxyRunning(), strings.Join(cfg.CaptureDomains, ", "), status.FlowCount,
+			status.CertificateInstalled, status.StoragePath)
+		return nil
+	case "list":
+		flows, err := application.GetCaptureFlows()
+		if err != nil {
+			return err
+		}
+		if len(flows) == 0 {
+			fmt.Println("暂无已保存请求")
+			return nil
+		}
+		for _, flow := range flows {
+			fmt.Printf("%d\t%s\t%d\t%s\n", flow.ID, flow.Method, flow.StatusCode, flow.URL)
+		}
+		return nil
+	case "show":
+		if len(args) < 2 {
+			return fmt.Errorf("用法: sbtun capture show <ID>")
+		}
+		id, err := strconv.ParseUint(args[1], 10, 64)
+		if err != nil || id == 0 {
+			return fmt.Errorf("请求 ID 无效: %s", args[1])
+		}
+		flow, err := application.GetCaptureFlow(id)
+		if err != nil {
+			return err
+		}
+		data, err := json.MarshalIndent(flow, "", "  ")
+		if err != nil {
+			return err
+		}
+		fmt.Println(string(data))
+		return nil
+	case "clear":
+		if err := application.ClearCaptureFlows(); err != nil {
+			return err
+		}
+		fmt.Println("已删除保存的抓包记录")
+		return nil
+	case "cert":
+		if len(args) < 2 {
+			return fmt.Errorf("用法: sbtun capture cert <install|uninstall>")
+		}
+		switch args[1] {
+		case "install":
+			if err := application.InstallCaptureCertificate(); err != nil {
+				return err
+			}
+			fmt.Println("抓包根证书已安装")
+			return nil
+		case "uninstall":
+			if err := application.UninstallCaptureCertificate(); err != nil {
+				return err
+			}
+			fmt.Println("抓包根证书已卸载")
+			return nil
+		default:
+			return fmt.Errorf("用法: sbtun capture cert <install|uninstall>")
+		}
+	default:
+		return fmt.Errorf("未知抓包命令: %s", args[0])
+	}
+}
+
+func enableCapture(application *app.App, patterns []string) error {
+	cfg, err := application.LoadConfig()
+	if err != nil {
+		return err
+	}
+	if normalized := normalizeCapturePatterns(patterns); len(normalized) > 0 {
+		cfg.CaptureDomains = normalized
+	}
+	if len(cfg.CaptureDomains) == 0 {
+		return fmt.Errorf("至少需要一个抓包域名或关键词")
+	}
+	cfg.CaptureEnabled = true
+	return application.SaveConfig(cfg)
+}
+
+func normalizeCapturePatterns(values []string) []string {
+	seen := make(map[string]struct{})
+	result := make([]string, 0, len(values))
+	for _, value := range values {
+		for _, part := range strings.Split(value, ",") {
+			part = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(part)), ".")
+			if part == "" {
+				continue
+			}
+			if _, exists := seen[part]; exists {
+				continue
+			}
+			seen[part] = struct{}{}
+			result = append(result, part)
+		}
+	}
+	return result
+}
+
+func captureProxyRunning() bool {
+	conn, err := net.DialTimeout("tcp", "127.0.0.1:9081", 300*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 // listNodes prints the current node list with 1-based indices.
