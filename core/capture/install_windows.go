@@ -15,10 +15,16 @@ import (
 )
 
 func installCertificate(path string) error {
+	if _, err := exec.LookPath("certutil"); err != nil {
+		return fmt.Errorf("未找到 certutil，无法安装分析证书: %w", err)
+	}
 	return runCertificateCommand("certutil", "-addstore", "-f", "Root", path)
 }
 
 func uninstallCertificate(path string) error {
+	if _, err := exec.LookPath("certutil"); err != nil {
+		return fmt.Errorf("未找到 certutil，无法卸载分析证书: %w", err)
+	}
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return err

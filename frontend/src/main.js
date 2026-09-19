@@ -312,25 +312,21 @@ function renderCapturePage() {
   const enabled = state.captureEnabledDirty ? state.captureEnabledDraft : Boolean(state.config?.capture_enabled)
   const domains = state.captureDraftDirty ? state.captureDraft : (state.config?.capture_domains || []).join('\n')
   const selected = state.selectedCaptureFlow?.id === state.selectedCaptureID ? state.selectedCaptureFlow : state.captureFlows.find(flow => flow.id === state.selectedCaptureID) || state.captureFlows[0]
+  const visibleFlows = state.captureFlows
   return `<div class="page-stack">
     <section class="card capture-settings">
       <div class="section-heading"><div><h2>分析域名或关键词</h2><p class="muted">example.com 匹配域名及子域名，google 匹配域名关键词。</p></div><label class="toggle-field"><input id="captureEnabled" type="checkbox" ${enabled ? 'checked' : ''}><span>启用分析</span></label></div>
       <textarea id="captureDomains" class="input" rows="4" placeholder="每行一个域名或关键词，例如 example.com 或 google">${escapeHtml(domains)}</textarea>
       <div class="capture-toolbar">
-        <button id="saveCapture" class="btn btn-primary">保存并应用</button>
-        <span class="badge ${status.running ? 'direct' : ''}">${escapeHtml(status.message || (status.running ? '分析器运行中' : '分析器未运行'))}</span>
-        <span class="badge ${status.certificate_installed ? 'direct' : ''}">${status.certificate_installed ? '证书已安装' : '证书未安装'}</span>
-        <span class="capture-storage" title="${escapeHtml(status.storage_path || '')}">${status.unsaved ? '有未保存内容 · ' : ''}${escapeHtml(status.storage_path || 'capture.json')}</span>
-        <button id="installCaptureCA" class="btn btn-ghost">安装证书</button>
-        <button id="uninstallCaptureCA" class="btn btn-ghost">卸载证书</button>
-        <button id="saveCaptureFile" class="btn btn-ghost">保存抓包</button>
-        <button id="clearCapture" class="btn btn-ghost">删除抓包</button>
+        <div class="capture-toolbar-group"><button id="saveCapture" class="btn btn-primary">保存并应用</button><span class="badge ${status.running ? 'direct' : ''}">${escapeHtml(status.message || (status.running ? '分析器运行中' : '分析器未运行'))}</span></div>
+        <div class="capture-toolbar-group"><span class="badge ${status.certificate_installed ? 'direct' : ''}">${status.certificate_installed ? '证书已安装' : '证书未安装'}</span><button id="installCaptureCA" class="btn btn-ghost">安装证书</button><button id="uninstallCaptureCA" class="btn btn-ghost">卸载证书</button></div>
+        <div class="capture-toolbar-group"><button id="saveCaptureFile" class="btn btn-ghost">保存抓包</button><button id="clearCapture" class="btn btn-ghost">删除抓包</button><span class="capture-storage" title="${escapeHtml(status.storage_path || '')}">${status.unsaved ? '有未保存内容 · ' : ''}${escapeHtml(status.storage_path || 'capture.json')}</span></div>
       </div>
     </section>
     <section class="capture-workspace">
       <div class="capture-list">
-        <div class="capture-list-head"><strong>请求</strong><span>${state.captureFlows.length}/500</span></div>
-        ${state.captureFlows.length ? state.captureFlows.map(flow => `<button class="capture-row ${selected?.id === flow.id ? 'active' : ''}" data-capture-id="${flow.id}"><span class="capture-method">${escapeHtml(flow.method)}</span><span class="capture-url" title="${escapeHtml(flow.url)}">${escapeHtml(flow.host)}${escapeHtml(capturePath(flow.url))}</span><span class="capture-status">${flow.status_code || '—'}</span><span class="capture-time">${flow.duration_ms || 0} ms</span></button>`).join('') : '<div class="empty">暂无请求记录</div>'}
+        <div class="capture-list-head"><strong>请求记录</strong><span>${visibleFlows.length}/500</span></div>
+        ${visibleFlows.length ? visibleFlows.map(flow => `<button class="capture-row ${selected?.id === flow.id ? 'active' : ''} ${flow.error ? 'capture-row-error' : ''}" data-capture-id="${flow.id}"><span class="capture-method">${escapeHtml(flow.method)}</span><span class="capture-url" title="${escapeHtml(flow.url)}">${escapeHtml(flow.host)}${escapeHtml(capturePath(flow.url))}</span><span class="capture-status">${flow.error ? 'ERR' : (flow.status_code || '—')}</span><span class="capture-time">${flow.duration_ms || 0} ms</span></button>`).join('') : '<div class="empty">暂无请求记录</div>'}
       </div>
       <div class="capture-detail">${selected ? renderCaptureDetail(selected) : '<div class="empty">选择一条请求查看头信息</div>'}</div>
     </section>
@@ -340,8 +336,9 @@ function renderCapturePage() {
 function renderCaptureDetail(flow) {
   return `<div class="capture-detail-head"><span class="capture-method">${escapeHtml(flow.method)}</span><strong>${escapeHtml(flow.url)}</strong></div>
     <div class="capture-meta"><span>HTTP ${escapeHtml(flow.protocol)}</span><span>状态 ${flow.status_code || '—'}</span><span>${flow.duration_ms || 0} ms</span><span>↑ ${formatBytes(flow.request_bytes)} ↓ ${formatBytes(flow.response_bytes)}</span></div>
-    <div class="capture-headers"><section><h2>请求头</h2>${renderHeaders(flow.request_headers)}</section><section><h2>响应头</h2>${renderHeaders(flow.response_headers)}</section></div>
-    <div class="capture-bodies"><section><h2>请求正文${flow.request_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.request_body, flow.request_encoding)}</section><section><h2>响应正文${flow.response_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.response_body, flow.response_encoding)}</section></div>`
+    ${flow.error ? `<div class="capture-error">${escapeHtml(flow.error)}</div>` : ''}
+    <details class="capture-section" open><summary>Headers</summary><div class="capture-headers"><section><h2>请求头</h2>${renderHeaders(flow.request_headers)}</section><section><h2>响应头</h2>${renderHeaders(flow.response_headers)}</section></div></details>
+    <details class="capture-section" open><summary>Body</summary><div class="capture-bodies"><section><h2>请求正文${flow.request_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.request_body, flow.request_encoding)}</section><section><h2>响应正文${flow.response_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.response_body, flow.response_encoding)}</section></div></details>`
 }
 
 function renderCaptureBody(body, encoding) {

@@ -241,7 +241,7 @@ func TestManagerCapturesSNIWhenConnectTargetIsIP(t *testing.T) {
 
 	conn, err := net.Dial("tcp", manager.Status(true).Address)
 	if err != nil {
-		 t.Fatal(err)
+		t.Fatal(err)
 	}
 	defer conn.Close()
 	if _, err := io.WriteString(conn, "CONNECT "+targetAddress+" HTTP/1.1\r\nHost: "+targetAddress+"\r\n\r\n"); err != nil {
@@ -343,5 +343,42 @@ func TestManagerSavesBodiesToJSONAndDeletesCapture(t *testing.T) {
 	}
 	if _, err := os.Stat(manager.storagePath()); !errors.Is(err, os.ErrNotExist) {
 		t.Fatalf("capture file should be deleted, err=%v", err)
+	}
+}
+
+func TestManagerPersistsFlowsAndHonorsClearAcrossInstances(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("ok"))
+	}))
+	defer target.Close()
+
+	workDir := t.TempDir()
+	manager := NewManager(workDir, "127.0.0.1:0", "")
+	if err := manager.Start(context.Background(), []string{"127.0.0.1"}); err != nil {
+		t.Fatal(err)
+	}
+	readerWhileRunning := NewManager(workDir, "127.0.0.1:0", "")
+	if !readerWhileRunning.Status(true).Running {
+		t.Fatal("separate manager should detect the running capture process")
+	}
+	proxyURL, _ := url.Parse("http://" + manager.Status(true).Address)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	resp, err := client.Get(target.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	_ = manager.Stop()
+
+	reader := NewManager(workDir, "127.0.0.1:0", "")
+	flows, err := reader.Flows()
+	if err != nil || len(flows) != 1 {
+		t.Fatalf("persisted flows=%d err=%v", len(flows), err)
+	}
+	if err := reader.Clear(); err != nil {
+		t.Fatal(err)
+	}
+	if flows, err := reader.Flows(); err != nil || len(flows) != 0 {
+		t.Fatalf("flows after clear=%d err=%v", len(flows), err)
 	}
 }

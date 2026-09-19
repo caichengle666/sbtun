@@ -19,6 +19,7 @@ import (
 	"os"
 	"path/filepath"
 	"sort"
+	"strconv"
 	"strings"
 	"sync"
 	"sync/atomic"
@@ -52,6 +53,7 @@ type Flow struct {
 	ResponseEncoding  string              `json:"response_encoding,omitempty"`
 	RequestTruncated  bool                `json:"request_truncated,omitempty"`
 	ResponseTruncated bool                `json:"response_truncated,omitempty"`
+	Error             string              `json:"error,omitempty"`
 }
 
 type Status struct {
@@ -84,6 +86,7 @@ type Manager struct {
 	nextID    atomic.Uint64
 	loaded    bool
 	dirty     bool
+	lastError string
 }
 
 func NewManager(workDir, address, upstream string) *Manager {
@@ -133,7 +136,13 @@ func (m *Manager) Start(ctx context.Context, domains []string) error {
 	}
 	mitm := &goproxy.ConnectAction{Action: goproxy.ConnectMitm, TLSConfig: tlsConfigFromClientSNI(&ca)}
 	proxy.OnRequest().HandleConnectFunc(func(host string, _ *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
-		return mitm, host
+		// CONNECT may contain only an IP while the real domain is available in
+		// the later TLS SNI. Keep MITM for IP targets so SNI-based matching can
+		// still work; named hosts are restricted to configured patterns.
+		if matchesDomain(host, domains) || net.ParseIP(hostname(host)) != nil {
+			return mitm, host
+		}
+		return goproxy.OkConnect, host
 	})
 	proxy.OnRequest().DoFunc(func(req *http.Request, proxyCtx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 		if !matchesDomain(req.Host, domains) {
@@ -175,13 +184,29 @@ func (m *Manager) Start(ctx context.Context, domains []string) error {
 			flow.ResponseBytes = resp.ContentLength
 			flow.ResponseHeaders = clonedHeaders(resp.Header)
 		}
+		if proxyCtx.Error != nil {
+			flow.Error = proxyCtx.Error.Error()
+			if flow.StatusCode == 0 {
+				flow.StatusCode = http.StatusBadGateway
+			}
+		}
 		flow.RequestBody, flow.RequestEncoding = bodyForDisplay(pending.requestBody, http.Header(flow.RequestHeaders).Get("Content-Type"))
-		_ = m.appendFlow(flow)
+		if err := m.appendFlow(flow); err != nil {
+			m.mu.Lock()
+			m.lastError = err.Error()
+			m.mu.Unlock()
+		}
 		return resp
 	})
 	server := &http.Server{Handler: proxy, ReadHeaderTimeout: 10 * time.Second}
 	m.listener = listener
 	m.server = server
+	if err := os.WriteFile(m.runningMarkerPath(), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
+		m.server = nil
+		m.listener = nil
+		_ = listener.Close()
+		return fmt.Errorf("写入分析器运行标记失败: %w", err)
+	}
 	go func() {
 		_ = server.Serve(listener)
 	}()
@@ -212,6 +237,7 @@ func (m *Manager) Stop() error {
 	m.listener = nil
 	m.mu.Unlock()
 	if server == nil {
+		_ = os.Remove(m.runningMarkerPath())
 		return nil
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
@@ -219,6 +245,7 @@ func (m *Manager) Stop() error {
 	if err := server.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
 		return err
 	}
+	_ = os.Remove(m.runningMarkerPath())
 	return nil
 }
 
@@ -231,11 +258,26 @@ func (m *Manager) Status(enabled bool) Status {
 	}
 	running := m.server != nil
 	m.mu.RUnlock()
+	if !running {
+		if data, err := os.ReadFile(m.runningMarkerPath()); err == nil {
+			pid, parseErr := strconv.Atoi(strings.TrimSpace(string(data)))
+			running = parseErr == nil && processAlive(pid)
+			if !running {
+				_ = os.Remove(m.runningMarkerPath())
+			}
+		}
+	}
 	return Status{
 		Enabled: enabled, Running: running, Address: address,
 		CertificatePath: m.certPath(), CertificateInstalled: markerErr == nil,
-		StoragePath: m.storagePath(), FlowCount: m.flowCount(), Unsaved: m.isDirty(),
+		StoragePath: m.storagePath(), FlowCount: m.flowCount(), Unsaved: m.isDirty(), Message: m.errorMessage(),
 	}
+}
+
+func (m *Manager) errorMessage() string {
+	m.mu.RLock()
+	defer m.mu.RUnlock()
+	return m.lastError
 }
 
 func (m *Manager) InstallCertificate() error {
@@ -314,6 +356,7 @@ func loadCA(certPath, keyPath string) (tls.Certificate, error) {
 func (m *Manager) certPath() string          { return filepath.Join(m.workDir, "sbtun-capture-ca.crt") }
 func (m *Manager) keyPath() string           { return filepath.Join(m.workDir, "sbtun-capture-ca.key") }
 func (m *Manager) installMarkerPath() string { return filepath.Join(m.workDir, ".installed") }
+func (m *Manager) runningMarkerPath() string { return filepath.Join(m.workDir, ".running") }
 func (m *Manager) storagePath() string       { return filepath.Join(m.workDir, "capture.json") }
 
 func captureBody(body io.ReadCloser, limit int64) ([]byte, io.ReadCloser, bool, error) {

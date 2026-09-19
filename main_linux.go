@@ -7,7 +7,6 @@ import (
 	"context"
 	"encoding/json"
 	"fmt"
-	"net"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -16,7 +15,6 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
-	"time"
 
 	"github.com/caichengle666/sbtun/app"
 	"github.com/caichengle666/sbtun/config"
@@ -427,8 +425,11 @@ func runCaptureCommand(application *app.App, args []string) error {
 		}
 		status := application.GetCaptureStatus()
 		fmt.Printf("启用: %t\n运行: %t\n关键词: %s\n已保存请求: %d\n证书已安装: %t\n存储文件: %s\n",
-			cfg.CaptureEnabled, captureProxyRunning(), strings.Join(cfg.CaptureDomains, ", "), status.FlowCount,
+			cfg.CaptureEnabled, status.Running, strings.Join(cfg.CaptureDomains, ", "), status.FlowCount,
 			status.CertificateInstalled, status.StoragePath)
+		if status.Message != "" {
+			fmt.Printf("状态信息: %s\n", status.Message)
+		}
 		return nil
 	case "list":
 		flows, err := application.GetCaptureFlows()
@@ -524,15 +525,6 @@ func normalizeCapturePatterns(values []string) []string {
 		}
 	}
 	return result
-}
-
-func captureProxyRunning() bool {
-	conn, err := net.DialTimeout("tcp", "127.0.0.1:9081", 300*time.Millisecond)
-	if err != nil {
-		return false
-	}
-	conn.Close()
-	return true
 }
 
 // listNodes prints the current node list with 1-based indices.

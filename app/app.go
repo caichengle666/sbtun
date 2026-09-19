@@ -92,7 +92,7 @@ func (a *App) initPaths() {
 	execPath, err := os.Executable()
 	if execPath != "" && err == nil {
 		base := filepath.Dir(execPath)
-		a.workDir = filepath.Join(base, "runtime-data")
+		a.workDir = runtimeDataDir(base)
 		a.binary = filepath.Join(base, singBoxBinaryName())
 	} else {
 		a.workDir = filepath.Join(".", "runtime-data")
@@ -154,6 +154,9 @@ func (a *App) GetCaptureStatus() capture.Status {
 	}
 	cfg := a.GetConfig()
 	status := a.runtime.Capture.Status(cfg.CaptureEnabled)
+	if status.Message != "" {
+		return status
+	}
 	if !cfg.CaptureEnabled {
 		status.Message = "分析功能未启用"
 	} else if status.Running {

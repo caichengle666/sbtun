@@ -9,6 +9,8 @@ import (
 	"os"
 	"strings"
 	"unicode/utf8"
+
+	"github.com/caichengle666/sbtun/config"
 )
 
 type captureFile struct {
@@ -30,7 +32,11 @@ func (m *Manager) loadLocked() error {
 	}
 	var stored captureFile
 	if err := json.Unmarshal(data, &stored); err != nil {
-		return fmt.Errorf("解析抓包文件失败: %w", err)
+		backup := m.storagePath() + ".corrupt"
+		if renameErr := os.Rename(m.storagePath(), backup); renameErr != nil {
+			return fmt.Errorf("解析抓包文件失败: %w（备份失败: %v）", err, renameErr)
+		}
+		return fmt.Errorf("解析抓包文件失败，已备份到 %s: %w", backup, err)
 	}
 	if len(stored.Flows) > maxStoredFlows {
 		stored.Flows = stored.Flows[len(stored.Flows)-maxStoredFlows:]
@@ -53,17 +59,29 @@ func (m *Manager) saveLocked() error {
 	if err != nil {
 		return fmt.Errorf("编码抓包文件失败: %w", err)
 	}
-	temporary := m.storagePath() + ".tmp"
-	if err := os.WriteFile(temporary, data, 0o600); err != nil {
+	temporary, err := os.CreateTemp(m.workDir, ".capture-*.tmp")
+	if err != nil {
+		return fmt.Errorf("创建抓包临时文件失败: %w", err)
+	}
+	temporaryPath := temporary.Name()
+	defer os.Remove(temporaryPath)
+	if err := temporary.Chmod(0o600); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("设置抓包文件权限失败: %w", err)
+	}
+	if _, err := temporary.Write(data); err != nil {
+		_ = temporary.Close()
 		return fmt.Errorf("写入抓包文件失败: %w", err)
 	}
-	if err := os.Remove(m.storagePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		_ = os.Remove(temporary)
-		return fmt.Errorf("替换抓包文件失败: %w", err)
+	if err := temporary.Sync(); err != nil {
+		_ = temporary.Close()
+		return fmt.Errorf("同步抓包文件失败: %w", err)
 	}
-	if err := os.Rename(temporary, m.storagePath()); err != nil {
-		_ = os.Remove(temporary)
-		return fmt.Errorf("保存抓包文件失败: %w", err)
+	if err := temporary.Close(); err != nil {
+		return fmt.Errorf("关闭抓包临时文件失败: %w", err)
+	}
+	if err := config.ReplaceConfigFile(temporaryPath, m.storagePath()); err != nil {
+		return fmt.Errorf("替换抓包文件失败: %w", err)
 	}
 	return nil
 }
@@ -71,24 +89,32 @@ func (m *Manager) saveLocked() error {
 func (m *Manager) appendFlow(flow Flow) error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := m.loadLocked(); err != nil {
-		return err
-	}
-	m.flows = append(m.flows, flow)
-	if len(m.flows) > maxStoredFlows {
-		m.flows = append([]Flow(nil), m.flows[len(m.flows)-maxStoredFlows:]...)
-	}
-	m.dirty = true
-	return nil
+	return config.WithFileLock(m.storagePath(), func() error {
+		m.loaded = false
+		if err := m.loadLocked(); err != nil {
+			return err
+		}
+		m.flows = append(m.flows, flow)
+		if len(m.flows) > maxStoredFlows {
+			m.flows = append([]Flow(nil), m.flows[len(m.flows)-maxStoredFlows:]...)
+		}
+		if err := m.saveLocked(); err != nil {
+			return err
+		}
+		m.dirty = false
+		return nil
+	})
 }
 
 func (m *Manager) Save() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	if err := m.loadLocked(); err != nil {
-		return err
-	}
-	if err := m.saveLocked(); err != nil {
+	if err := config.WithFileLock(m.storagePath(), func() error {
+		if err := m.loadLocked(); err != nil {
+			return err
+		}
+		return m.saveLocked()
+	}); err != nil {
 		return err
 	}
 	m.dirty = false
@@ -132,14 +158,16 @@ func (m *Manager) Flow(id uint64) (Flow, error) {
 func (m *Manager) Clear() error {
 	m.mu.Lock()
 	defer m.mu.Unlock()
-	m.loaded = true
-	m.flows = nil
-	m.nextID.Store(0)
-	m.dirty = false
-	if err := os.Remove(m.storagePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
-		return err
-	}
-	return nil
+	return config.WithFileLock(m.storagePath(), func() error {
+		m.loaded = true
+		m.flows = nil
+		m.nextID.Store(0)
+		m.dirty = false
+		if err := os.Remove(m.storagePath()); err != nil && !errors.Is(err, os.ErrNotExist) {
+			return err
+		}
+		return nil
+	})
 }
 
 func (m *Manager) flowCount() int {
