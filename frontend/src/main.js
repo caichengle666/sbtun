@@ -160,10 +160,10 @@ function render() {
         <div class="brand"><span class="brand-mark">s</span><span>sbtun</span></div>
         <nav class="nav-list">
           ${[
-            ['overview', '概览'],
-            ['nodes', '节点'],
+            ['overview', '运行概览'],
+            ['nodes', '节点管理'],
             ['routing', '路由模式'],
-            ['rules', '规则集'],
+            ['rules', '分流规则'],
             ['capture', '流量分析'],
           ].map(([id, label]) => `<button class="nav-item ${state.view === id ? 'active' : ''}" data-view="${id}">${label}</button>`).join('')}
         </nav>
@@ -199,7 +199,7 @@ function render() {
 }
 
 function viewLabel(view) {
-  return { overview: '概览', nodes: '节点', routing: '路由模式', rules: '规则集', capture: '流量分析' }[view] || '概览'
+  return { overview: '运行概览', nodes: '节点管理', routing: '路由模式', rules: '分流规则', capture: '流量分析' }[view] || '运行概览'
 }
 
 function viewTitle(view) {
