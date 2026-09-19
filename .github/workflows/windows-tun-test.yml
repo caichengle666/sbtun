@@ -68,7 +68,7 @@ jobs:
           $found = $false
           for ($i = 0; $i -lt 20; $i++) {
             $pnp = @(Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'Wintun|sing-tun' -or $_.InstanceId -match 'Wintun' })
-            $process = Get-Process -Id ([int]$env:SINGBOX_PID) -ErrorAction SilentlyContinue
+            $process = Get-Process -Name 'sing-box' -ErrorAction SilentlyContinue
             Write-Host "检测 $($i + 1): PnP=$($pnp.Count), process=$([bool]$process)"
             if ($pnp.Count -gt 0 -and $process) { $found = $true; break }
             Start-Sleep -Seconds 1
