@@ -404,6 +404,9 @@ func normalizeDomains(domains []string) []string {
 func matchesDomain(host string, domains []string) bool {
 	host = hostname(host)
 	for _, domain := range domains {
+		if domain == "*" {
+			return true
+		}
 		if strings.Contains(domain, ".") && (host == domain || strings.HasSuffix(host, "."+domain)) {
 			return true
 		}

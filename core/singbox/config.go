@@ -156,17 +156,24 @@ func routeForMode(mode config.RoutingMode, custom []config.Rule, captureEnabled 
 	}
 	domains, keywords := splitCapturePatterns(captureDomains)
 	if captureEnabled {
-		if len(domains) > 0 {
+		if containsCaptureAll(captureDomains) {
 			base = append(base,
-				map[string]any{"inbound": []string{"tun-in"}, "domain_suffix": domains, "network": "udp", "port": []int{443}, "outbound": "block"},
-				map[string]any{"inbound": []string{"tun-in"}, "domain_suffix": domains, "network": "tcp", "port": []int{80, 443}, "outbound": "capture"},
+				map[string]any{"inbound": []string{"tun-in"}, "network": "udp", "port": []int{443}, "outbound": "block"},
+				map[string]any{"inbound": []string{"tun-in"}, "network": "tcp", "port": []int{80, 443}, "outbound": "capture"},
 			)
-		}
-		if len(keywords) > 0 {
-			base = append(base,
-				map[string]any{"inbound": []string{"tun-in"}, "domain_keyword": keywords, "network": "udp", "port": []int{443}, "outbound": "block"},
-				map[string]any{"inbound": []string{"tun-in"}, "domain_keyword": keywords, "network": "tcp", "port": []int{80, 443}, "outbound": "capture"},
-			)
+		} else {
+			if len(domains) > 0 {
+				base = append(base,
+					map[string]any{"inbound": []string{"tun-in"}, "domain_suffix": domains, "network": "udp", "port": []int{443}, "outbound": "block"},
+					map[string]any{"inbound": []string{"tun-in"}, "domain_suffix": domains, "network": "tcp", "port": []int{80, 443}, "outbound": "capture"},
+				)
+			}
+			if len(keywords) > 0 {
+				base = append(base,
+					map[string]any{"inbound": []string{"tun-in"}, "domain_keyword": keywords, "network": "udp", "port": []int{443}, "outbound": "block"},
+					map[string]any{"inbound": []string{"tun-in"}, "domain_keyword": keywords, "network": "tcp", "port": []int{80, 443}, "outbound": "capture"},
+				)
+			}
 		}
 	}
 	base = append(base, map[string]any{"inbound": []string{"tun-in"}, "action": "resolve", "strategy": "prefer_ipv4"})
@@ -235,6 +242,9 @@ func normalizeCaptureDomains(domains []string) []string {
 
 func splitCapturePatterns(patterns []string) (domains, keywords []string) {
 	for _, pattern := range normalizeCaptureDomains(patterns) {
+		if pattern == "*" {
+			continue
+		}
 		if strings.Contains(pattern, ".") {
 			domains = append(domains, pattern)
 		} else {
@@ -242,6 +252,15 @@ func splitCapturePatterns(patterns []string) (domains, keywords []string) {
 		}
 	}
 	return domains, keywords
+}
+
+func containsCaptureAll(patterns []string) bool {
+	for _, pattern := range patterns {
+		if strings.TrimSpace(pattern) == "*" {
+			return true
+		}
+	}
+	return false
 }
 
 func ruleSetExists(exeDir, name string) bool {

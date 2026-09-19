@@ -245,7 +245,7 @@ function renderNodesPage() {
   const nodes = state.config?.nodes || []
   const allSelected = nodes.length > 0 && nodes.every(node => state.selectedNodes.has(node.id))
   return `<section class="page-stack">
-      <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">选择节点后可批量测试、导出或删除。</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="toggleSelectNodes" ${nodes.length ? '' : 'disabled'}>${allSelected ? '反选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes">批量测试</button><button class="btn btn-ghost" id="batchExportNodes">批量导出</button><button class="btn btn-danger" id="batchDeleteNodes">批量删除</button><button class="btn btn-primary" data-scroll="node-import">导入节点</button></span></div>
+      <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">选择节点后可批量测试、导出或删除。</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="toggleSelectNodes" ${nodes.length ? '' : 'disabled'}>${allSelected ? '反选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes" ${state.batchTesting ? 'disabled' : ''}>${state.batchTesting ? '测试中' : '批量测试'}</button><button class="btn btn-ghost" id="batchExportNodes">批量导出</button><button class="btn btn-danger" id="batchDeleteNodes">批量删除</button><button class="btn btn-primary" data-scroll="node-import">导入节点</button></span></div>
     <div id="nodePanel">${renderNodes()}</div>
     <div class="card node-import" id="node-import"><h2>${state.editingNodeId ? '编辑节点全部参数' : '添加节点'}</h2>
       <div class="row"><input id="nodeUrl" class="input" value="${escapeHtml(state.manualForm.url)}" placeholder="节点链接 vmess:// vless:// ss:// 或订阅" /><button id="importBtn" class="btn btn-primary">导入</button></div>
@@ -336,8 +336,8 @@ function renderCapturePage() {
       <label class="toggle-field"><input id="captureEnabled" type="checkbox" ${enabled ? 'checked' : ''}><span>启用分析</span></label>
     </section>
     <section class="card capture-settings">
-      <div class="section-heading"><div><h2>抓包规则</h2><p class="muted">example.com 匹配域名及子域名，google 匹配域名关键词。</p></div><button id="saveCapture" class="btn btn-primary">保存并应用</button></div>
-      <textarea id="captureDomains" class="input" rows="4" placeholder="每行一个域名或关键词，例如 example.com 或 google">${escapeHtml(domains)}</textarea>
+      <div class="section-heading"><div><h2>抓包规则</h2><p class="muted">每行一个域名或关键词；输入 * 抓取全部 HTTP/HTTPS 请求。</p></div><button id="saveCapture" class="btn btn-primary">保存并应用</button></div>
+      <textarea id="captureDomains" class="input" rows="4" placeholder="例如 example.com、google；输入 * 抓取全部 HTTP/HTTPS">${escapeHtml(domains)}</textarea>
       <div class="capture-settings-footer"><div class="capture-cert"><span class="badge ${status.certificate_installed ? 'direct' : ''}">${status.certificate_installed ? '系统证书已安装' : '系统证书未安装'}</span><button id="installCaptureCA" class="btn btn-ghost">安装</button><button id="uninstallCaptureCA" class="btn btn-ghost">卸载</button></div><span class="capture-storage" title="${escapeHtml(status.storage_path || '')}">${escapeHtml(status.storage_path || 'capture.json')}</span></div>
     </section>
     <section class="card capture-records">
@@ -1081,15 +1081,17 @@ function bindEvents() {
     batchTest.disabled = true
     state.batchTesting = true
     try {
-      const results = await window.go.app.App.TestNodes(ids)
-      results.forEach(result => { state.nodeHealth[result.node_id] = result })
-      renderApp()
+      for (const id of ids) {
+        const result = await window.go.app.App.TestNode(id)
+        state.nodeHealth[id] = result
+        renderApp()
+      }
       showToast('批量健康测试完成', 'success')
     } catch (e) {
       showToast(e.message || String(e), 'error')
     } finally {
       state.batchTesting = false
-      batchTest.disabled = false
+      renderApp()
     }
   })
   document.querySelectorAll('.filter-btn').forEach(btn => {

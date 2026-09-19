@@ -198,6 +198,32 @@ func TestCaptureRulesHavePriorityAndAvoidLoop(t *testing.T) {
 	}
 }
 
+func TestCaptureAllRoutesHTTPOnlyFromTun(t *testing.T) {
+	cfg := testConfig(config.RoutingSmart)
+	cfg.CaptureEnabled = true
+	cfg.CaptureDomains = []string{"*"}
+	data, err := BuildConfig(cfg, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runtime RuntimeConfig
+	if err := json.Unmarshal(data, &runtime); err != nil {
+		t.Fatal(err)
+	}
+	rules := runtime.Route["rules"].([]any)
+	udp := rules[2].(map[string]any)
+	tcp := rules[3].(map[string]any)
+	if udp["outbound"] != "block" || udp["network"] != "udp" || tcp["outbound"] != "capture" || tcp["network"] != "tcp" {
+		t.Fatalf("capture all rules=%+v", rules[2:4])
+	}
+	if tcp["domain_suffix"] != nil || tcp["domain_keyword"] != nil || len(tcp["inbound"].([]any)) != 1 || tcp["inbound"].([]any)[0] != "tun-in" {
+		t.Fatalf("capture all must only intercept tun-in without a domain filter: %+v", tcp)
+	}
+	if len(tcp["port"].([]any)) != 2 || rules[4].(map[string]any)["action"] != "resolve" {
+		t.Fatalf("capture all must be limited to HTTP ports before resolution: %+v", rules[2:5])
+	}
+}
+
 func TestCaptureConfigPassesSingBoxCheck(t *testing.T) {
 	binary := filepath.Join("..", "..", "dist", "downloads", "sing-box", "sing-box-1.14.0-windows-amd64", "sing-box.exe")
 	if _, err := os.Stat(binary); err != nil {

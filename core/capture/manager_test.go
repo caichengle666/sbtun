@@ -150,6 +150,34 @@ func TestManagerCapturesHTTPHeaders(t *testing.T) {
 	}
 }
 
+func TestManagerCaptureAllRecordsUnknownHost(t *testing.T) {
+	target := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("X-Target", "unknown")
+		w.WriteHeader(http.StatusAccepted)
+	}))
+	defer target.Close()
+
+	manager := NewManager(t.TempDir(), "127.0.0.1:0", "")
+	if err := manager.Start(context.Background(), []string{"*"}); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+	proxyURL, _ := url.Parse("http://" + manager.Status(true).Address)
+	client := &http.Client{Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	resp, err := client.Get(target.URL + "/unlisted")
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	flows, err := manager.Flows()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(flows) != 1 || flows[0].StatusCode != http.StatusAccepted || flows[0].URL != target.URL+"/unlisted" {
+		t.Fatalf("capture all flows=%+v", flows)
+	}
+}
+
 func TestDomainMatchingIncludesSubdomains(t *testing.T) {
 	if !matchesDomain("api.example.com:443", []string{"example.com"}) {
 		t.Fatal("subdomain should match")

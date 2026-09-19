@@ -30,17 +30,18 @@ func main() {
 	application := app.New()
 	application.SetTrayIcon(trayIcon)
 	appOptions := &options.App{
-		Title:             "sbtun",
-		Width:             980,
-		Height:            680,
-		MinWidth:          760,
-		MinHeight:         520,
-		BackgroundColour:  &options.RGBA{R: 13, G: 14, B: 21, A: 255},
-		HideWindowOnClose: true,
-		AssetServer:       &assetserver.Options{Assets: assets},
-		OnStartup:         application.Startup,
-		OnShutdown:        application.Shutdown,
-		Bind:              []interface{}{application},
+		Title:                    "sbtun",
+		Width:                    980,
+		Height:                   680,
+		MinWidth:                 760,
+		MinHeight:                520,
+		BackgroundColour:         &options.RGBA{R: 13, G: 14, B: 21, A: 255},
+		HideWindowOnClose:        true,
+		EnableDefaultContextMenu: true,
+		AssetServer:              &assetserver.Options{Assets: assets},
+		OnStartup:                application.Startup,
+		OnShutdown:               application.Shutdown,
+		Bind:                     []interface{}{application},
 	}
 	configurePlatformOptions(appOptions)
 	if err := wails.Run(appOptions); err != nil {
