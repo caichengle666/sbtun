@@ -152,7 +152,6 @@ func routeForMode(mode config.RoutingMode, custom []config.Rule, captureEnabled 
 	dns := map[string]any{"protocol": "dns", "action": "hijack-dns"}
 	base := []map[string]any{
 		{"inbound": []string{"tun-in"}, "action": "sniff", "timeout": "1s"},
-		{"inbound": []string{"tun-in"}, "action": "resolve", "strategy": "prefer_ipv4"},
 		dns,
 	}
 	domains, keywords := splitCapturePatterns(captureDomains)
@@ -170,6 +169,7 @@ func routeForMode(mode config.RoutingMode, custom []config.Rule, captureEnabled 
 			)
 		}
 	}
+	base = append(base, map[string]any{"inbound": []string{"tun-in"}, "action": "resolve", "strategy": "prefer_ipv4"})
 	for _, r := range custom {
 		if rr, ok := customRule(r); ok {
 			base = append(base, rr)

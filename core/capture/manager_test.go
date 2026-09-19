@@ -14,6 +14,8 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+
+	"github.com/elazarl/goproxy"
 )
 
 func TestManagerForwardsThroughConfiguredUpstream(t *testing.T) {
@@ -58,6 +60,42 @@ func TestManagerForwardsThroughConfiguredUpstream(t *testing.T) {
 	resp.Body.Close()
 	if upstreamHits.Load() != 1 || !bytes.Equal(body, []byte("through-upstream")) {
 		t.Fatalf("upstream hits=%d body=%q", upstreamHits.Load(), body)
+	}
+}
+
+func TestManagerForwardsConnectThroughConfiguredUpstream(t *testing.T) {
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
+		_, _ = w.Write([]byte("secure-through-upstream"))
+	}))
+	defer target.Close()
+
+	var upstreamHits atomic.Int32
+	upstreamProxy := goproxy.NewProxyHttpServer()
+	upstreamProxy.OnRequest().HandleConnectFunc(func(host string, _ *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+		upstreamHits.Add(1)
+		return goproxy.OkConnect, host
+	})
+	upstream := httptest.NewServer(upstreamProxy)
+	defer upstream.Close()
+
+	manager := NewManager(t.TempDir(), "127.0.0.1:0", strings.TrimPrefix(upstream.URL, "http://"))
+	if err := manager.Start(context.Background(), []string{"unmatched.invalid"}); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+	proxyURL, _ := url.Parse("http://" + manager.Status(true).Address)
+	client := &http.Client{Transport: &http.Transport{
+		Proxy:           http.ProxyURL(proxyURL),
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}}
+	resp, err := client.Get(target.URL)
+	if err != nil {
+		t.Fatal(err)
+	}
+	body, _ := io.ReadAll(resp.Body)
+	resp.Body.Close()
+	if upstreamHits.Load() != 1 || !bytes.Equal(body, []byte("secure-through-upstream")) {
+		t.Fatalf("CONNECT upstream hits=%d body=%q", upstreamHits.Load(), body)
 	}
 }
 

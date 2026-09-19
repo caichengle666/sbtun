@@ -121,8 +121,8 @@ func TestSmartRoutingUsesChinaRuleSets(t *testing.T) {
 	if len(routeRules) != 6 {
 		t.Fatalf("smart route rules=%d want=6", len(routeRules))
 	}
-	if routeRules[0].(map[string]any)["action"] != "sniff" || routeRules[1].(map[string]any)["action"] != "resolve" {
-		t.Fatalf("smart route metadata rules missing: %+v", routeRules[:2])
+	if routeRules[0].(map[string]any)["action"] != "sniff" || routeRules[1].(map[string]any)["action"] != "hijack-dns" || routeRules[2].(map[string]any)["action"] != "resolve" {
+		t.Fatalf("smart route metadata rules missing: %+v", routeRules[:3])
 	}
 }
 
@@ -163,14 +163,17 @@ func TestCaptureRulesHavePriorityAndAvoidLoop(t *testing.T) {
 		t.Fatal(err)
 	}
 	rules := runtime.Route["rules"].([]any)
-	if rules[3].(map[string]any)["domain_suffix"] == nil || rules[3].(map[string]any)["outbound"] != "block" {
-		t.Fatalf("capture domain UDP rule missing: %+v", rules[3])
+	if rules[2].(map[string]any)["domain_suffix"] == nil || rules[2].(map[string]any)["outbound"] != "block" {
+		t.Fatalf("capture domain UDP rule missing: %+v", rules[2])
 	}
-	if rules[4].(map[string]any)["outbound"] != "capture" || rules[4].(map[string]any)["inbound"] == nil {
-		t.Fatalf("capture domain TCP rule missing or not limited to tun-in: %+v", rules[4])
+	if rules[3].(map[string]any)["outbound"] != "capture" || rules[3].(map[string]any)["inbound"] == nil {
+		t.Fatalf("capture domain TCP rule missing or not limited to tun-in: %+v", rules[3])
 	}
-	if rules[5].(map[string]any)["domain_keyword"] == nil || rules[5].(map[string]any)["outbound"] != "block" || rules[6].(map[string]any)["outbound"] != "capture" {
-		t.Fatalf("capture keyword rules missing: %+v", rules[5:7])
+	if rules[4].(map[string]any)["domain_keyword"] == nil || rules[4].(map[string]any)["outbound"] != "block" || rules[5].(map[string]any)["outbound"] != "capture" {
+		t.Fatalf("capture keyword rules missing: %+v", rules[4:6])
+	}
+	if rules[6].(map[string]any)["action"] != "resolve" {
+		t.Fatalf("domain resolution must run after capture rules: %+v", rules[6])
 	}
 	if rules[7].(map[string]any)["outbound"] != "direct" {
 		t.Fatalf("custom rule must run after capture on the second inbound: %+v", rules[7])
@@ -264,7 +267,7 @@ func TestSmartDNSUsesLocalRulesAndRemoteFallback(t *testing.T) {
 		t.Fatalf("dns rules=%d want=2", len(rules))
 	}
 	routeRules := runtime.Route["rules"].([]any)
-	if routeRules[2].(map[string]any)["action"] != "hijack-dns" {
+	if routeRules[1].(map[string]any)["action"] != "hijack-dns" {
 		t.Fatalf("dns interception rule missing")
 	}
 }
@@ -282,8 +285,8 @@ func TestTUNKeepsWindowsCompatibleRouteMode(t *testing.T) {
 		t.Fatalf("strict_route=%v want=false", runtime.Inbounds[0]["strict_route"])
 	}
 	rules := runtime.Route["rules"].([]any)
-	if rules[0].(map[string]any)["action"] != "sniff" || rules[1].(map[string]any)["action"] != "resolve" {
-		t.Fatalf("route sniff/resolve actions missing: %+v", rules[:2])
+	if rules[0].(map[string]any)["action"] != "sniff" || rules[2].(map[string]any)["action"] != "resolve" {
+		t.Fatalf("route sniff/resolve actions missing: %+v", rules[:3])
 	}
 }
 

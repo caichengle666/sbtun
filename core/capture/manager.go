@@ -128,6 +128,9 @@ func (m *Manager) Start(ctx context.Context, domains []string) error {
 		}
 		proxy.Tr = transport
 	}
+	if m.upstream != "" {
+		proxy.ConnectDial = proxy.NewConnectDialToProxy("http://" + m.upstream)
+	}
 	mitm := &goproxy.ConnectAction{Action: goproxy.ConnectMitm, TLSConfig: goproxy.TLSConfigFromCA(&ca)}
 	proxy.OnRequest().HandleConnectFunc(func(host string, _ *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
 		if matchesDomain(host, domains) {
