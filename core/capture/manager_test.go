@@ -1,12 +1,14 @@
 package capture
 
 import (
+	"bufio"
 	"bytes"
 	"context"
 	"crypto/tls"
 	"crypto/x509"
 	"errors"
 	"io"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"net/url"
@@ -79,6 +81,11 @@ func TestManagerForwardsConnectThroughConfiguredUpstream(t *testing.T) {
 	defer upstream.Close()
 
 	manager := NewManager(t.TempDir(), "127.0.0.1:0", strings.TrimPrefix(upstream.URL, "http://"))
+	upstreamURL, _ := url.Parse(upstream.URL)
+	manager.transport = &http.Transport{
+		Proxy:           http.ProxyURL(upstreamURL),
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+	}
 	if err := manager.Start(context.Background(), []string{"unmatched.invalid"}); err != nil {
 		t.Fatal(err)
 	}
@@ -206,6 +213,76 @@ func TestManagerCapturesHTTPSHeadersWithGeneratedCA(t *testing.T) {
 	}
 	if http.Header(flow.ResponseHeaders).Get("X-TLS-Response") != "ok" {
 		t.Fatalf("HTTPS response headers missing: %+v", flow.ResponseHeaders)
+	}
+}
+
+func TestManagerCapturesSNIWhenConnectTargetIsIP(t *testing.T) {
+	target := httptest.NewTLSServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Host != "capture.test" {
+			t.Errorf("host=%q", r.Host)
+		}
+		w.Header().Set("X-SNI-Capture", "ok")
+		w.WriteHeader(http.StatusNoContent)
+	}))
+	defer target.Close()
+
+	targetAddress := strings.TrimPrefix(target.URL, "https://")
+	manager := NewManager(t.TempDir(), "127.0.0.1:0", "")
+	manager.transport = &http.Transport{
+		TLSClientConfig: &tls.Config{InsecureSkipVerify: true},
+		DialContext: func(ctx context.Context, network, _ string) (net.Conn, error) {
+			return (&net.Dialer{}).DialContext(ctx, network, targetAddress)
+		},
+	}
+	if err := manager.Start(context.Background(), []string{"capture.test"}); err != nil {
+		t.Fatal(err)
+	}
+	defer manager.Stop()
+
+	conn, err := net.Dial("tcp", manager.Status(true).Address)
+	if err != nil {
+		 t.Fatal(err)
+	}
+	defer conn.Close()
+	if _, err := io.WriteString(conn, "CONNECT "+targetAddress+" HTTP/1.1\r\nHost: "+targetAddress+"\r\n\r\n"); err != nil {
+		t.Fatal(err)
+	}
+	connectResponse, err := http.ReadResponse(bufio.NewReader(conn), &http.Request{Method: http.MethodConnect})
+	if err != nil {
+		t.Fatal(err)
+	}
+	connectResponse.Body.Close()
+	if connectResponse.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT status=%d", connectResponse.StatusCode)
+	}
+
+	caPEM, err := os.ReadFile(manager.certPath())
+	if err != nil {
+		t.Fatal(err)
+	}
+	roots := x509.NewCertPool()
+	if !roots.AppendCertsFromPEM(caPEM) {
+		t.Fatal("failed to trust generated capture CA")
+	}
+	tlsConn := tls.Client(conn, &tls.Config{RootCAs: roots, ServerName: "capture.test"})
+	if err := tlsConn.Handshake(); err != nil {
+		t.Fatal(err)
+	}
+	req := &http.Request{Method: http.MethodGet, URL: &url.URL{Path: "/sni"}, Host: "capture.test", Header: make(http.Header)}
+	if err := req.Write(tlsConn); err != nil {
+		t.Fatal(err)
+	}
+	resp, err := http.ReadResponse(bufio.NewReader(tlsConn), req)
+	if err != nil {
+		t.Fatal(err)
+	}
+	resp.Body.Close()
+	if resp.StatusCode != http.StatusNoContent || resp.Header.Get("X-SNI-Capture") != "ok" {
+		t.Fatalf("unexpected response: status=%d headers=%v", resp.StatusCode, resp.Header)
+	}
+	flows, err := manager.Flows()
+	if err != nil || len(flows) != 1 || flows[0].Host != "capture.test" {
+		t.Fatalf("flows=%+v err=%v", flows, err)
 	}
 }
 

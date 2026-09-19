@@ -131,12 +131,9 @@ func (m *Manager) Start(ctx context.Context, domains []string) error {
 	if m.upstream != "" {
 		proxy.ConnectDial = proxy.NewConnectDialToProxy("http://" + m.upstream)
 	}
-	mitm := &goproxy.ConnectAction{Action: goproxy.ConnectMitm, TLSConfig: goproxy.TLSConfigFromCA(&ca)}
+	mitm := &goproxy.ConnectAction{Action: goproxy.ConnectMitm, TLSConfig: tlsConfigFromClientSNI(&ca)}
 	proxy.OnRequest().HandleConnectFunc(func(host string, _ *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
-		if matchesDomain(host, domains) {
-			return mitm, host
-		}
-		return goproxy.OkConnect, host
+		return mitm, host
 	})
 	proxy.OnRequest().DoFunc(func(req *http.Request, proxyCtx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
 		if !matchesDomain(req.Host, domains) {
@@ -189,6 +186,23 @@ func (m *Manager) Start(ctx context.Context, domains []string) error {
 		_ = server.Serve(listener)
 	}()
 	return nil
+}
+
+func tlsConfigFromClientSNI(ca *tls.Certificate) func(string, *goproxy.ProxyCtx) (*tls.Config, error) {
+	signHost := goproxy.TLSConfigFromCA(ca)
+	return func(connectHost string, proxyCtx *goproxy.ProxyCtx) (*tls.Config, error) {
+		return &tls.Config{GetConfigForClient: func(hello *tls.ClientHelloInfo) (*tls.Config, error) {
+			host := strings.TrimSpace(hello.ServerName)
+			if host == "" {
+				host = connectHost
+			}
+			config, err := signHost(host, proxyCtx)
+			if err == nil {
+				config.NextProtos = []string{"h2", "http/1.1"}
+			}
+			return config, err
+		}}, nil
+	}
 }
 
 func (m *Manager) Stop() error {
