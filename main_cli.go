@@ -1,4 +1,4 @@
-//go:build linux && cli
+//go:build cli
 
 package main
 
@@ -8,13 +8,10 @@ import (
 	"encoding/json"
 	"fmt"
 	"os"
-	"os/exec"
 	"os/signal"
-	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
-	"syscall"
 
 	"github.com/caichengle666/sbtun/app"
 	"github.com/caichengle666/sbtun/config"
@@ -25,7 +22,7 @@ func main() {
 	if len(os.Args) > 1 {
 		command = os.Args[1]
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	ctx, stop := signal.NotifyContext(context.Background(), cliSignals()...)
 	defer stop()
 	application := app.New()
 	application.StartupCLI(ctx)
@@ -252,35 +249,8 @@ func requiresElevation(command string, args []string) bool {
 	return false
 }
 
-// relaunchElevated keeps the CLI convenient for TUN and root-owned runtime
-// data. The marker prevents sudo/pkexec recursion after elevation.
-func relaunchElevated() error {
-	if os.Geteuid() == 0 || os.Getenv("SBTUN_ELEVATED") == "1" {
-		return nil
-	}
-	exe, err := os.Executable()
-	if err != nil {
-		return fmt.Errorf("获取 CLI 路径失败: %w", err)
-	}
-	args := append([]string{exe}, os.Args[1:]...)
-	env := append(os.Environ(), "SBTUN_ELEVATED=1")
-	for _, tool := range []string{"pkexec", "sudo"} {
-		path, lookErr := exec.LookPath(tool)
-		if lookErr != nil {
-			continue
-		}
-		if tool == "pkexec" {
-			args = append([]string{"pkexec", "env", "SBTUN_ELEVATED=1", exe}, os.Args[1:]...)
-			return syscall.Exec(path, args, env)
-		}
-		args = append([]string{"sudo", "-E", exe}, os.Args[1:]...)
-		return syscall.Exec(path, args, env)
-	}
-	return fmt.Errorf("需要管理员权限，请安装 pkexec 或 sudo 后重试")
-}
-
 func printHelp() {
-	fmt.Println("sbtun Linux 命令行\n\n用法:\n  sbtun <命令> [参数]")
+	fmt.Println("sbtun 命令行\n\n用法:\n  sbtun <命令> [参数]")
 	printHelpGroup("运行", []helpEntry{
 		{"run", "前台启动 TUN 和代理"},
 		{"start", "同 run"},
@@ -667,53 +637,4 @@ func sortedSettingKeys(settings map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
-}
-
-// stopRunningInstance scans /proc for running sbtun-cli or sbtun processes
-// and sends SIGTERM. It avoids matching its own PID.
-func stopRunningInstance() error {
-	myPid := os.Getpid()
-	myExe, _ := os.Readlink("/proc/self/exe")
-	entries, err := os.ReadDir("/proc")
-	if err != nil {
-		return fmt.Errorf("读取 /proc 失败: %w", err)
-	}
-	var targets []int
-	for _, entry := range entries {
-		if !entry.IsDir() {
-			continue
-		}
-		pid, convErr := strconv.Atoi(entry.Name())
-		if convErr != nil || pid == myPid {
-			continue
-		}
-		commPath := filepath.Join("/proc", entry.Name(), "comm")
-		comm, readErr := os.ReadFile(commPath)
-		if readErr != nil {
-			continue
-		}
-		name := strings.TrimSpace(string(comm))
-		if name == "sbtun-cli" || name == "sbtun" {
-			if myExe != "" {
-				exe, readErr := os.Readlink(filepath.Join("/proc", entry.Name(), "exe"))
-				if readErr != nil || exe != myExe {
-					continue
-				}
-			}
-			targets = append(targets, pid)
-		}
-	}
-	if len(targets) == 0 {
-		return fmt.Errorf("没有运行中的 sbtun 实例")
-	}
-	for _, pid := range targets {
-		proc, findErr := os.FindProcess(pid)
-		if findErr != nil {
-			continue
-		}
-		if sigErr := proc.Signal(syscall.SIGTERM); sigErr == nil {
-			return nil
-		}
-	}
-	return fmt.Errorf("无法停止 sbtun 实例")
 }

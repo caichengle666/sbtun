@@ -34,13 +34,12 @@ const state = {
   captureEnabledDirty: false,
   selectedCaptureID: 0,
   selectedCaptureFlow: null,
-  captureSectionOpen: {
-    headers: true,
-    bodies: true,
-  },
   captureDetailTab: 'overview',
   captureSearch: '',
   captureFilter: 'all',
+  captureListScroll: 0,
+  captureDetailScroll: 0,
+  captureBodyScroll: {},
   view: 'overview',
   statusRefreshing: false,
   configRefreshing: false,
@@ -318,39 +317,76 @@ function renderCapturePage() {
   const status = state.captureStatus || {}
   const enabled = state.captureEnabledDirty ? state.captureEnabledDraft : Boolean(state.config?.capture_enabled)
   const domains = state.captureDraftDirty ? state.captureDraft : (state.config?.capture_domains || []).join('\n')
-  const selected = state.selectedCaptureFlow?.id === state.selectedCaptureID ? state.selectedCaptureFlow : state.captureFlows.find(flow => flow.id === state.selectedCaptureID) || state.captureFlows[0]
-  const visibleFlows = state.captureFlows
-  return `<div class="page-stack">
+  const visibleFlows = filterCaptureFlows(state.captureFlows)
+  const selected = state.selectedCaptureFlow?.id === state.selectedCaptureID ? state.selectedCaptureFlow : state.captureFlows.find(flow => flow.id === state.selectedCaptureID)
+  const mode = MODES.find(item => item.id === state.config?.routing_mode)?.name || '未设置'
+  return `<div class="page-stack capture-page">
+    <section class="card capture-status-panel">
+      <div><span class="section-kicker">抓包状态</span><strong class="capture-status-title">${escapeHtml(status.message || (status.running ? '分析器运行中' : '分析器未运行'))}</strong></div>
+      <div class="capture-status-metrics"><span><i class="dot ${status.running ? 'running' : ''}"></i>分析器 ${status.running ? '运行中' : '未运行'}</span><span><i class="dot ${state.running ? 'running' : dotClass(state.statusState)}"></i>TUN ${state.running ? '运行中' : '未运行'}</span><span>记录 <strong>${state.captureFlows.length}</strong>/${status.max_flows || '—'}</span><span>路由 <strong>${escapeHtml(mode)}</strong></span><span class="${status.unsaved ? 'capture-unsaved' : ''}">${status.unsaved ? '有未保存内容' : '已写入磁盘'}</span></div>
+      <label class="toggle-field"><input id="captureEnabled" type="checkbox" ${enabled ? 'checked' : ''}><span>启用分析</span></label>
+    </section>
     <section class="card capture-settings">
-      <div class="section-heading"><div><h2>分析域名或关键词</h2><p class="muted">example.com 匹配域名及子域名，google 匹配域名关键词。</p></div><label class="toggle-field"><input id="captureEnabled" type="checkbox" ${enabled ? 'checked' : ''}><span>启用分析</span></label></div>
+      <div class="section-heading"><div><h2>抓包规则</h2><p class="muted">example.com 匹配域名及子域名，google 匹配域名关键词。</p></div><button id="saveCapture" class="btn btn-primary">保存并应用</button></div>
       <textarea id="captureDomains" class="input" rows="4" placeholder="每行一个域名或关键词，例如 example.com 或 google">${escapeHtml(domains)}</textarea>
-      <div class="capture-toolbar">
-        <div class="capture-toolbar-group"><button id="saveCapture" class="btn btn-primary">保存并应用</button><span class="badge ${status.running ? 'direct' : ''}">${escapeHtml(status.message || (status.running ? '分析器运行中' : '分析器未运行'))}</span></div>
-        <div class="capture-toolbar-group"><span class="badge ${status.certificate_installed ? 'direct' : ''}">${status.certificate_installed ? '证书已安装' : '证书未安装'}</span><button id="installCaptureCA" class="btn btn-ghost">安装证书</button><button id="uninstallCaptureCA" class="btn btn-ghost">卸载证书</button></div>
-        <div class="capture-toolbar-group"><button id="saveCaptureFile" class="btn btn-ghost">保存抓包</button><button id="clearCapture" class="btn btn-ghost">删除抓包</button><span class="capture-storage" title="${escapeHtml(status.storage_path || '')}">${status.unsaved ? '有未保存内容 · ' : ''}${escapeHtml(status.storage_path || 'capture.json')}</span></div>
+      <div class="capture-settings-footer"><div class="capture-cert"><span class="badge ${status.certificate_installed ? 'direct' : ''}">${status.certificate_installed ? '系统证书已安装' : '系统证书未安装'}</span><button id="installCaptureCA" class="btn btn-ghost">安装</button><button id="uninstallCaptureCA" class="btn btn-ghost">卸载</button></div><span class="capture-storage" title="${escapeHtml(status.storage_path || '')}">${escapeHtml(status.storage_path || 'capture.json')}</span></div>
+    </section>
+    <section class="card capture-records">
+      <div class="section-heading capture-records-heading"><div><h2>请求记录</h2><p class="muted">显示 ${visibleFlows.length} 条，共 ${state.captureFlows.length} 条</p></div><div class="capture-record-actions"><button id="saveCaptureFile" class="btn btn-ghost">保存记录</button><button id="clearCapture" class="btn btn-danger">删除全部</button></div></div>
+      <div class="capture-filters"><input id="captureSearch" class="input" value="${escapeHtml(state.captureSearch)}" placeholder="搜索 URL、Host 或方法"><div class="capture-filter-group">${[['all', '全部'], ['error', '错误'], ['2xx', '2xx'], ['4xx5xx', '4xx/5xx']].map(([id, label]) => `<button class="filter-btn ${state.captureFilter === id ? 'active' : ''}" data-capture-filter="${id}">${label}</button>`).join('')}</div></div>
+      <div class="capture-list" id="captureList">
+        <div class="capture-list-head"><span>方法</span><span>Host / Path</span><span>状态</span><span>出口</span><span>耗时</span></div>
+        ${visibleFlows.length ? visibleFlows.map(flow => renderCaptureRow(flow, selected)).join('') : '<div class="empty">没有符合条件的请求</div>'}
       </div>
     </section>
-    <section class="capture-workspace">
-      <div class="capture-list">
-        <div class="capture-list-head"><strong>请求记录</strong><span>${visibleFlows.length}/500</span></div>
-        ${visibleFlows.length ? visibleFlows.map(flow => `<button class="capture-row ${selected?.id === flow.id ? 'active' : ''} ${flow.error ? 'capture-row-error' : ''}" data-capture-id="${flow.id}"><span class="capture-method">${escapeHtml(flow.method)}</span><span class="capture-url" title="${escapeHtml(flow.url)}">${escapeHtml(flow.host)}${escapeHtml(capturePath(flow.url))}</span><span class="capture-status">${flow.error ? 'ERR' : (flow.status_code || '—')}</span><span class="capture-time">${flow.duration_ms || 0} ms</span></button>`).join('') : '<div class="empty">暂无请求记录</div>'}
-      </div>
-      <div class="capture-detail">${selected ? renderCaptureDetail(selected) : '<div class="empty">选择一条请求查看头信息</div>'}</div>
+    <section class="card capture-detail-card">
+      <div class="section-heading"><div><h2>请求详情</h2><p class="muted">${selected ? escapeHtml(selected.host) : '选择一条请求查看完整内容'}</p></div></div>
+      <div class="capture-detail" id="captureDetail">${selected ? renderCaptureDetail(selected) : '<div class="empty">请选择一条请求</div>'}</div>
     </section>
   </div>`
 }
 
 function renderCaptureDetail(flow) {
+  const tabs = [['overview', '概览'], ['request-headers', '请求头'], ['response-headers', '响应头'], ['request-body', '请求体'], ['response-body', '响应体']]
+  let content = ''
+  switch (state.captureDetailTab) {
+    case 'request-headers': content = `<div class="capture-tab-content">${renderHeaders(flow.request_headers)}</div>`; break
+    case 'response-headers': content = `<div class="capture-tab-content">${renderHeaders(flow.response_headers)}</div>`; break
+    case 'request-body': content = `<div class="capture-tab-content"><h2>请求正文${flow.request_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.id, 'request-body', flow.request_body, flow.request_encoding)}</div>`; break
+    case 'response-body': content = `<div class="capture-tab-content"><h2>响应正文${flow.response_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.id, 'response-body', flow.response_body, flow.response_encoding)}</div>`; break
+    default: content = `<div class="capture-overview"><span>协议<strong>${escapeHtml(flow.protocol || '—')}</strong></span><span>状态<strong>${flow.status_code || '—'}</strong></span><span>出口<strong class="capture-route ${captureRouteClass(flow.route)}">${captureRouteLabel(flow.route)}</strong></span><span>耗时<strong>${flow.duration_ms || 0} ms</strong></span><span>请求<strong>${formatBytes(flow.request_bytes)}</strong></span><span>响应<strong>${formatBytes(flow.response_bytes)}</strong></span></div>${flow.error ? `<div class="capture-error">${escapeHtml(flow.error)}</div>` : ''}`
+  }
   return `<div class="capture-detail-head"><span class="capture-method">${escapeHtml(flow.method)}</span><strong>${escapeHtml(flow.url)}</strong></div>
-    <div class="capture-meta"><span>HTTP ${escapeHtml(flow.protocol)}</span><span>状态 ${flow.status_code || '—'}</span><span>${flow.duration_ms || 0} ms</span><span>↑ ${formatBytes(flow.request_bytes)} ↓ ${formatBytes(flow.response_bytes)}</span></div>
-    ${flow.error ? `<div class="capture-error">${escapeHtml(flow.error)}</div>` : ''}
-    <details class="capture-section" data-capture-section="headers" ${state.captureSectionOpen.headers ? 'open' : ''}><summary>Headers</summary><div class="capture-headers"><section><h2>请求头</h2>${renderHeaders(flow.request_headers)}</section><section><h2>响应头</h2>${renderHeaders(flow.response_headers)}</section></div></details>
-    <details class="capture-section" data-capture-section="bodies" ${state.captureSectionOpen.bodies ? 'open' : ''}><summary>Body</summary><div class="capture-bodies"><section><h2>请求正文${flow.request_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.request_body, flow.request_encoding)}</section><section><h2>响应正文${flow.response_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.response_body, flow.response_encoding)}</section></div></details>`
+    <div class="capture-tabs">${tabs.map(([id, label]) => `<button class="capture-tab ${state.captureDetailTab === id ? 'active' : ''}" data-capture-tab="${id}">${label}</button>`).join('')}</div>${content}`
 }
 
-function renderCaptureBody(body, encoding) {
+function renderCaptureRow(flow, selected) {
+  const failed = Boolean(flow.error) || flow.route === 'failed'
+  return `<button class="capture-row ${selected?.id === flow.id ? 'active' : ''} ${failed ? 'capture-row-error' : ''}" data-capture-id="${flow.id}"><span class="capture-method">${escapeHtml(flow.method)}</span><span class="capture-url" title="${escapeHtml(flow.url)}">${escapeHtml(flow.host)}${escapeHtml(capturePath(flow.url))}</span><span class="capture-status">${failed ? 'ERR' : (flow.status_code || '—')}</span><span class="capture-route ${captureRouteClass(flow.route)}">${captureRouteLabel(flow.route)}</span><span class="capture-time">${flow.duration_ms || 0} ms</span></button>`
+}
+
+function filterCaptureFlows(flows) {
+  const query = state.captureSearch.trim().toLowerCase()
+  return flows.filter(flow => {
+    if (query && !`${flow.method} ${flow.host} ${flow.url}`.toLowerCase().includes(query)) return false
+    if (state.captureFilter === 'error') return Boolean(flow.error) || flow.route === 'failed'
+    if (state.captureFilter === '2xx') return flow.status_code >= 200 && flow.status_code < 300
+    if (state.captureFilter === '4xx5xx') return flow.status_code >= 400 && flow.status_code < 600
+    return true
+  })
+}
+
+function captureRouteLabel(route) {
+  return { direct: '直连', proxy: '代理', block: '阻断', failed: '失败', smart: '智能', custom: '规则' }[route] || '未知'
+}
+
+function captureRouteClass(route) {
+  return ['direct', 'proxy', 'block', 'failed', 'smart'].includes(route) ? route : 'smart'
+}
+
+function renderCaptureBody(flowID, tab, body, encoding) {
   if (!body) return '<div class="empty">无</div>'
-  return `<pre>${encoding === 'base64' ? 'Base64\n' : ''}${escapeHtml(body)}</pre>`
+  return `<pre data-capture-body-scroll="${flowID}:${tab}">${encoding === 'base64' ? 'Base64\n' : ''}${escapeHtml(body)}</pre>`
 }
 
 function renderHeaders(headers) {
@@ -606,6 +642,9 @@ async function refreshCapture() {
     if (!state.selectedCaptureID && state.captureFlows.length) state.selectedCaptureID = state.captureFlows[0].id
     if (state.selectedCaptureID && state.selectedCaptureFlow?.id !== state.selectedCaptureID) {
       state.selectedCaptureFlow = await window.go.app.App.GetCaptureFlow(state.selectedCaptureID)
+    } else if (state.selectedCaptureFlow) {
+      const summary = state.captureFlows.find(flow => flow.id === state.selectedCaptureID)
+      if (summary) state.selectedCaptureFlow = { ...state.selectedCaptureFlow, route: summary.route, error: summary.error, status_code: summary.status_code, duration_ms: summary.duration_ms }
     }
     if (state.view === 'capture' && document.activeElement?.id !== 'captureDomains') renderApp()
   } catch (e) {
@@ -629,9 +668,27 @@ function renderApp() {
     start: typeof focused.selectionStart === 'number' ? focused.selectionStart : null,
     end: typeof focused.selectionEnd === 'number' ? focused.selectionEnd : null,
   } : null
+  const captureList = document.querySelector('#captureList')
+  const captureDetail = document.querySelector('#captureDetail')
+  const captureBody = document.querySelector('[data-capture-body-scroll]')
+  if (captureList) state.captureListScroll = captureList.scrollTop
+  if (captureDetail) state.captureDetailScroll = captureDetail.scrollTop
+  if (captureBody) state.captureBodyScroll[captureBody.dataset.captureBodyScroll] = { top: captureBody.scrollTop, left: captureBody.scrollLeft }
   document.documentElement.dataset.theme = state.theme
   app.innerHTML = render()
   bindEvents()
+  const restoredList = document.querySelector('#captureList')
+  const restoredDetail = document.querySelector('#captureDetail')
+  const restoredBody = document.querySelector('[data-capture-body-scroll]')
+  if (restoredList) restoredList.scrollTop = state.captureListScroll
+  if (restoredDetail) restoredDetail.scrollTop = state.captureDetailScroll
+  if (restoredBody) {
+    const scroll = state.captureBodyScroll[restoredBody.dataset.captureBodyScroll]
+    if (scroll) {
+      restoredBody.scrollTop = scroll.top
+      restoredBody.scrollLeft = scroll.left
+    }
+  }
   if (focusSnapshot) {
     const restored = document.getElementById(focusSnapshot.id)
     if (restored) {
@@ -875,6 +932,7 @@ function bindEvents() {
   })
   const clearCapture = document.querySelector('#clearCapture')
   if (clearCapture) clearCapture.addEventListener('click', async () => {
+    if (!window.confirm('确定删除全部抓包记录？此操作无法撤销。')) return
     await window.go.app.App.ClearCaptureFlows()
     state.selectedCaptureID = 0
     state.selectedCaptureFlow = null
@@ -896,8 +954,21 @@ function bindEvents() {
     catch (e) { return showToast(e.message || String(e), 'error') }
     renderApp()
   }))
-  document.querySelectorAll('[data-capture-section]').forEach(section => section.addEventListener('toggle', () => {
-    state.captureSectionOpen[section.dataset.captureSection] = section.open
+  const captureSearch = document.querySelector('#captureSearch')
+  if (captureSearch) captureSearch.addEventListener('input', () => {
+    state.captureSearch = captureSearch.value
+    state.captureListScroll = 0
+    renderApp()
+  })
+  document.querySelectorAll('[data-capture-filter]').forEach(button => button.addEventListener('click', () => {
+    state.captureFilter = button.dataset.captureFilter
+    state.captureListScroll = 0
+    renderApp()
+  }))
+  document.querySelectorAll('[data-capture-tab]').forEach(button => button.addEventListener('click', () => {
+    state.captureDetailTab = button.dataset.captureTab
+    state.captureDetailScroll = 0
+    renderApp()
   }))
 
   document.querySelectorAll('.select-node').forEach(btn => {

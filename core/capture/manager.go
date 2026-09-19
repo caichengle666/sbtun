@@ -54,6 +54,7 @@ type Flow struct {
 	RequestTruncated  bool                `json:"request_truncated,omitempty"`
 	ResponseTruncated bool                `json:"response_truncated,omitempty"`
 	Error             string              `json:"error,omitempty"`
+	Route             string              `json:"route,omitempty"`
 }
 
 type Status struct {
@@ -64,6 +65,7 @@ type Status struct {
 	CertificateInstalled bool   `json:"certificate_installed"`
 	StoragePath          string `json:"storage_path"`
 	FlowCount            int    `json:"flow_count"`
+	MaxFlows             int    `json:"max_flows"`
 	Unsaved              bool   `json:"unsaved"`
 	Message              string `json:"message"`
 }
@@ -270,7 +272,7 @@ func (m *Manager) Status(enabled bool) Status {
 	return Status{
 		Enabled: enabled, Running: running, Address: address,
 		CertificatePath: m.certPath(), CertificateInstalled: markerErr == nil,
-		StoragePath: m.storagePath(), FlowCount: m.flowCount(), Unsaved: m.isDirty(), Message: m.errorMessage(),
+		StoragePath: m.storagePath(), FlowCount: m.flowCount(), MaxFlows: maxVisibleFlows, Unsaved: m.isDirty(), Message: m.errorMessage(),
 	}
 }
 

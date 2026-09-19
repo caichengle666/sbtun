@@ -2,7 +2,7 @@ name: Windows 构建
 
 on:
   push:
-    branches: [main]
+    branches: [main, codex/capture-linux-arm64]
     tags: ['v*', '0.*']
   workflow_dispatch:
 
@@ -14,8 +14,14 @@ concurrency:
   cancel-in-progress: true
 
 jobs:
-  build-windows-amd64:
+  build-windows:
     runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [amd64, arm64]
+    env:
+      TARGET_ARCH: ${{ matrix.arch }}
     steps:
       - name: 拉取代码
         uses: actions/checkout@v4
@@ -52,8 +58,8 @@ jobs:
         run: |
           $headers = @{ Accept = 'application/vnd.github+json'; 'User-Agent' = 'sbtun-build' }
           $singRelease = Invoke-RestMethod -Headers $headers -Uri 'https://api.github.com/repos/SagerNet/sing-box/releases/latest'
-          $singAsset = $singRelease.assets | Where-Object { $_.name -match 'windows-amd64\.zip$' } | Select-Object -First 1
-          if (-not $singAsset) { throw 'latest sing-box release 没有 Windows amd64 zip 资产' }
+          $singAsset = $singRelease.assets | Where-Object { $_.name -match "windows-$env:TARGET_ARCH\.zip$" } | Select-Object -First 1
+          if (-not $singAsset) { throw "latest sing-box release 没有 Windows $env:TARGET_ARCH zip 资产" }
           $singDigest = $singAsset.digest
           if (-not $singDigest) { throw "latest sing-box asset 没有 SHA256 digest: $($singAsset.name)" }
           $wintunPage = Invoke-WebRequest -Uri 'https://www.wintun.net/'
@@ -77,7 +83,7 @@ jobs:
 
       - name: 构建 sbtun.exe
         shell: pwsh
-        run: wails build -clean -platform windows/amd64
+        run: wails build -clean -platform windows/$env:TARGET_ARCH
 
       - name: 下载并校验 sing-box
         shell: pwsh
@@ -139,20 +145,23 @@ jobs:
         run: |
           New-Item -ItemType Directory -Force -Path dist\sbtun | Out-Null
           Copy-Item build\bin\sbtun.exe dist\sbtun\sbtun.exe -Force
+          $env:GOOS = 'windows'
+          $env:GOARCH = $env:TARGET_ARCH
+          go build -tags cli -o dist\sbtun\sbtun-cli.exe .
           $exe = Get-ChildItem "$env:RUNNER_TEMP\sing-box" -Filter sing-box.exe -Recurse | Select-Object -First 1
           Copy-Item $exe.FullName dist\sbtun\sing-box.exe -Force
           $singBoxDir = Split-Path $exe.FullName -Parent
           Get-ChildItem $singBoxDir -File | Where-Object { $_.Name -ne 'sing-box.exe' } | Copy-Item -Destination dist\sbtun -Force
-          Copy-Item "$env:RUNNER_TEMP\wintun\wintun\bin\amd64\wintun.dll" dist\sbtun\wintun.dll -Force
+          Copy-Item "$env:RUNNER_TEMP\wintun\wintun\bin\$env:TARGET_ARCH\wintun.dll" dist\sbtun\wintun.dll -Force
           Copy-Item dist\rules dist\sbtun\rules -Recurse -Force
           Copy-Item VERSION dist\sbtun\VERSION -Force
           New-Item -ItemType Directory -Force -Path dist\sbtun\resources | Out-Null
           Copy-Item resources\icon.png dist\sbtun\resources\icon.png -Force
           Copy-Item build\windows\icon.ico dist\sbtun\resources\sbtun.ico -Force
           @"
-          sbtun Windows 便携版
+          sbtun Windows $env:TARGET_ARCH 便携版
 
-          运行 sbtun.exe 即可启动桌面程序。
+          运行 sbtun.exe 启动桌面程序，或运行 sbtun-cli.exe help 查看命令行功能。
           TUN 模式需要管理员权限。
 
           内置组件：
@@ -161,12 +170,22 @@ jobs:
           - sing-box SRS 分流规则集
           "@ | Set-Content dist\sbtun\README.txt -Encoding UTF8
           (Get-FileHash dist\sbtun\sbtun.exe -Algorithm SHA256).Hash.ToLower() + '  sbtun.exe' | Set-Content dist\sbtun\SHA256SUMS.txt -Encoding ASCII
+          (Get-FileHash dist\sbtun\sbtun-cli.exe -Algorithm SHA256).Hash.ToLower() + '  sbtun-cli.exe' | Add-Content dist\sbtun\SHA256SUMS.txt -Encoding ASCII
           (Get-FileHash dist\sbtun\sing-box.exe -Algorithm SHA256).Hash.ToLower() + '  sing-box.exe' | Add-Content dist\sbtun\SHA256SUMS.txt -Encoding ASCII
           (Get-FileHash dist\sbtun\wintun.dll -Algorithm SHA256).Hash.ToLower() + '  wintun.dll' | Add-Content dist\sbtun\SHA256SUMS.txt -Encoding ASCII
 
       - name: 打包 ZIP
         shell: pwsh
-        run: Compress-Archive -Path dist\sbtun\* -DestinationPath "dist\sbtun-windows-amd64.zip" -Force
+        run: Compress-Archive -Path dist\sbtun\* -DestinationPath "dist\sbtun-windows-$env:TARGET_ARCH.zip" -Force
+
+      - name: 上传构建产物
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbtun-windows-${{ matrix.arch }}
+          path: dist/sbtun-windows-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          retention-days: 3
 
       - name: 创建并上传 GitHub Release
         if: startsWith(github.ref, 'refs/tags/')
@@ -177,7 +196,7 @@ jobs:
           $tag = "$env:GITHUB_REF_NAME"
           gh release view $tag *> $null
           if ($LASTEXITCODE -ne 0) {
-            gh release create $tag dist\sbtun-windows-amd64.zip --title "sbtun $tag" --generate-notes
+            gh release create $tag "dist\sbtun-windows-$env:TARGET_ARCH.zip" --title "sbtun $tag" --generate-notes
           } else {
-            gh release upload $tag dist\sbtun-windows-amd64.zip --clobber
+            gh release upload $tag "dist\sbtun-windows-$env:TARGET_ARCH.zip" --clobber
           }

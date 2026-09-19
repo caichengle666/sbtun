@@ -173,14 +173,24 @@ func (a *App) GetCaptureFlows() ([]capture.Flow, error) {
 	if a.runtime == nil || a.runtime.Capture == nil {
 		return []capture.Flow{}, nil
 	}
-	return a.runtime.Capture.Flows()
+	flows, err := a.runtime.Capture.Flows()
+	if err != nil {
+		return nil, err
+	}
+	annotateCaptureRoutes(flows, a.GetConfig())
+	return flows, nil
 }
 
 func (a *App) GetCaptureFlow(id uint64) (capture.Flow, error) {
 	if a.runtime == nil || a.runtime.Capture == nil {
 		return capture.Flow{}, errors.New("流量分析器未初始化")
 	}
-	return a.runtime.Capture.Flow(id)
+	flow, err := a.runtime.Capture.Flow(id)
+	if err != nil {
+		return capture.Flow{}, err
+	}
+	flow.Route = captureRoute(flow, a.GetConfig())
+	return flow, nil
 }
 
 func (a *App) ClearCaptureFlows() error {
