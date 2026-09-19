@@ -16,8 +16,8 @@ import (
 
 func parseSubscription(link string) ([]config.Node, error) {
 	link = strings.TrimSpace(link)
-	if link == "" {
-		return nil, fmt.Errorf("订阅链接不能为空")
+	if err := ValidateNodeSource(link); err != nil {
+		return nil, err
 	}
 	if strings.HasPrefix(link, "vmess://") {
 		node, err := parseVMess(link)
@@ -74,7 +74,21 @@ func parseSubscription(link string) ([]config.Node, error) {
 		// 普通 HTTP/HTTPS 地址没有代理端口时，按订阅地址下载并拆分节点。
 		return parseSubscriptionBody(link)
 	}
-	return parseSubscriptionBody(link)
+	return nil, fmt.Errorf("无效节点链接: 支持 vmess、vless、trojan、ss、hysteria2、socks、http 或 https")
+}
+
+// ValidateNodeSource checks whether input can be parsed without performing network access.
+func ValidateNodeSource(link string) error {
+	link = strings.TrimSpace(link)
+	if link == "" {
+		return fmt.Errorf("节点链接不能为空")
+	}
+	for _, prefix := range []string{"vmess://", "vless://", "trojan://", "ss://", "hysteria2://", "socks://", "socks5://", "socks5h://", "http://", "https://"} {
+		if strings.HasPrefix(link, prefix) {
+			return nil
+		}
+	}
+	return fmt.Errorf("无效节点链接: 支持 vmess、vless、trojan、ss、hysteria2、socks、http 或 https")
 }
 
 func parseSubscriptionBody(link string) ([]config.Node, error) {

@@ -126,3 +126,10 @@ func TestParseSOCKS5Links(t *testing.T) {
 		}
 	}
 }
+
+func TestParseSubscriptionRejectsInvalidLinkWithoutDownloading(t *testing.T) {
+	_, err := parseSubscription("invalid-link")
+	if err == nil || !strings.Contains(err.Error(), "无效节点链接") || strings.Contains(err.Error(), "下载订阅失败") {
+		t.Fatalf("err=%v", err)
+	}
+}

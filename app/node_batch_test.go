@@ -16,19 +16,20 @@ func TestRemoveNodesSelectsRemainingNode(t *testing.T) {
 	cfg.Nodes = []config.Node{
 		{ID: "one", Name: "one", Protocol: "socks", Server: "127.0.0.1", Port: 1080},
 		{ID: "two", Name: "two", Protocol: "socks", Server: "127.0.0.1", Port: 1081},
+		{ID: "three", Name: "three", Protocol: "socks", Server: "127.0.0.1", Port: 1082},
 	}
-	cfg.CurrentNodeID = "one"
+	cfg.CurrentNodeID = "two"
 	if err := a.manager.Save(cfg); err != nil {
 		t.Fatal(err)
 	}
-	if err := a.RemoveNodes([]string{"one"}); err != nil {
+	if err := a.RemoveNodes([]string{"one", "two"}); err != nil {
 		t.Fatal(err)
 	}
 	got, err := a.manager.Load()
 	if err != nil {
 		t.Fatal(err)
 	}
-	if len(got.Nodes) != 1 || got.CurrentNodeID != "two" {
+	if len(got.Nodes) != 1 || got.Nodes[0].ID != "three" || got.CurrentNodeID != "three" {
 		t.Fatalf("nodes=%+v current=%q", got.Nodes, got.CurrentNodeID)
 	}
 }

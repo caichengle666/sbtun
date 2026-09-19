@@ -6,6 +6,7 @@ import (
 	"bufio"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"os"
 	"os/signal"
@@ -18,15 +19,11 @@ import (
 )
 
 func main() {
-	command := "run"
-	if len(os.Args) > 1 {
-		command = os.Args[1]
+	command, commandArgs, ok := parseCLIArgs(os.Args)
+	if !ok {
+		printHelp()
+		return
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), cliSignals()...)
-	defer stop()
-	application := app.New()
-	application.StartupCLI(ctx)
-	var err error
 	if command == "help" || command == "-h" || command == "--help" {
 		printHelp()
 		return
@@ -35,15 +32,31 @@ func main() {
 		fmt.Println("sbtun " + app.Version())
 		return
 	}
-	captureRun := command == "capture" && len(os.Args) > 2 && os.Args[2] == "run"
-	if requiresElevation(command, os.Args[2:]) {
+	if hasHelpArg(commandArgs) && printCommandHelp(command, commandArgs) {
+		return
+	}
+	if err := validateCLIArgs(command, commandArgs); err != nil {
+		fmt.Fprintln(os.Stderr, err)
+		os.Exit(2)
+	}
+	if command == "edit" && len(commandArgs) <= 1 && !isTerminalInput(os.Stdin) {
+		fmt.Fprintln(os.Stderr, "edit 交互模式需要交互式终端；请直接在终端运行，或使用完整参数形式")
+		os.Exit(2)
+	}
+	ctx, stop := signal.NotifyContext(context.Background(), cliSignals()...)
+	defer stop()
+	application := app.New()
+	application.StartupCLI(ctx)
+	var err error
+	captureRun := command == "capture" && len(commandArgs) > 0 && commandArgs[0] == "run"
+	if requiresElevation(command, commandArgs) {
 		if err := relaunchElevated(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 	}
 	if captureRun {
-		if err := enableCapture(application, os.Args[3:]); err != nil {
+		if err := enableCapture(application, commandArgs[1:]); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(2)
 		}
@@ -63,6 +76,9 @@ func main() {
 			os.Exit(1)
 		}
 		fmt.Println("sbtun 已启动，按 Ctrl+C 停止")
+		if captureRun {
+			fmt.Println("抓包分析器已启动，等待流量...")
+		}
 		<-ctx.Done()
 		if application.GetConfig().CaptureEnabled {
 			if saveErr := application.SaveCaptureFlows(); saveErr != nil {
@@ -92,25 +108,13 @@ func main() {
 			fmt.Printf("运行时 selector: %s\n", status.Selector)
 		}
 	case "route":
-		if len(os.Args) < 3 {
-			err = fmt.Errorf("用法: %s route <smart|global|direct|custom>", os.Args[0])
-			break
-		}
-		err = application.SetRoutingMode(config.RoutingMode(os.Args[2]))
+		err = application.SetRoutingMode(config.RoutingMode(commandArgs[0]))
 		if err == nil {
 			fmt.Println("路由模式已更新")
 		}
 	case "add-node":
-		if len(os.Args) < 3 {
-			err = fmt.Errorf("用法: %s add-node <节点链接或订阅链接>", os.Args[0])
-			break
-		}
-		if os.Args[2] == "-h" || os.Args[2] == "--help" {
-			fmt.Printf("用法: %s add-node <节点链接或订阅链接>\n", os.Args[0])
-			break
-		}
 		var count int
-		count, err = application.ImportSubscription(os.Args[2])
+		count, err = application.ImportSubscription(commandArgs[0])
 		if err == nil {
 			if count == 0 {
 				fmt.Println("未添加新节点：节点已存在")
@@ -121,7 +125,7 @@ func main() {
 	case "nodes":
 		err = listNodes(application)
 	case "del", "delete":
-		ids, parseErr := nodeIDsFromArgs(application, os.Args[2:])
+		ids, parseErr := nodeIDsFromArgs(application, commandArgs)
 		if parseErr != nil {
 			err = parseErr
 			break
@@ -131,29 +135,28 @@ func main() {
 			fmt.Printf("已删除 %d 个节点\n", len(ids))
 		}
 	case "test":
-		ids, parseErr := nodeIDsFromArgs(application, os.Args[2:])
+		ids, parseErr := nodeIDsFromArgs(application, commandArgs)
 		if parseErr != nil {
 			err = parseErr
 			break
 		}
-		for _, result := range application.TestNodes(ids) {
+		for _, id := range ids {
+			result := application.TestNode(id)
 			fmt.Printf("%s\t健康=%t\t%s\n", result.NodeID, result.Healthy, result.Message)
 		}
+	case "info":
+		err = showNodeInfo(application, commandArgs[0])
 	case "edit":
-		if len(os.Args) == 2 {
+		if len(commandArgs) == 0 {
 			err = interactiveEdit(application, "")
 			break
 		}
-		if len(os.Args) == 3 {
-			err = interactiveEdit(application, os.Args[2])
+		if len(commandArgs) == 1 {
+			err = interactiveEdit(application, commandArgs[0])
 			break
 		}
-		if len(os.Args) == 4 {
-			index, convErr := strconv.Atoi(os.Args[2])
-			if convErr != nil || index < 1 {
-				err = fmt.Errorf("节点编号无效: %s", os.Args[2])
-				break
-			}
+		if len(commandArgs) == 2 {
+			index, _ := strconv.Atoi(commandArgs[0])
 			cfg, loadErr := application.LoadConfig()
 			if loadErr != nil {
 				err = loadErr
@@ -163,53 +166,37 @@ func main() {
 				err = fmt.Errorf("节点编号超出范围: %d", index)
 				break
 			}
-			err = application.UpdateNodeFromLink(cfg.Nodes[index-1].ID, os.Args[3])
+			err = application.UpdateNodeFromLink(cfg.Nodes[index-1].ID, commandArgs[1])
 			if err == nil {
 				fmt.Println("节点全部参数已更新")
 			}
 			break
 		}
-		if len(os.Args) < 6 {
-			err = fmt.Errorf("用法: %s edit <编号> <节点链接> 或 edit <编号> <名称> <服务器> <端口>", os.Args[0])
-			break
-		}
-		index, convErr := strconv.Atoi(os.Args[2])
-		port, portErr := strconv.Atoi(os.Args[5])
-		if convErr != nil || index < 1 || portErr != nil || port < 1 || port > 65535 {
-			err = fmt.Errorf("节点编号或端口无效")
-			break
-		}
+		index, _ := strconv.Atoi(commandArgs[0])
+		port, _ := strconv.Atoi(commandArgs[3])
 		cfg, loadErr := application.LoadConfig()
 		if loadErr != nil {
 			err = loadErr
 			break
 		}
-		if index > len(cfg.Nodes) || strings.TrimSpace(os.Args[3]) == "" || strings.TrimSpace(os.Args[4]) == "" {
+		if index > len(cfg.Nodes) {
 			err = fmt.Errorf("节点编号或节点信息无效")
 			break
 		}
 		node := cfg.Nodes[index-1]
-		node.Name, node.Server, node.Port = strings.TrimSpace(os.Args[3]), strings.TrimSpace(os.Args[4]), uint16(port)
+		node.Name, node.Server, node.Port = strings.TrimSpace(commandArgs[1]), strings.TrimSpace(commandArgs[2]), uint16(port)
 		err = application.UpdateNode(node.ID, node)
 		if err == nil {
 			fmt.Println("节点信息已更新")
 		}
 	case "switch":
-		if len(os.Args) < 3 {
-			err = fmt.Errorf("用法: %s switch <编号>", os.Args[0])
-			break
-		}
-		err = switchNodeByIndex(application, os.Args[2])
+		err = switchNodeByIndex(application, commandArgs[0])
 		if err == nil {
 			fmt.Println("节点已切换")
 		}
 	case "add-rule":
-		if len(os.Args) < 3 {
-			err = fmt.Errorf("用法: %s add-rule <链接|文件|文本>", os.Args[0])
-			break
-		}
 		var ruleCount int
-		ruleCount, err = application.ImportCustomRules(os.Args[2])
+		ruleCount, err = application.ImportCustomRules(commandArgs[0])
 		if err == nil {
 			fmt.Printf("已导入 %d 条规则\n", ruleCount)
 		}
@@ -219,15 +206,180 @@ func main() {
 			fmt.Println("sbtun 已停止")
 		}
 	case "rules":
-		err = runRulesCommand(application, os.Args[2:])
+		err = runRulesCommand(application, commandArgs)
 	case "capture":
-		err = runCaptureCommand(application, os.Args[2:])
-	default:
-		err = fmt.Errorf("未知命令: %s", command)
+		err = runCaptureCommand(application, commandArgs)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(2)
+	}
+}
+
+func parseCLIArgs(args []string) (string, []string, bool) {
+	if len(args) < 2 {
+		return "", nil, false
+	}
+	return args[1], args[2:], true
+}
+
+func hasHelpArg(args []string) bool {
+	for _, arg := range args {
+		if arg == "-h" || arg == "--help" {
+			return true
+		}
+	}
+	return false
+}
+
+func printCommandHelp(command string, args []string) bool {
+	usage := ""
+	switch command {
+	case "run", "start", "stop", "status", "nodes":
+		usage = "sbtun " + command
+	case "route":
+		usage = "sbtun route <smart|global|direct|custom>"
+	case "add-node":
+		usage = "sbtun add-node <节点链接或订阅链接>"
+	case "switch", "info":
+		usage = "sbtun " + command + " <编号>"
+	case "test", "del", "delete":
+		usage = "sbtun " + command + " <编号...>"
+	case "edit":
+		usage = "sbtun edit [编号]\n  sbtun edit <编号> <节点链接>\n  sbtun edit <编号> <名称> <服务器> <端口>"
+	case "add-rule":
+		usage = "sbtun add-rule <链接|文件|文本>"
+	case "rules":
+		usage = "sbtun rules [list|update <id>|update-all]"
+	case "capture":
+		if len(args) > 0 && args[0] == "cert" {
+			usage = "sbtun capture cert <install|uninstall>"
+		} else {
+			usage = "sbtun capture <run|enable|disable|status|list|show|clear|cert>"
+		}
+	default:
+		return false
+	}
+	fmt.Println("用法:", usage)
+	return true
+}
+
+func validateCLIArgs(command string, args []string) error {
+	usageError := func(usage string) error { return fmt.Errorf("用法: %s", usage) }
+	requireNoArgs := func() error {
+		if len(args) != 0 {
+			return usageError("sbtun " + command)
+		}
+		return nil
+	}
+	requireNodeIndices := func(usage string) error {
+		if len(args) == 0 {
+			return usageError(usage)
+		}
+		for _, arg := range args {
+			index, err := strconv.Atoi(arg)
+			if err != nil || index < 1 {
+				return fmt.Errorf("节点编号无效: %s", arg)
+			}
+		}
+		return nil
+	}
+
+	switch command {
+	case "run", "start", "stop", "status", "nodes":
+		return requireNoArgs()
+	case "route":
+		if len(args) != 1 {
+			return usageError("sbtun route <smart|global|direct|custom>")
+		}
+		switch config.RoutingMode(args[0]) {
+		case config.RoutingSmart, config.RoutingGlobal, config.RoutingDirect, config.RoutingCustom:
+			return nil
+		default:
+			return fmt.Errorf("无效路由模式: %s", args[0])
+		}
+	case "add-node":
+		if len(args) != 1 {
+			return usageError("sbtun add-node <节点链接或订阅链接>")
+		}
+		return app.ValidateNodeSource(args[0])
+	case "switch", "info":
+		if len(args) != 1 {
+			return usageError("sbtun " + command + " <编号>")
+		}
+		return requireNodeIndices("sbtun " + command + " <编号>")
+	case "test", "del", "delete":
+		return requireNodeIndices("sbtun " + command + " <编号...>")
+	case "edit":
+		if len(args) != 0 && len(args) != 1 && len(args) != 2 && len(args) != 4 {
+			return usageError("sbtun edit [编号] 或 sbtun edit <编号> <节点链接> 或 sbtun edit <编号> <名称> <服务器> <端口>")
+		}
+		if len(args) > 0 {
+			index, err := strconv.Atoi(args[0])
+			if err != nil || index < 1 {
+				return fmt.Errorf("节点编号无效: %s", args[0])
+			}
+		}
+		if len(args) == 2 && strings.TrimSpace(args[1]) == "" {
+			return errors.New("节点链接不能为空")
+		}
+		if len(args) == 4 {
+			port, err := strconv.Atoi(args[3])
+			if strings.TrimSpace(args[1]) == "" || strings.TrimSpace(args[2]) == "" || err != nil || port < 1 || port > 65535 {
+				return errors.New("节点名称、服务器或端口无效")
+			}
+		}
+		return nil
+	case "add-rule":
+		if len(args) != 1 {
+			return usageError("sbtun add-rule <链接|文件|文本>")
+		}
+		return nil
+	case "rules":
+		if len(args) == 0 || len(args) == 1 && (args[0] == "list" || args[0] == "update-all") || len(args) == 2 && args[0] == "update" && strings.TrimSpace(args[1]) != "" {
+			return nil
+		}
+		return usageError("sbtun rules [list|update <id>|update-all]")
+	case "capture":
+		return validateCaptureArgs(args)
+	default:
+		return fmt.Errorf("未知命令: %s", command)
+	}
+}
+
+func validateCaptureArgs(args []string) error {
+	if len(args) == 0 {
+		return errors.New("用法: sbtun capture <run|enable|disable|status|list|show|clear|cert>")
+	}
+	switch args[0] {
+	case "run":
+		return nil
+	case "enable":
+		if len(args) < 2 {
+			return errors.New("用法: sbtun capture enable <域名、关键词或 *>")
+		}
+		return nil
+	case "disable", "status", "list", "clear":
+		if len(args) != 1 {
+			return fmt.Errorf("用法: sbtun capture %s", args[0])
+		}
+		return nil
+	case "show":
+		if len(args) != 2 {
+			return errors.New("用法: sbtun capture show <ID>")
+		}
+		id, err := strconv.ParseUint(args[1], 10, 64)
+		if err != nil || id == 0 {
+			return fmt.Errorf("请求 ID 无效: %s", args[1])
+		}
+		return nil
+	case "cert":
+		if len(args) != 2 || args[1] != "install" && args[1] != "uninstall" {
+			return errors.New("用法: sbtun capture cert <install|uninstall>")
+		}
+		return nil
+	default:
+		return fmt.Errorf("未知抓包命令: %s", args[0])
 	}
 }
 
@@ -259,6 +411,7 @@ func printHelp() {
 	})
 	printHelpGroup("节点", []helpEntry{
 		{"nodes", "列出节点编号，* 表示当前节点"},
+		{"info <编号>", "查看节点协议和完整参数"},
 		{"add-node <链接>", "添加单节点链接或订阅链接"},
 		{"switch <编号>", "按编号切换节点"},
 		{"test <编号...>", "按编号顺序测试节点健康"},
@@ -275,8 +428,8 @@ func printHelp() {
 		{"rules update-all", "更新全部规则集"},
 	})
 	printHelpGroup("流量分析", []helpEntry{
-		{"capture run [关键词...]", "启用抓包并前台启动 TUN"},
-		{"capture enable <关键词...>", "保存抓包关键词，下次启动生效"},
+		{"capture run [规则...]", "启用抓包并前台启动 TUN，* 表示全部 HTTP/HTTPS"},
+		{"capture enable <规则...>", "保存抓包规则，* 表示全部 HTTP/HTTPS"},
 		{"capture disable", "关闭抓包，下次启动生效"},
 		{"capture status", "查看抓包配置和运行状态"},
 		{"capture list", "列出已保存请求"},
@@ -346,15 +499,17 @@ func runRulesCommand(application *app.App, args []string) error {
 	}
 	switch args[0] {
 	case "update":
-		if len(args) < 2 {
-			return fmt.Errorf("用法: sbtun rules update <id>")
+		if err := application.UpdateRule(args[1]); err != nil {
+			return err
 		}
-		return application.UpdateRule(args[1])
+		fmt.Println("规则集更新成功")
+		return nil
 	case "update-all":
 		errs := application.UpdateAllRules()
 		if len(errs) > 0 {
 			return fmt.Errorf("规则更新失败: %v", errs)
 		}
+		fmt.Println("全部规则集更新成功")
 		return nil
 	default:
 		return fmt.Errorf("用法: sbtun rules [list|update <id>|update-all]")
@@ -375,7 +530,7 @@ func runCaptureCommand(application *app.App, args []string) error {
 		if err := enableCapture(application, args[1:]); err != nil {
 			return err
 		}
-		fmt.Println("抓包已启用，下次启动生效")
+		fmt.Println("抓包已启用；运行 sbtun capture run 可立即启动")
 		return nil
 	case "disable":
 		cfg, err := application.LoadConfig()
@@ -394,8 +549,15 @@ func runCaptureCommand(application *app.App, args []string) error {
 			return err
 		}
 		status := application.GetCaptureStatus()
-		fmt.Printf("启用: %t\n运行: %t\n关键词: %s\n已保存请求: %d\n证书已安装: %t\n存储文件: %s\n",
-			cfg.CaptureEnabled, status.Running, strings.Join(cfg.CaptureDomains, ", "), status.FlowCount,
+		rules := strings.Join(cfg.CaptureDomains, ", ")
+		for _, rule := range cfg.CaptureDomains {
+			if rule == "*" {
+				rules = "*（全部 HTTP/HTTPS）"
+				break
+			}
+		}
+		fmt.Printf("启用: %t\n运行: %t\n抓包规则: %s\n已保存请求: %d\n证书已安装: %t\n存储文件: %s\n",
+			cfg.CaptureEnabled, status.Running, rules, status.FlowCount,
 			status.CertificateInstalled, status.StoragePath)
 		if status.Message != "" {
 			fmt.Printf("状态信息: %s\n", status.Message)
@@ -522,6 +684,36 @@ func listNodes(application *app.App) error {
 	return nil
 }
 
+func showNodeInfo(application *app.App, indexArg string) error {
+	index, err := strconv.Atoi(indexArg)
+	if err != nil || index < 1 {
+		return fmt.Errorf("节点编号无效: %s", indexArg)
+	}
+	cfg, err := application.LoadConfig()
+	if err != nil {
+		return err
+	}
+	if index > len(cfg.Nodes) {
+		return fmt.Errorf("节点编号超出范围: %d（最大 %d）", index, len(cfg.Nodes))
+	}
+	node := cfg.Nodes[index-1]
+	currentID := cfg.CurrentNodeID
+	if status := application.GetStatus(); status.CurrentNodeID != "" {
+		currentID = status.CurrentNodeID
+	}
+	fmt.Printf("编号: %d\n当前节点: %t\n名称: %s\n协议: %s\n服务器: %s\n端口: %d\n", index, node.ID == currentID, node.Name, node.Protocol, node.Server, node.Port)
+	keys := sortedSettingKeys(node.Settings)
+	if len(keys) == 0 {
+		fmt.Println("协议参数: 无")
+		return nil
+	}
+	fmt.Println("协议参数:")
+	for _, key := range keys {
+		fmt.Printf("  %s: %s\n", key, node.Settings[key])
+	}
+	return nil
+}
+
 // switchNodeByIndex selects a node using a 1-based index.
 func switchNodeByIndex(application *app.App, arg string) error {
 	index, err := strconv.Atoi(arg)
@@ -564,6 +756,9 @@ func nodeIDsFromArgs(application *app.App, args []string) ([]string, error) {
 }
 
 func interactiveEdit(application *app.App, indexArg string) error {
+	if !isTerminalInput(os.Stdin) {
+		return errors.New("edit 交互模式需要交互式终端；请直接在终端运行，或使用完整参数形式")
+	}
 	cfg, err := application.LoadConfig()
 	if err != nil {
 		return err
@@ -608,6 +803,11 @@ func interactiveEdit(application *app.App, indexArg string) error {
 	}
 	fmt.Println("节点信息已保存")
 	return nil
+}
+
+func isTerminalInput(input *os.File) bool {
+	info, err := input.Stat()
+	return err == nil && info.Mode()&os.ModeCharDevice != 0
 }
 
 func promptLine(reader *bufio.Reader, label string) (string, error) {
