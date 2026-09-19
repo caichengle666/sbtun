@@ -9,6 +9,9 @@ const state = {
   running: false,
   statusState: 'stopped',
   statusMessage: '',
+  runtimeNodeID: '',
+  selectorSyncState: 'idle',
+  selectorSyncMessage: '',
   config: null,
   selectedNode: '',
   manualProtocol: 'vless',
@@ -185,6 +188,7 @@ function render() {
         <section class="status-bar">
           <span class="dot ${dotClass(state.statusState)}"></span>
           <strong id="statusText">${statusLabel(state.statusState, state.statusMessage)}</strong>
+          ${state.running && state.selectorSyncState !== 'idle' ? `<span class="badge selector-sync ${state.selectorSyncState}" title="${escapeHtml(state.selectorSyncMessage)}">${selectorSyncLabel(state.selectorSyncState)}</span>` : ''}
           <span class="muted">节点、DNS、路由和 TUN 由程序自动管理。</span>
         </section>
         ${renderView()}
@@ -202,6 +206,11 @@ function viewTitle(view) {
   return { overview: '运行概览', nodes: '节点管理', routing: '路由模式', rules: '智能分流规则集', capture: 'HTTP 请求分析' }[view] || '运行概览'
 }
 
+function activeNodeID() {
+  if (state.running && state.runtimeNodeID) return state.runtimeNodeID
+  return state.config?.current_node_id || ''
+}
+
 function renderView() {
   if (state.view === 'nodes') return renderNodesPage()
   if (state.view === 'routing') return renderRoutingPage()
@@ -211,7 +220,7 @@ function renderView() {
 }
 
 function renderOverview() {
-  const current = state.config?.nodes?.find(n => n.id === state.config.current_node_id)
+  const current = state.config?.nodes?.find(n => n.id === activeNodeID())
   return `<div class="overview-grid">
     <section class="card focus-card">
       <div class="section-kicker">当前节点</div>
@@ -423,6 +432,10 @@ function statusLabel(s, msg) {
   return labels[s] || s
 }
 
+function selectorSyncLabel(state) {
+  return { syncing: '节点同步中', synced: '节点已同步', failed: '节点同步异常，正在重试' }[state] || ''
+}
+
 function formatTraffic(t) {
   const fmt = n => {
     n = Number(n) || 0
@@ -462,6 +475,7 @@ function formatRuleInfo(rule) {
 
 function renderNodes() {
   const allNodes = state.config?.nodes || []
+  const currentNodeID = activeNodeID()
   const filterBtns = [['all', '全部'], ['hysteria2', 'Hysteria2'], ['vless', 'VLESS'], ['vmess', 'VMess'], ['trojan', 'Trojan'], ['shadowsocks', 'SS'], ['socks', 'SOCKS'], ['http', 'HTTP']]
   const filterHtml = `<div class="node-filters">${filterBtns.map(([id, label]) => {
     const count = id === 'all' ? allNodes.length : allNodes.filter(n => n.protocol === id).length
@@ -484,7 +498,7 @@ function renderNodes() {
   const groupsHtml = sortedKeys.map(protocol => {
     const nodes = groups[protocol]
     const items = nodes.map(n => `
-      <li class="node-item ${state.config.current_node_id === n.id ? 'active' : ''}">
+      <li class="node-item ${currentNodeID === n.id ? 'active' : ''}">
         <input class="node-select" type="checkbox" data-id="${n.id}" ${state.selectedNodes.has(n.id) ? 'checked' : ''} aria-label="选择 ${escapeHtml(n.name)}" />
         <div class="node-info">
           <div class="node-row">
@@ -494,7 +508,7 @@ function renderNodes() {
           <div class="node-health-row">${renderNodeHealth(n.id)}</div>
         </div>
         <div class="node-actions">
-          <button class="btn btn-ghost select-node" data-id="${n.id}" ${state.nodeSwitching ? 'disabled' : ''}>${state.config.current_node_id === n.id ? '当前' : '选择'}</button>
+          <button class="btn btn-ghost select-node" data-id="${n.id}" ${state.nodeSwitching ? 'disabled' : ''}>${currentNodeID === n.id ? '当前' : '选择'}</button>
           <button class="btn btn-ghost test-node" data-id="${n.id}">测试</button>
           <button class="btn btn-ghost export-node" data-id="${n.id}">导出</button>
           <button class="btn btn-danger rm-node" data-id="${n.id}">删除</button>
@@ -537,15 +551,18 @@ async function refreshStatus() {
   if (state.statusRefreshing) return
   state.statusRefreshing = true
   try {
+    const previousNodeID = activeNodeID()
+    const previousSelectorSync = `${state.selectorSyncState}:${state.selectorSyncMessage}`
     const s = await window.go.app.App.GetStatus()
     state.running = s.running
     state.statusState = s.state
     state.statusMessage = s.message
     state.traffic = { up: s.upload_bytes || 0, down: s.download_bytes || 0 }
-    if (s.current_node_id && state.config && state.config.current_node_id !== s.current_node_id) {
-      state.config.current_node_id = s.current_node_id
-      renderApp()
-    }
+    state.runtimeNodeID = s.running ? (s.current_node_id || '') : ''
+    state.selectorSyncState = s.selector_sync_state || 'idle'
+    state.selectorSyncMessage = s.selector_sync_message || ''
+    const selectorSyncChanged = previousSelectorSync !== `${state.selectorSyncState}:${state.selectorSyncMessage}`
+    if (previousNodeID !== activeNodeID() || selectorSyncChanged) renderApp()
     updateStatusView()
   } catch (e) {
     showToast('获取状态失败: ' + e.message, 'error')
@@ -874,11 +891,8 @@ function bindEvents() {
   const applyCaptureSettings = async enabled => {
     const domains = [...new Set(readCaptureDomains())]
     if (enabled && !domains.length) throw new Error('启用分析前请添加域名或关键词')
-    const cfg = JSON.parse(JSON.stringify(state.config))
-    cfg.capture_enabled = enabled
-    cfg.capture_domains = domains
-    await window.go.app.App.SaveConfig(cfg)
-    state.config = cfg
+    await window.go.app.App.SetCaptureSettings(enabled, domains)
+    await refreshConfig()
     state.captureDraft = domains.join('\n')
     state.captureDraftDirty = false
     state.captureEnabledDraft = enabled

@@ -31,13 +31,18 @@ type App struct {
 	operationMu     sync.Mutex
 	trafficMu       sync.RWMutex
 	failoverMu      sync.Mutex
+	selectorSyncMu  sync.Mutex
+	selectorSyncEnd context.CancelFunc
+	selectorSyncSeq uint64
+	selectorState   string
+	selectorMessage string
 	failoverNext    time.Time
 	failoverBackoff time.Duration
 	uploadRate      uint64
 	downloadRate    uint64
 }
 
-const clashAPIBaseURL = "http://127.0.0.1:9090"
+var clashAPIBaseURL = "http://127.0.0.1:9090"
 
 func New() *App { return &App{} }
 
@@ -79,6 +84,7 @@ func (a *App) startupCore(ctx context.Context) {
 // Shutdown stops the proxy before Wails tears down the application process.
 func (a *App) Shutdown(ctx context.Context) {
 	a.shutdownOnce.Do(func() {
+		a.stopSelectorSync()
 		if a.runtime != nil {
 			_ = a.runtime.Stop()
 		}
@@ -102,13 +108,15 @@ func (a *App) initPaths() {
 }
 
 type StatusDTO struct {
-	State         string `json:"state"`
-	Message       string `json:"message"`
-	Running       bool   `json:"running"`
-	UploadBytes   uint64 `json:"upload_bytes"`
-	DownloadBytes uint64 `json:"download_bytes"`
-	Selector      string `json:"selector,omitempty"`
-	CurrentNodeID string `json:"current_node_id,omitempty"`
+	State               string `json:"state"`
+	Message             string `json:"message"`
+	Running             bool   `json:"running"`
+	UploadBytes         uint64 `json:"upload_bytes"`
+	DownloadBytes       uint64 `json:"download_bytes"`
+	Selector            string `json:"selector,omitempty"`
+	CurrentNodeID       string `json:"current_node_id,omitempty"`
+	SelectorSyncState   string `json:"selector_sync_state,omitempty"`
+	SelectorSyncMessage string `json:"selector_sync_message,omitempty"`
 }
 
 type DiagnosticsDTO struct {
@@ -230,6 +238,7 @@ func (a *App) GetStatus() StatusDTO {
 	up, down := a.uploadRate, a.downloadRate
 	a.trafficMu.RUnlock()
 	result := StatusDTO{State: string(state), Message: message, Running: state == core.StateRunning, UploadBytes: up, DownloadBytes: down}
+	result.SelectorSyncState, result.SelectorSyncMessage = a.selectorSyncStatus()
 	if a.manager == nil {
 		if result.Message == "" {
 			result.Message = "配置管理器未初始化"
@@ -340,6 +349,16 @@ func (a *App) SaveConfig(cfg config.Config) error {
 	}, true)
 }
 
+func (a *App) SetCaptureSettings(enabled bool, domains []string) error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	return a.mutateConfigAndSyncLocked(func(_ config.Config, next *config.Config) error {
+		next.CaptureEnabled = enabled
+		next.CaptureDomains = append([]string(nil), domains...)
+		return nil
+	}, true)
+}
+
 func (a *App) Start() error {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
@@ -375,7 +394,11 @@ func (a *App) startWithConfigLocked(cfg config.Config) error {
 	if !health.Healthy {
 		return fmt.Errorf("节点不可用: %s", health.Message)
 	}
-	return a.runtime.Start(a.ctx, cfg)
+	if err := a.runtime.Start(a.ctx, cfg); err != nil {
+		return err
+	}
+	a.startSelectorSync(cfg.CurrentNodeID)
+	return nil
 }
 
 func (a *App) mutateConfigAndSyncLocked(mutate func(before config.Config, next *config.Config) error, reload bool) error {
@@ -412,6 +435,7 @@ func (a *App) applyRuntimeConfigLocked(next config.Config, wasRunning, reload bo
 		if err := a.runtime.Reload(a.ctx, next); err != nil {
 			return fmt.Errorf("重载运行配置失败: %w", err)
 		}
+		a.startSelectorSync(next.CurrentNodeID)
 		return nil
 	}
 	if _, err := a.runtime.SyncConfig(next); err != nil {
@@ -430,8 +454,14 @@ func (a *App) rollbackConfigAndRuntimeLocked(before config.Config, wasRunning bo
 			rollbackErrs = append(rollbackErrs, fmt.Errorf("恢复运行配置失败: %w", err))
 		}
 	}
-	if wasRunning && !a.runtime.State.IsRunning() {
-		if err := a.startWithConfigLocked(before); err != nil {
+	if wasRunning {
+		if a.runtime.State.IsRunning() {
+			if err := a.runtime.Reload(a.ctx, before); err != nil {
+				rollbackErrs = append(rollbackErrs, fmt.Errorf("恢复运行配置失败: %w", err))
+			} else {
+				a.startSelectorSync(before.CurrentNodeID)
+			}
+		} else if err := a.startWithConfigLocked(before); err != nil {
 			rollbackErrs = append(rollbackErrs, fmt.Errorf("恢复运行节点失败: %w", err))
 		}
 	}
@@ -473,6 +503,7 @@ func (a *App) stopLocked() error {
 	if a.runtime == nil {
 		return errors.New("运行时未初始化")
 	}
+	a.stopSelectorSync()
 	return a.runtime.Stop()
 }
 
@@ -611,7 +642,11 @@ func (a *App) reloadIfRunningLocked() error {
 	if err != nil {
 		return err
 	}
-	return a.runtime.Reload(a.ctx, cfg)
+	if err := a.runtime.Reload(a.ctx, cfg); err != nil {
+		return err
+	}
+	a.startSelectorSync(cfg.CurrentNodeID)
+	return nil
 }
 
 func (a *App) SelectNode(id string) error {
@@ -653,19 +688,14 @@ func (a *App) selectNodeLocked(id string) error {
 	selectorActive := running || apiRunning
 	switchedSelector := false
 	if selectorActive && previousID != id {
+		if running {
+			a.stopSelectorSync()
+		}
 		if err := switchSelector(id); err != nil {
-			if !running {
-				return err
+			if running {
+				a.startSelectorSync(previousID)
 			}
-			// Without a live selector update, restart the runtime with the
-			// selected node instead of leaving the old outbound active.
-			return a.mutateConfigAndSyncLocked(func(before config.Config, next *config.Config) error {
-				if before.CurrentNodeID != previousID {
-					return errors.New("节点配置已变化，请重试")
-				}
-				next.CurrentNodeID = id
-				return nil
-			}, true)
+			return err
 		}
 		switchedSelector = true
 	}
@@ -678,7 +708,13 @@ func (a *App) selectNodeLocked(id string) error {
 	})
 	if err != nil {
 		if switchedSelector && previousID != "" {
-			_ = switchSelector(previousID)
+			if switchErr := switchSelector(previousID); switchErr != nil {
+				if running {
+					a.startSelectorSync(previousID)
+				}
+			} else if running {
+				a.setSelectorSyncStatus("synced", "")
+			}
 		}
 		return err
 	}
@@ -690,19 +726,31 @@ func (a *App) selectNodeLocked(id string) error {
 		if switchedSelector && previousID != "" {
 			if switchErr := switchSelector(previousID); switchErr != nil {
 				rollbackErrs = append(rollbackErrs, fmt.Errorf("恢复节点选择失败: %w", switchErr))
+				if running {
+					a.startSelectorSync(previousID)
+				}
+			} else if running {
+				a.setSelectorSyncStatus("synced", "")
 			}
 		}
 		return errors.Join(rollbackErrs...)
+	}
+	if running {
+		a.setSelectorSyncStatus("synced", "")
 	}
 	return nil
 }
 
 func switchSelector(id string) error {
+	return switchSelectorContext(context.Background(), id)
+}
+
+func switchSelectorContext(ctx context.Context, id string) error {
 	body, err := json.Marshal(map[string]string{"name": "node-" + id})
 	if err != nil {
 		return err
 	}
-	req, err := http.NewRequest(http.MethodPut, clashAPIBaseURL+"/proxies/proxy", bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(ctx, http.MethodPut, clashAPIBaseURL+"/proxies/proxy", bytes.NewReader(body))
 	if err != nil {
 		return err
 	}
@@ -717,18 +765,125 @@ func switchSelector(id string) error {
 		return fmt.Errorf("无缝切换节点失败: HTTP %d", resp.StatusCode)
 	}
 	for attempt := 0; attempt < 8; attempt++ {
-		current, err := currentSelector()
+		current, err := currentSelectorContext(ctx)
 		if err == nil && current == "node-"+id {
 			return nil
 		}
-		time.Sleep(150 * time.Millisecond)
+		select {
+		case <-ctx.Done():
+			return ctx.Err()
+		case <-time.After(150 * time.Millisecond):
+		}
 	}
 	return fmt.Errorf("无缝切换节点未确认生效: node-%s", id)
 }
 
+func (a *App) startSelectorSync(id string) {
+	if id == "" {
+		a.stopSelectorSync()
+		return
+	}
+	baseCtx := a.ctx
+	if baseCtx == nil {
+		baseCtx = context.Background()
+	}
+	ctx, cancel := context.WithCancel(baseCtx)
+	a.selectorSyncMu.Lock()
+	if a.selectorSyncEnd != nil {
+		a.selectorSyncEnd()
+	}
+	a.selectorSyncSeq++
+	seq := a.selectorSyncSeq
+	a.selectorSyncEnd = cancel
+	a.selectorState = "syncing"
+	a.selectorMessage = ""
+	a.selectorSyncMu.Unlock()
+	go func() {
+		defer cancel()
+		a.runSelectorSync(ctx, seq, id)
+	}()
+}
+
+func (a *App) runSelectorSync(ctx context.Context, seq uint64, id string) {
+	delays := []time.Duration{100 * time.Millisecond, 200 * time.Millisecond, 500 * time.Millisecond, time.Second}
+	for attempt := 0; ; attempt++ {
+		if ctx.Err() != nil {
+			return
+		}
+		if a.runtime == nil || a.runtime.State == nil || !a.runtime.State.IsRunning() {
+			a.updateSelectorSyncStatus(seq, "idle", "")
+			return
+		}
+		if err := switchSelectorContext(ctx, id); err == nil {
+			a.updateSelectorSyncStatus(seq, "synced", "")
+			return
+		} else {
+			state := "syncing"
+			if attempt >= 3 {
+				state = "failed"
+			}
+			if !a.updateSelectorSyncStatus(seq, state, err.Error()) {
+				return
+			}
+		}
+		delay := delays[len(delays)-1]
+		if attempt < len(delays) {
+			delay = delays[attempt]
+		}
+		timer := time.NewTimer(delay)
+		select {
+		case <-ctx.Done():
+			timer.Stop()
+			return
+		case <-timer.C:
+		}
+	}
+}
+
+func (a *App) updateSelectorSyncStatus(seq uint64, state, message string) bool {
+	a.selectorSyncMu.Lock()
+	defer a.selectorSyncMu.Unlock()
+	if seq != a.selectorSyncSeq {
+		return false
+	}
+	a.selectorState = state
+	a.selectorMessage = message
+	return true
+}
+
+func (a *App) setSelectorSyncStatus(state, message string) {
+	a.selectorSyncMu.Lock()
+	defer a.selectorSyncMu.Unlock()
+	if a.selectorSyncEnd != nil {
+		a.selectorSyncEnd()
+	}
+	a.selectorSyncSeq++
+	a.selectorSyncEnd = nil
+	a.selectorState = state
+	a.selectorMessage = message
+}
+
+func (a *App) stopSelectorSync() {
+	a.setSelectorSyncStatus("idle", "")
+}
+
+func (a *App) selectorSyncStatus() (string, string) {
+	a.selectorSyncMu.Lock()
+	defer a.selectorSyncMu.Unlock()
+	return a.selectorState, a.selectorMessage
+}
+
 func currentSelector() (string, error) {
+	return currentSelectorContext(context.Background())
+}
+
+func currentSelectorContext(ctx context.Context) (string, error) {
 	client := &http.Client{Timeout: 500 * time.Millisecond}
-	resp, err := client.Get(clashAPIBaseURL + "/proxies/proxy")
+	req, err := http.NewRequestWithContext(ctx, http.MethodGet, clashAPIBaseURL+"/proxies/proxy", nil)
+	if err != nil {
+		return "", err
+	}
+	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}

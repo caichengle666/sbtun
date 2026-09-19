@@ -67,6 +67,37 @@ func TestGetStatusDoesNotRewriteConfiguration(t *testing.T) {
 	}
 }
 
+func TestSetCaptureSettingsPreservesOtherConfiguration(t *testing.T) {
+	dir := t.TempDir()
+	manager := config.NewManager(filepath.Join(dir, "config.json"))
+	cfg := config.Default()
+	cfg.RoutingMode = config.RoutingCustom
+	cfg.Nodes = []config.Node{{ID: "one", Name: "one", Protocol: "socks", Server: "127.0.0.1", Port: 1080}}
+	cfg.CurrentNodeID = "one"
+	cfg.CustomRules = []config.Rule{{MatchType: "domain_keyword", Value: "example", Action: "proxy"}}
+	if err := manager.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+
+	a := New()
+	a.manager = manager
+	a.runtime = NewRuntimeCoordinator(filepath.Join(dir, "runtime-data"), "sing-box")
+	if err := a.SetCaptureSettings(true, []string{"example.com"}); err != nil {
+		t.Fatal(err)
+	}
+
+	got, err := manager.Load()
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !got.CaptureEnabled || len(got.CaptureDomains) != 1 || got.CaptureDomains[0] != "example.com" {
+		t.Fatalf("capture settings=%t domains=%v", got.CaptureEnabled, got.CaptureDomains)
+	}
+	if got.CurrentNodeID != cfg.CurrentNodeID || got.RoutingMode != cfg.RoutingMode || len(got.CustomRules) != 1 || got.CustomRules[0] != cfg.CustomRules[0] {
+		t.Fatalf("unrelated configuration changed: %+v", got)
+	}
+}
+
 func TestUninitializedAppReturnsErrors(t *testing.T) {
 	a := New()
 	_ = a.GetStatus()

@@ -103,6 +103,9 @@ textarea.input { resize: vertical; }
 .badge { display: inline-block; padding: 4px 8px; border-radius: 6px; color: #94a3b8; background: #25284a; font-size: 11px; }
 .badge.proxy { color: #7dd3fc; background: #1e3a5f; }
 .badge.direct { color: #86efac; background: #1e4620; }
+.selector-sync.syncing { color: #7dd3fc; background: #1e3a5f; }
+.selector-sync.synced { color: #86efac; background: #1e4620; }
+.selector-sync.failed { color: #fda4af; background: #4c1d2a; }
 .mode-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .mode-btn { min-height: 76px; padding: 13px; border: 1px solid #25284a; border-radius: 8px; color: #94a3b8; background: #0d0e15; text-align: left; cursor: pointer; }
 .mode-btn:hover { border-color: #d946ef; }
