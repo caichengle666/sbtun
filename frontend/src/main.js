@@ -3,6 +3,10 @@ import './style.css'
 
 const app = document.querySelector('#app')
 const initialTheme = localStorage.getItem('sbtun-theme') === 'light' ? 'light' : 'dark'
+const captureUIStorageKey = 'sbtun-capture-ui'
+const savedCaptureUI = (() => {
+  try { return JSON.parse(localStorage.getItem(captureUIStorageKey) || '{}') } catch { return {} }
+})()
 
 const state = {
   theme: initialTheme,
@@ -32,9 +36,16 @@ const state = {
   captureDraftDirty: false,
   captureEnabledDraft: false,
   captureEnabledDirty: false,
-  selectedCaptureID: 0,
+  selectedCaptureID: Number(savedCaptureUI.selectedCaptureID) || 0,
   selectedCaptureFlow: null,
-  view: 'overview',
+  captureSectionOpen: {
+    headers: savedCaptureUI.captureSectionOpen?.headers !== false,
+    bodies: savedCaptureUI.captureSectionOpen?.bodies !== false,
+  },
+  captureDetailTab: savedCaptureUI.captureDetailTab || 'overview',
+  captureSearch: savedCaptureUI.captureSearch || '',
+  captureFilter: savedCaptureUI.captureFilter || 'all',
+  view: savedCaptureUI.view || 'overview',
   statusRefreshing: false,
   configRefreshing: false,
 }
@@ -337,8 +348,19 @@ function renderCaptureDetail(flow) {
   return `<div class="capture-detail-head"><span class="capture-method">${escapeHtml(flow.method)}</span><strong>${escapeHtml(flow.url)}</strong></div>
     <div class="capture-meta"><span>HTTP ${escapeHtml(flow.protocol)}</span><span>状态 ${flow.status_code || '—'}</span><span>${flow.duration_ms || 0} ms</span><span>↑ ${formatBytes(flow.request_bytes)} ↓ ${formatBytes(flow.response_bytes)}</span></div>
     ${flow.error ? `<div class="capture-error">${escapeHtml(flow.error)}</div>` : ''}
-    <details class="capture-section" open><summary>Headers</summary><div class="capture-headers"><section><h2>请求头</h2>${renderHeaders(flow.request_headers)}</section><section><h2>响应头</h2>${renderHeaders(flow.response_headers)}</section></div></details>
-    <details class="capture-section" open><summary>Body</summary><div class="capture-bodies"><section><h2>请求正文${flow.request_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.request_body, flow.request_encoding)}</section><section><h2>响应正文${flow.response_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.response_body, flow.response_encoding)}</section></div></details>`
+    <details class="capture-section" data-capture-section="headers" ${state.captureSectionOpen.headers ? 'open' : ''}><summary>Headers</summary><div class="capture-headers"><section><h2>请求头</h2>${renderHeaders(flow.request_headers)}</section><section><h2>响应头</h2>${renderHeaders(flow.response_headers)}</section></div></details>
+    <details class="capture-section" data-capture-section="bodies" ${state.captureSectionOpen.bodies ? 'open' : ''}><summary>Body</summary><div class="capture-bodies"><section><h2>请求正文${flow.request_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.request_body, flow.request_encoding)}</section><section><h2>响应正文${flow.response_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.response_body, flow.response_encoding)}</section></div></details>`
+}
+
+function saveCaptureUIState() {
+  localStorage.setItem(captureUIStorageKey, JSON.stringify({
+    selectedCaptureID: state.selectedCaptureID,
+    captureSectionOpen: state.captureSectionOpen,
+    captureDetailTab: state.captureDetailTab,
+    captureSearch: state.captureSearch,
+    captureFilter: state.captureFilter,
+    view: state.view,
+  }))
 }
 
 function renderCaptureBody(body, encoding) {
@@ -648,6 +670,7 @@ function bindEvents() {
   document.querySelectorAll('[data-view]').forEach(item => {
     item.addEventListener('click', async () => {
       state.view = item.dataset.view
+      saveCaptureUIState()
       if (state.view === 'capture') await refreshCapture()
       renderApp()
     })
@@ -885,9 +908,14 @@ function bindEvents() {
   })
   document.querySelectorAll('[data-capture-id]').forEach(row => row.addEventListener('click', async () => {
     state.selectedCaptureID = Number(row.dataset.captureId)
+    saveCaptureUIState()
     try { state.selectedCaptureFlow = await window.go.app.App.GetCaptureFlow(state.selectedCaptureID) }
     catch (e) { return showToast(e.message || String(e), 'error') }
     renderApp()
+  }))
+  document.querySelectorAll('[data-capture-section]').forEach(section => section.addEventListener('toggle', () => {
+    state.captureSectionOpen[section.dataset.captureSection] = section.open
+    saveCaptureUIState()
   }))
 
   document.querySelectorAll('.select-node').forEach(btn => {
