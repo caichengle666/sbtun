@@ -5,8 +5,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
-	"strings"
 	"strconv"
+	"strings"
 
 	"github.com/caichengle666/sbtun/config"
 )
@@ -51,7 +51,7 @@ func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 	}
 	inbounds := []map[string]any{{
 		"type": "tun", "tag": "tun-in",
-		"address":    []string{"172.18.0.1/30"},
+		"address":    []string{"172.18.0.1/30", "fdfe:dcba:9876::1/126"},
 		"auto_route": true, "strict_route": false, "stack": "system",
 	}}
 	if cfg.CaptureEnabled && len(normalizeCaptureDomains(cfg.CaptureDomains)) > 0 {
@@ -61,9 +61,9 @@ func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 		})
 	}
 	result := RuntimeConfig{
-		Schema: "https://sing-box.sagernet.org/schema.json",
-		Log:    map[string]any{"level": "info", "timestamp": true},
-		DNS:    buildDNS(cfg.DNSMode, cfg.RoutingMode),
+		Schema:    "https://sing-box.sagernet.org/schema.json",
+		Log:       map[string]any{"level": "info", "timestamp": true},
+		DNS:       buildDNS(cfg.DNSMode, cfg.RoutingMode),
 		Inbounds:  inbounds,
 		Outbounds: outbounds,
 		Route:     routeForMode(cfg.RoutingMode, cfg.CustomRules, cfg.CaptureEnabled, cfg.CaptureDomains, exeDir),
@@ -385,15 +385,15 @@ func parseBandwidth(s string) int {
 
 func addSetting(out map[string]any, key, value string) {
 	switch key {
-case "uuid", "password", "method", "flow", "security", "network", "username", "version", "packet_encoding", "plugin", "plugin_opts", "path":
+	case "uuid", "password", "method", "flow", "security", "network", "username", "version", "packet_encoding", "plugin", "plugin_opts", "path":
 		out[key] = value
-case "alter_id":
+	case "alter_id":
 		if v, err := strconv.Atoi(value); err == nil {
 			out[key] = v
 		} else {
 			out[key] = value
 		}
-case "server_ports", "hop_interval":
+	case "server_ports", "hop_interval":
 		out[key] = value
 	case "disable_path_mtu_discovery", "udp_over_tcp", "multiplex":
 		if strings.EqualFold(value, "true") || value == "1" {
