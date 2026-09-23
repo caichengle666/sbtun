@@ -16,6 +16,7 @@ import (
 	"strings"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"github.com/elazarl/goproxy"
 )
@@ -190,6 +191,21 @@ func TestDomainMatchingIncludesSubdomains(t *testing.T) {
 	}
 	if matchesDomain("www.example.com:443", []string{"google"}) {
 		t.Fatal("unrelated keyword should not match")
+	}
+}
+
+func TestTLSBypassExpires(t *testing.T) {
+	manager := NewManager(t.TempDir(), "127.0.0.1:0", "")
+	manager.markTLSBypass("api.example.com:443")
+	if !manager.isTLSBypassed("api.example.com") {
+		t.Fatal("TLS bypass should be active")
+	}
+
+	manager.mu.Lock()
+	manager.tlsBypass["api.example.com"] = time.Now().Add(-time.Second)
+	manager.mu.Unlock()
+	if manager.isTLSBypassed("api.example.com") {
+		t.Fatal("expired TLS bypass should be removed")
 	}
 }
 

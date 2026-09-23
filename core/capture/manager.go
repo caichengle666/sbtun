@@ -75,6 +75,10 @@ type pendingFlow struct {
 	requestBody []byte
 }
 
+type captureConnect struct {
+	host string
+}
+
 type Manager struct {
 	mu        sync.RWMutex
 	workDir   string
@@ -89,7 +93,10 @@ type Manager struct {
 	loaded    bool
 	dirty     bool
 	lastError string
+	tlsBypass map[string]time.Time
 }
+
+const tlsBypassTTL = 10 * time.Minute
 
 func NewManager(workDir, address, upstream string) *Manager {
 	return &Manager{workDir: workDir, address: address, upstream: upstream}
@@ -121,6 +128,12 @@ func (m *Manager) Start(ctx context.Context, domains []string) error {
 	proxy.AllowHTTP2 = true
 	proxy.Verbose = false
 	proxy.Tr = m.transport
+	proxy.ConnectionErrHandler = func(_ io.Writer, proxyCtx *goproxy.ProxyCtx, _ error) {
+		connect, ok := proxyCtx.UserData.(*captureConnect)
+		if ok {
+			m.markTLSBypass(connect.host)
+		}
+	}
 	if proxy.Tr == nil {
 		transport := &http.Transport{ForceAttemptHTTP2: true}
 		if m.upstream != "" {
@@ -137,11 +150,16 @@ func (m *Manager) Start(ctx context.Context, domains []string) error {
 		proxy.ConnectDial = proxy.NewConnectDialToProxy("http://" + m.upstream)
 	}
 	mitm := &goproxy.ConnectAction{Action: goproxy.ConnectMitm, TLSConfig: tlsConfigFromClientSNI(&ca)}
-	proxy.OnRequest().HandleConnectFunc(func(host string, _ *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+	proxy.OnRequest().HandleConnectFunc(func(host string, proxyCtx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+		hostname := hostname(host)
+		if m.isTLSBypassed(hostname) {
+			return goproxy.OkConnect, host
+		}
 		// CONNECT may contain only an IP while the real domain is available in
 		// the later TLS SNI. Keep MITM for IP targets so SNI-based matching can
 		// still work; named hosts are restricted to configured patterns.
-		if matchesDomain(host, domains) || net.ParseIP(hostname(host)) != nil {
+		if matchesDomain(host, domains) || net.ParseIP(hostname) != nil {
+			proxyCtx.UserData = &captureConnect{host: hostname}
 			return mitm, host
 		}
 		return goproxy.OkConnect, host
@@ -280,6 +298,37 @@ func (m *Manager) errorMessage() string {
 	m.mu.RLock()
 	defer m.mu.RUnlock()
 	return m.lastError
+}
+
+func (m *Manager) markTLSBypass(host string) {
+	host = hostname(host)
+	if host == "" {
+		return
+	}
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.tlsBypass == nil {
+		m.tlsBypass = make(map[string]time.Time)
+	}
+	m.tlsBypass[host] = time.Now().Add(tlsBypassTTL)
+}
+
+func (m *Manager) isTLSBypassed(host string) bool {
+	host = hostname(host)
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.tlsBypass == nil {
+		return false
+	}
+	expires, ok := m.tlsBypass[host]
+	if !ok {
+		return false
+	}
+	if !time.Now().Before(expires) {
+		delete(m.tlsBypass, host)
+		return false
+	}
+	return true
 }
 
 func (m *Manager) InstallCertificate() error {
