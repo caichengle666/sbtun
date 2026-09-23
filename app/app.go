@@ -38,11 +38,14 @@ type App struct {
 	selectorMessage string
 	failoverNext    time.Time
 	failoverBackoff time.Duration
+	failoverBlocked map[string]time.Time
 	uploadRate      uint64
 	downloadRate    uint64
 }
 
 var clashAPIBaseURL = "http://127.0.0.1:9090"
+
+const failoverCooldown = 30 * time.Second
 
 func New() *App { return &App{} }
 
@@ -938,14 +941,15 @@ func (a *App) autoSwitchNode() {
 	if !ok || a.testNodeHealthy(current) {
 		return
 	}
-	if candidate, ok := firstHealthyReplacement(cfg.Nodes, current.ID, a.testNodeHealthy); ok {
+	a.blockFailoverNode(current.ID)
+	if candidate, ok := firstHealthyReplacementWithCooldown(cfg.Nodes, current.ID, a.isFailoverNodeBlocked, a.testNodeHealthy); ok {
 		a.operationMu.Lock()
 		defer a.operationMu.Unlock()
 		latest, err := a.manager.Load()
 		if err != nil || latest.CurrentNodeID != current.ID || !a.runtime.State.IsRunning() {
 			return
 		}
-		if candidate, ok = firstHealthyReplacement(latest.Nodes, latest.CurrentNodeID, a.testNodeHealthy); ok {
+		if candidate, ok = firstHealthyReplacementWithCooldown(latest.Nodes, latest.CurrentNodeID, a.isFailoverNodeBlocked, a.testNodeHealthy); ok {
 			if err := a.selectNodeLocked(candidate.ID); err != nil {
 				fmt.Printf("自动切换节点失败（%s）: %v\n", candidate.ID, err)
 				a.failoverMu.Lock()
@@ -968,13 +972,46 @@ func (a *App) autoSwitchNode() {
 }
 
 func firstHealthyReplacement(nodes []config.Node, currentID string, check func(config.Node) bool) (config.Node, bool) {
+	return firstHealthyReplacementWithCooldown(nodes, currentID, nil, check)
+}
+
+func firstHealthyReplacementWithCooldown(nodes []config.Node, currentID string, blocked func(string) bool, check func(config.Node) bool) (config.Node, bool) {
 	for _, candidate := range nodes {
-		if candidate.ID == currentID || !check(candidate) {
+		if candidate.ID == currentID || (blocked != nil && blocked(candidate.ID)) || !check(candidate) {
 			continue
 		}
 		return candidate, true
 	}
 	return config.Node{}, false
+}
+
+func (a *App) blockFailoverNode(id string) {
+	if id == "" {
+		return
+	}
+	a.failoverMu.Lock()
+	defer a.failoverMu.Unlock()
+	if a.failoverBlocked == nil {
+		a.failoverBlocked = make(map[string]time.Time)
+	}
+	a.failoverBlocked[id] = time.Now().Add(failoverCooldown)
+}
+
+func (a *App) isFailoverNodeBlocked(id string) bool {
+	a.failoverMu.Lock()
+	defer a.failoverMu.Unlock()
+	if a.failoverBlocked == nil {
+		return false
+	}
+	expires, ok := a.failoverBlocked[id]
+	if !ok {
+		return false
+	}
+	if !time.Now().Before(expires) {
+		delete(a.failoverBlocked, id)
+		return false
+	}
+	return true
 }
 
 func testNodePort(node config.Node) bool {

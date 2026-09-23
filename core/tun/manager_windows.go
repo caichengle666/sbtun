@@ -24,8 +24,11 @@ func cleanupRoutesPlatform(name string) error {
 		// interface index also removes routes without relying on that address.
 		_ = runWindows("route", "DELETE", "0.0.0.0", "MASK", "0.0.0.0", "IF", index)
 		_ = runWindows("route", "DELETE", "172.18.0.0", "MASK", "255.255.255.252", "IF", index)
+		_ = runWindows("netsh", "interface", "ipv6", "delete", "route", "::/0", "interface="+index)
+		_ = runWindows("netsh", "interface", "ipv6", "delete", "route", "fdfe:dcba:9876::/126", "interface="+index)
 	}
 	_ = runWindows("netsh", "interface", "ipv4", "set", "dnsservers", "name="+name, "source=dhcp")
+	_ = runWindows("netsh", "interface", "ipv6", "delete", "address", "interface="+name, "address=fdfe:dcba:9876::1")
 	return nil
 }
 
