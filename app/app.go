@@ -108,6 +108,7 @@ func (a *App) initPaths() {
 }
 
 type StatusDTO struct {
+	Version             string `json:"version"`
 	State               string `json:"state"`
 	Message             string `json:"message"`
 	Running             bool   `json:"running"`
@@ -231,13 +232,13 @@ func (a *App) UninstallCaptureCertificate() error {
 
 func (a *App) GetStatus() StatusDTO {
 	if a.runtime == nil || a.runtime.State == nil {
-		return StatusDTO{State: string(core.StateStopped), Message: "运行时未初始化"}
+		return StatusDTO{Version: Version(), State: string(core.StateStopped), Message: "运行时未初始化"}
 	}
 	state, message := a.runtime.State.Get()
 	a.trafficMu.RLock()
 	up, down := a.uploadRate, a.downloadRate
 	a.trafficMu.RUnlock()
-	result := StatusDTO{State: string(state), Message: message, Running: state == core.StateRunning, UploadBytes: up, DownloadBytes: down}
+	result := StatusDTO{Version: Version(), State: string(state), Message: message, Running: state == core.StateRunning, UploadBytes: up, DownloadBytes: down}
 	result.SelectorSyncState, result.SelectorSyncMessage = a.selectorSyncStatus()
 	if a.manager == nil {
 		if result.Message == "" {

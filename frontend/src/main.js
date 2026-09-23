@@ -7,6 +7,7 @@ const initialTheme = localStorage.getItem('sbtun-theme') === 'light' ? 'light' :
 const state = {
   theme: initialTheme,
   running: false,
+  version: '',
   statusState: 'stopped',
   statusMessage: '',
   runtimeNodeID: '',
@@ -170,6 +171,7 @@ function render() {
         <div class="sidebar-status">
           <span class="dot ${dotClass(state.statusState)}"></span>
           <span>${statusLabel(state.statusState, state.statusMessage)}</span>
+          ${state.version ? `<span class="app-version" title="sbtun 版本">v${escapeHtml(state.version)}</span>` : ''}
         </div>
       </aside>
 
@@ -554,6 +556,7 @@ async function refreshStatus() {
     const previousNodeID = activeNodeID()
     const previousSelectorSync = `${state.selectorSyncState}:${state.selectorSyncMessage}`
     const s = await window.go.app.App.GetStatus()
+    state.version = s.version || state.version
     state.running = s.running
     state.statusState = s.state
     state.statusMessage = s.message
