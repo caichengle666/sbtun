@@ -10,6 +10,7 @@ import (
 	"fmt"
 	"os"
 	"os/signal"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -253,7 +254,7 @@ func printCommandHelp(command string, args []string) bool {
 		usage = "sbtun rules [list|update <id>|update-all]"
 	case "capture":
 		if len(args) > 0 && args[0] == "cert" {
-			usage = "sbtun capture cert <install|uninstall>"
+			usage = certificateCLIUsage()
 		} else {
 			usage = "sbtun capture <run|enable|disable|status|list|show|clear|cert>"
 		}
@@ -374,8 +375,16 @@ func validateCaptureArgs(args []string) error {
 		}
 		return nil
 	case "cert":
-		if len(args) != 2 || args[1] != "install" && args[1] != "uninstall" {
-			return errors.New("用法: sbtun capture cert <install|uninstall>")
+		if len(args) < 2 || len(args) > 3 || args[1] != "install" && args[1] != "uninstall" {
+			return errors.New("用法: " + certificateCLIUsage())
+		}
+		if len(args) == 3 {
+			if runtime.GOOS != "windows" {
+				return errors.New("当前系统只支持系统级证书安装，不需要指定 user")
+			}
+			if args[2] != "user" && args[2] != "system" {
+				return errors.New("证书级别必须是 user 或 system")
+			}
 		}
 		return nil
 	default:
@@ -435,7 +444,7 @@ func printHelp() {
 		{"capture list", "列出已保存请求"},
 		{"capture show <ID>", "查看一条已保存请求的完整内容"},
 		{"capture clear", "删除已保存请求"},
-		{"capture cert <install|uninstall>", "安装或卸载抓包根证书"},
+		{"capture cert <install|uninstall> [user|system]", "安装或卸载抓包根证书，默认系统级"},
 	})
 	printHelpGroup("其他", []helpEntry{
 		{"help", "显示帮助"},
@@ -556,9 +565,13 @@ func runCaptureCommand(application *app.App, args []string) error {
 				break
 			}
 		}
-		fmt.Printf("启用: %t\n运行: %t\n抓包规则: %s\n已保存请求: %d\n证书已安装: %t\n存储文件: %s\n",
+		certificateLevel := status.CertificateLevel
+		if certificateLevel == "" {
+			certificateLevel = "未安装"
+		}
+		fmt.Printf("启用: %t\n运行: %t\n抓包规则: %s\n已保存请求: %d\n证书级别: %s\n存储文件: %s\n",
 			cfg.CaptureEnabled, status.Running, rules, status.FlowCount,
-			status.CertificateInstalled, status.StoragePath)
+			certificateLevel, status.StoragePath)
 		if status.Message != "" {
 			fmt.Printf("状态信息: %s\n", status.Message)
 		}
@@ -602,23 +615,27 @@ func runCaptureCommand(application *app.App, args []string) error {
 		return nil
 	case "cert":
 		if len(args) < 2 {
-			return fmt.Errorf("用法: sbtun capture cert <install|uninstall>")
+			return fmt.Errorf("用法: %s", certificateCLIUsage())
+		}
+		level := "system"
+		if len(args) >= 3 {
+			level = args[2]
 		}
 		switch args[1] {
 		case "install":
-			if err := application.InstallCaptureCertificate(); err != nil {
+			if err := application.InstallCaptureCertificate(level); err != nil {
 				return err
 			}
-			fmt.Println("抓包根证书已安装")
+			fmt.Printf("抓包根证书已安装（%s）\n", level)
 			return nil
 		case "uninstall":
-			if err := application.UninstallCaptureCertificate(); err != nil {
+			if err := application.UninstallCaptureCertificate(level); err != nil {
 				return err
 			}
-			fmt.Println("抓包根证书已卸载")
+			fmt.Printf("抓包根证书已卸载（%s）\n", level)
 			return nil
 		default:
-			return fmt.Errorf("用法: sbtun capture cert <install|uninstall>")
+			return fmt.Errorf("用法: %s", certificateCLIUsage())
 		}
 	default:
 		return fmt.Errorf("未知抓包命令: %s", args[0])
@@ -682,6 +699,13 @@ func listNodes(application *app.App) error {
 	}
 	fmt.Printf("当前节点: %s\n", currentID)
 	return nil
+}
+
+func certificateCLIUsage() string {
+	if runtime.GOOS == "windows" {
+		return "sbtun capture cert <install|uninstall> [user|system]"
+	}
+	return "sbtun capture cert <install|uninstall>"
 }
 
 func showNodeInfo(application *app.App, indexArg string) error {

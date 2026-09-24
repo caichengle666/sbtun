@@ -63,6 +63,10 @@ type Status struct {
 	Address              string `json:"address"`
 	CertificatePath      string `json:"certificate_path"`
 	CertificateInstalled bool   `json:"certificate_installed"`
+	UserCertificate      bool   `json:"user_certificate_installed"`
+	SystemCertificate    bool   `json:"system_certificate_installed"`
+	UserCertificateSupported bool `json:"user_certificate_supported"`
+	CertificateLevel     string `json:"certificate_level,omitempty"`
 	StoragePath          string `json:"storage_path"`
 	FlowCount            int    `json:"flow_count"`
 	MaxFlows             int    `json:"max_flows"`
@@ -271,7 +275,8 @@ func (m *Manager) Stop() error {
 
 func (m *Manager) Status(enabled bool) Status {
 	m.mu.RLock()
-	_, markerErr := os.Stat(m.installMarkerPath())
+	_, systemMarkerErr := os.Stat(m.installMarkerPath("system"))
+	_, userMarkerErr := os.Stat(m.installMarkerPath("user"))
 	address := m.address
 	if m.listener != nil {
 		address = m.listener.Addr().String()
@@ -289,7 +294,10 @@ func (m *Manager) Status(enabled bool) Status {
 	}
 	return Status{
 		Enabled: enabled, Running: running, Address: address,
-		CertificatePath: m.certPath(), CertificateInstalled: markerErr == nil,
+		CertificatePath: m.certPath(), CertificateInstalled: systemMarkerErr == nil || userMarkerErr == nil,
+		UserCertificate: userMarkerErr == nil, SystemCertificate: systemMarkerErr == nil,
+		UserCertificateSupported: userCertificateSupported(),
+		CertificateLevel: certificateLevel(systemMarkerErr == nil, userMarkerErr == nil),
 		StoragePath: m.storagePath(), FlowCount: m.flowCount(), MaxFlows: maxVisibleFlows, Unsaved: m.isDirty(), Message: m.errorMessage(),
 	}
 }
@@ -331,24 +339,26 @@ func (m *Manager) isTLSBypassed(host string) bool {
 	return true
 }
 
-func (m *Manager) InstallCertificate() error {
+func (m *Manager) InstallCertificate(level string) error {
+	level = normalizeCertificateLevel(level)
 	m.mu.Lock()
 	_, err := m.ensureCA()
 	m.mu.Unlock()
 	if err != nil {
 		return err
 	}
-	if err := installCertificate(m.certPath()); err != nil {
+	if err := installCertificate(m.certPath(), level); err != nil {
 		return err
 	}
-	return os.WriteFile(m.installMarkerPath(), []byte(time.Now().Format(time.RFC3339)), 0o600)
+	return os.WriteFile(m.installMarkerPath(level), []byte(time.Now().Format(time.RFC3339)), 0o600)
 }
 
-func (m *Manager) UninstallCertificate() error {
-	if err := uninstallCertificate(m.certPath()); err != nil {
+func (m *Manager) UninstallCertificate(level string) error {
+	level = normalizeCertificateLevel(level)
+	if err := uninstallCertificate(m.certPath(), level); err != nil {
 		return err
 	}
-	if err := os.Remove(m.installMarkerPath()); err != nil && !os.IsNotExist(err) {
+	if err := os.Remove(m.installMarkerPath(level)); err != nil && !os.IsNotExist(err) {
 		return err
 	}
 	return nil
@@ -406,9 +416,34 @@ func loadCA(certPath, keyPath string) (tls.Certificate, error) {
 
 func (m *Manager) certPath() string          { return filepath.Join(m.workDir, "sbtun-capture-ca.crt") }
 func (m *Manager) keyPath() string           { return filepath.Join(m.workDir, "sbtun-capture-ca.key") }
-func (m *Manager) installMarkerPath() string { return filepath.Join(m.workDir, ".installed") }
+func (m *Manager) installMarkerPath(level string) string {
+	if normalizeCertificateLevel(level) == "user" {
+		return filepath.Join(m.workDir, ".installed-user")
+	}
+	return filepath.Join(m.workDir, ".installed")
+}
 func (m *Manager) runningMarkerPath() string { return filepath.Join(m.workDir, ".running") }
 func (m *Manager) storagePath() string       { return filepath.Join(m.workDir, "capture.json") }
+
+func normalizeCertificateLevel(level string) string {
+	if strings.EqualFold(strings.TrimSpace(level), "user") {
+		return "user"
+	}
+	return "system"
+}
+
+func certificateLevel(system, user bool) string {
+	if system && user {
+		return "user,system"
+	}
+	if user {
+		return "user"
+	}
+	if system {
+		return "system"
+	}
+	return ""
+}
 
 func captureBody(body io.ReadCloser, limit int64) ([]byte, io.ReadCloser, bool, error) {
 	if body == nil {

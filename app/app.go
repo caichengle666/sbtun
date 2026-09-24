@@ -219,18 +219,18 @@ func (a *App) SaveCaptureFlows() error {
 	return a.runtime.Capture.Save()
 }
 
-func (a *App) InstallCaptureCertificate() error {
+func (a *App) InstallCaptureCertificate(level string) error {
 	if a.runtime == nil || a.runtime.Capture == nil {
 		return errors.New("流量分析器未初始化")
 	}
-	return a.runtime.Capture.InstallCertificate()
+	return a.runtime.Capture.InstallCertificate(level)
 }
 
-func (a *App) UninstallCaptureCertificate() error {
+func (a *App) UninstallCaptureCertificate(level string) error {
 	if a.runtime == nil || a.runtime.Capture == nil {
 		return errors.New("流量分析器未初始化")
 	}
-	return a.runtime.Capture.UninstallCertificate()
+	return a.runtime.Capture.UninstallCertificate(level)
 }
 
 func (a *App) GetStatus() StatusDTO {

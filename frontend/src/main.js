@@ -340,7 +340,7 @@ function renderCapturePage() {
     <section class="card capture-settings">
       <div class="section-heading"><div><h2>抓包规则</h2><p class="muted">每行一个域名或关键词；输入 * 抓取全部 HTTP/HTTPS 请求。</p></div><button id="saveCapture" class="btn btn-primary">保存并应用</button></div>
       <textarea id="captureDomains" class="input" rows="4" placeholder="例如 example.com、google；输入 * 抓取全部 HTTP/HTTPS">${escapeHtml(domains)}</textarea>
-      <div class="capture-settings-footer"><div class="capture-cert"><span class="badge ${status.certificate_installed ? 'direct' : ''}">${status.certificate_installed ? '系统证书已安装' : '系统证书未安装'}</span><button id="installCaptureCA" class="btn btn-ghost">安装</button><button id="uninstallCaptureCA" class="btn btn-ghost">卸载</button></div><span class="capture-storage" title="${escapeHtml(status.storage_path || '')}">${escapeHtml(status.storage_path || 'capture.json')}</span></div>
+      <div class="capture-settings-footer"><div class="capture-cert"><span class="badge ${status.certificate_installed ? 'direct' : ''}">${status.certificate_installed ? `证书已安装（${escapeHtml(status.certificate_level || '未知级别')}）` : '证书未安装'}</span>${status.user_certificate_supported ? '<select id="captureCertLevel" class="input capture-cert-level"><option value="system">系统级</option><option value="user">当前用户</option></select>' : '<span class="muted">Linux 使用系统级证书</span>'}<button id="installCaptureCA" class="btn btn-ghost">安装系统证书</button><button id="uninstallCaptureCA" class="btn btn-ghost">卸载系统证书</button></div><span class="capture-storage" title="${escapeHtml(status.storage_path || '')}">${escapeHtml(status.storage_path || 'capture.json')}</span></div>
     </section>
     <section class="card capture-records">
       <div class="section-heading capture-records-heading"><div><h2>请求记录</h2><p class="muted">显示 ${visibleFlows.length} 条，共 ${state.captureFlows.length} 条</p></div><div class="capture-record-actions"><button id="saveCaptureFile" class="btn btn-ghost">保存记录</button><button id="clearCapture" class="btn btn-danger">删除全部</button></div></div>
@@ -928,12 +928,13 @@ function bindEvents() {
     finally { saveCapture.disabled = false }
   })
   const installCaptureCA = document.querySelector('#installCaptureCA')
+  const captureCertLevel = document.querySelector('#captureCertLevel')
   if (installCaptureCA) installCaptureCA.addEventListener('click', async () => {
     installCaptureCA.disabled = true
     try {
-      await window.go.app.App.InstallCaptureCertificate()
+      await window.go.app.App.InstallCaptureCertificate(captureCertLevel?.value || 'system')
       await refreshCapture()
-      showToast('分析证书已安装', 'success')
+      showToast(`分析证书已安装（${captureCertLevel?.value === 'user' ? '当前用户' : '系统级'}）`, 'success')
     } catch (e) { showToast(e.message || String(e), 'error') }
     finally { installCaptureCA.disabled = false }
   })
@@ -941,7 +942,7 @@ function bindEvents() {
   if (uninstallCaptureCA) uninstallCaptureCA.addEventListener('click', async () => {
     uninstallCaptureCA.disabled = true
     try {
-      await window.go.app.App.UninstallCaptureCertificate()
+      await window.go.app.App.UninstallCaptureCertificate(captureCertLevel?.value || 'system')
       await refreshCapture()
       showToast('分析证书已卸载', 'success')
     } catch (e) { showToast(e.message || String(e), 'error') }

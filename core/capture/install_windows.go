@@ -14,14 +14,20 @@ import (
 	"syscall"
 )
 
-func installCertificate(path string) error {
+func userCertificateSupported() bool { return true }
+
+func installCertificate(path, level string) error {
 	if _, err := exec.LookPath("certutil"); err != nil {
 		return fmt.Errorf("未找到 certutil，无法安装分析证书: %w", err)
 	}
-	return runCertificateCommand("certutil", "-addstore", "-f", "Root", path)
+	args := []string{"-addstore", "-f", "Root", path}
+	if level == "user" {
+		args = append([]string{"-user"}, args...)
+	}
+	return runCertificateCommand("certutil", args...)
 }
 
-func uninstallCertificate(path string) error {
+func uninstallCertificate(path, level string) error {
 	if _, err := exec.LookPath("certutil"); err != nil {
 		return fmt.Errorf("未找到 certutil，无法卸载分析证书: %w", err)
 	}
@@ -38,7 +44,11 @@ func uninstallCertificate(path string) error {
 		return err
 	}
 	sum := sha1.Sum(cert.Raw)
-	return runCertificateCommand("certutil", "-delstore", "Root", strings.ToUpper(hex.EncodeToString(sum[:])))
+	args := []string{"-delstore", "Root", strings.ToUpper(hex.EncodeToString(sum[:]))}
+	if level == "user" {
+		args = append([]string{"-user"}, args...)
+	}
+	return runCertificateCommand("certutil", args...)
 }
 
 func runCertificateCommand(name string, args ...string) error {
