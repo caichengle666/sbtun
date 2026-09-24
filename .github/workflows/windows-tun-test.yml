@@ -43,7 +43,18 @@ jobs:
           Expand-Archive -Path $zip -DestinationPath "$env:RUNNER_TEMP\sing-box" -Force
           $exe = Get-ChildItem "$env:RUNNER_TEMP\sing-box" -Filter sing-box.exe -Recurse | Select-Object -First 1
           if (-not $exe) { throw '未找到 sing-box.exe' }
+          $wintunPage = Invoke-WebRequest -Uri 'https://www.wintun.net/'
+          $wintunMatch = [regex]::Match($wintunPage.Content, 'builds/wintun-(?<version>[0-9.]+)\.zip')
+          if (-not $wintunMatch.Success) { throw 'Wintun 官网没有找到最新构建包' }
+          $wintunVersion = $wintunMatch.Groups['version'].Value
+          $wintunZip = "$env:RUNNER_TEMP\wintun.zip"
+          Invoke-WebRequest -Uri "https://www.wintun.net/builds/wintun-$wintunVersion.zip" -OutFile $wintunZip
+          Expand-Archive -Path $wintunZip -DestinationPath "$env:RUNNER_TEMP\wintun" -Force
+          $wintunDll = Get-ChildItem "$env:RUNNER_TEMP\wintun" -Filter wintun.dll -Recurse | Where-Object { $_.FullName -match '\\amd64\\' } | Select-Object -First 1
+          if (-not $wintunDll) { throw '未找到 Wintun amd64 DLL' }
+          Copy-Item $wintunDll.FullName (Join-Path $exe.DirectoryName 'wintun.dll') -Force
           "SINGBOX=$($exe.FullName)" | Out-File $env:GITHUB_ENV -Encoding utf8
+          "WINTUN_VERSION=$wintunVersion" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           & $exe.FullName version
 
       - name: 准备并启动真实 TUN
@@ -61,19 +72,31 @@ jobs:
           "TUN_TEST_DIR=$dir" | Out-File $env:GITHUB_ENV -Append -Encoding utf8
           Start-Sleep -Seconds 4
           if ($proc.HasExited) { Get-Content "$dir\sing-box.log"; Get-Content "$dir\sing-box.err"; throw 'sing-box 启动失败' }
+          Write-Host "sing-box 已启动，PID=$($proc.Id)，Wintun=$env:WINTUN_VERSION"
 
       - name: 检测真实 TUN 后端
         shell: pwsh
         run: |
           $found = $false
           for ($i = 0; $i -lt 20; $i++) {
-            $pnp = @(Get-PnpDevice -Class Net -ErrorAction SilentlyContinue | Where-Object { $_.FriendlyName -match 'Wintun|sing-tun' -or $_.InstanceId -match 'Wintun' })
-            $process = Get-Process -Name 'sing-box' -ErrorAction SilentlyContinue
-            Write-Host "检测 $($i + 1): PnP=$($pnp.Count), process=$([bool]$process)"
-            if ($pnp.Count -gt 0 -and $process) { $found = $true; break }
+            $process = Get-Process -Id ([int]$env:SINGBOX_PID) -ErrorAction SilentlyContinue
+            $address = @(Get-NetIPAddress -IPAddress '172.19.0.1' -ErrorAction SilentlyContinue)
+            $adapter = @(Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue | Where-Object { $_.InterfaceDescription -match 'Wintun|sing-tun|sing-box' -or $_.Name -match 'Wintun|sing-tun|sing-box' })
+            Write-Host "检测 $($i + 1): address=$($address.Count), adapter=$($adapter.Count), process=$([bool]$process)"
+            if ($address.Count -gt 0 -and $process) { $found = $true; break }
             Start-Sleep -Seconds 1
           }
-          if (-not $found) { Get-Content "$env:TUN_TEST_DIR\sing-box.log"; Get-Content "$env:TUN_TEST_DIR\sing-box.err"; throw '真实 TUN 后端未正确初始化' }
+          if (-not $found) {
+            Write-Host '--- Get-NetAdapter ---'
+            Get-NetAdapter -IncludeHidden -ErrorAction SilentlyContinue | Format-Table -AutoSize | Out-String | Write-Host
+            Write-Host '--- Get-NetIPAddress ---'
+            Get-NetIPAddress -ErrorAction SilentlyContinue | Format-Table -AutoSize | Out-String | Write-Host
+            Write-Host '--- sing-box.log ---'
+            Get-Content "$env:TUN_TEST_DIR\sing-box.log" -ErrorAction SilentlyContinue
+            Write-Host '--- sing-box.err ---'
+            Get-Content "$env:TUN_TEST_DIR\sing-box.err" -ErrorAction SilentlyContinue
+            throw '真实 TUN 后端未正确初始化'
+          }
           Write-Host '真实 TUN 后端初始化成功。'
 
       - name: 检查进程并清理
