@@ -93,6 +93,7 @@ Windows GUI 使用 Wintun。Linux GUI 使用 GTK/WebKitGTK，TUN 模式通常需
 
 规则集页面中的“规则集 URL”需要填写具体的 `.srs` 文件地址，不要填写仓库首页地址。下面这些来源都已提供 sing-box 可用的 SRS 文件：
 
+- [anti-AD](https://github.com/privacy-protection-tools/anti-AD)：中文社区维护的开源广告过滤项目，合并 hosts、EasyList 和 AdBlock 等上游列表，侧重中文区广告、电视盒子广告、App 内置广告和隐私统计域名。官网直接提供 sing-box SRS（需 sing-box 1.10+）：`https://anti-ad.net/anti-ad-sing-box.srs`。这里的“官网”指 anti-AD 项目站点，不是 sing-box 官方规则。
 - [xmdhs/sing-box-ruleset](https://github.com/xmdhs/sing-box-ruleset)：将 AdGuard DNS filter 转换为 sing-box SRS。仓库说明给出了当前可用地址，例如 `https://raw.githubusercontent.com/xmdhs/sing-box-ruleset/rule-set/AdGuardSDNSFilterSingBox.srs`。适合只需要 AdGuard DNS 过滤的用户。
 - [217heidai/adblockfilters](https://github.com/217heidai/adblockfilters)：合并、去重多个广告和跟踪规则源，每 8 小时更新。sing-box 1.12+ 可直接使用 `https://raw.githubusercontent.com/217heidai/adblockfilters/main/rules/adblocksingbox.srs`；如果完整规则体积过大，可改用 `https://raw.githubusercontent.com/217heidai/adblockfilters/main/rules/adblocksingboxlite.srs`。仓库还提供 jsDelivr 加速地址。
 - [razaxq/dns-blocklists-sing-box](https://github.com/razaxq/dns-blocklists-sing-box/blob/main/README_zh.md)：将多个 DNS 拦截列表转换为 sing-box SRS，规则文件位于独立的 `rule-set` 分支。中文说明列出了 HaGeZi、OISD、AdGuard、区域列表和安全列表等可选文件，例如 `https://cdn.jsdelivr.net/gh/razaxq/dns-blocklists-sing-box@rule-set/hagezi-normal.srs`。适合按需组合多个规则集。
