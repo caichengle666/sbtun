@@ -28,7 +28,7 @@ import (
 
 const singBoxLatestReleaseURL = "https://api.github.com/repos/SagerNet/sing-box/releases/latest"
 const maxSingBoxArchiveSize = 128 << 20
-const maxSingBoxBinarySize = 64 << 20
+const maxSingBoxBinarySize = 128 << 20
 
 var singBoxVersionPattern = regexp.MustCompile(`(?m)(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)`)
 var singBoxReleaseAssetPattern = regexp.MustCompile(`(?s)<a\s+href="([^"]*/releases/download/[^"]+)"[^>]*>\s*<span class="text-bold">([^<]+)</span>`)
@@ -65,9 +65,10 @@ func (a *App) UpdateSingBox() (SingBoxUpdateResult, error) {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
 
-	if a.binary == "" || !fileExists(a.binary) {
-		return SingBoxUpdateResult{}, errors.New("未找到 sing-box 二进制文件")
+	if a.binary == "" {
+		return SingBoxUpdateResult{}, errors.New("sing-box 路径未初始化")
 	}
+	installed := fileExists(a.binary)
 	if runtime.GOOS != "windows" && runtime.GOOS != "linux" {
 		return SingBoxUpdateResult{}, fmt.Errorf("暂不支持在 %s 上更新 sing-box", runtime.GOOS)
 	}
@@ -81,9 +82,13 @@ func (a *App) UpdateSingBox() (SingBoxUpdateResult, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
 	defer cancel()
-	current, err := readSingBoxVersion(ctx, a.binary)
-	if err != nil {
-		return SingBoxUpdateResult{}, fmt.Errorf("读取当前 sing-box 版本失败: %w", err)
+	var err error
+	current := ""
+	if installed {
+		current, err = readSingBoxVersion(ctx, a.binary)
+		if err != nil {
+			return SingBoxUpdateResult{}, fmt.Errorf("读取当前 sing-box 版本失败: %w", err)
+		}
 	}
 	client := &http.Client{Timeout: 5 * time.Minute}
 	release, err := latestSingBoxRelease(ctx, client, singBoxLatestReleaseURL)
@@ -92,16 +97,18 @@ func (a *App) UpdateSingBox() (SingBoxUpdateResult, error) {
 	}
 	latest := strings.TrimPrefix(strings.TrimSpace(release.TagName), "v")
 	result := SingBoxUpdateResult{CurrentVersion: current, LatestVersion: latest}
-	comparison, err := compareSingBoxVersions(current, latest)
-	if err != nil {
-		return SingBoxUpdateResult{}, err
-	}
-	if comparison == 0 {
-		result.Message = "当前已是最新稳定版"
-		return result, nil
-	}
-	if comparison > 0 {
-		return result, fmt.Errorf("当前版本 %s 高于官方最新稳定版 %s，已跳过降级", current, latest)
+	if installed {
+		comparison, err := compareSingBoxVersions(current, latest)
+		if err != nil {
+			return SingBoxUpdateResult{}, err
+		}
+		if comparison == 0 {
+			result.Message = "当前已是最新稳定版"
+			return result, nil
+		}
+		if comparison > 0 {
+			return result, fmt.Errorf("当前版本 %s 高于官方最新稳定版 %s，已跳过降级", current, latest)
+		}
 	}
 	candidate, err := downloadSingBoxAsset(ctx, client, release, runtime.GOOS, runtime.GOARCH)
 	if err != nil {
@@ -134,17 +141,22 @@ func (a *App) UpdateSingBox() (SingBoxUpdateResult, error) {
 		}
 	}
 
-	backupPath, err := backupSingBox(a.binary)
-	if err != nil {
-		if wasRunning {
-			if startErr := a.startWithConfigLocked(cfg); startErr != nil {
-				return result, fmt.Errorf("备份旧内核失败: %v；恢复代理也失败: %w", err, startErr)
+	backupPath := ""
+	if installed {
+		backupPath, err = backupSingBox(a.binary)
+		if err != nil {
+			if wasRunning {
+				if startErr := a.startWithConfigLocked(cfg); startErr != nil {
+					return result, fmt.Errorf("备份旧内核失败: %v；恢复代理也失败: %w", err, startErr)
+				}
 			}
+			return result, fmt.Errorf("备份旧内核失败: %w", err)
 		}
-		return result, fmt.Errorf("备份旧内核失败: %w", err)
 	}
 	if err := os.Rename(tempPath, a.binary); err != nil {
-		os.Remove(backupPath)
+		if backupPath != "" {
+			os.Remove(backupPath)
+		}
 		if wasRunning {
 			if startErr := a.startWithConfigLocked(cfg); startErr != nil {
 				return result, fmt.Errorf("安装新内核失败: %v；恢复代理也失败: %w", err, startErr)
@@ -155,17 +167,22 @@ func (a *App) UpdateSingBox() (SingBoxUpdateResult, error) {
 
 	if wasRunning {
 		if err := a.startWithConfigLocked(cfg); err != nil {
-			rollbackErr := os.Rename(backupPath, a.binary)
-			if rollbackErr == nil {
-				rollbackErr = a.startWithConfigLocked(cfg)
+			if backupPath != "" {
+				rollbackErr := os.Rename(backupPath, a.binary)
+				if rollbackErr == nil {
+					rollbackErr = a.startWithConfigLocked(cfg)
+				}
+				if rollbackErr != nil {
+					return result, fmt.Errorf("新内核启动失败: %v；恢复旧内核或代理失败: %w", err, rollbackErr)
+				}
+				return result, fmt.Errorf("新内核启动失败，已恢复旧内核和代理: %w", err)
 			}
-			if rollbackErr != nil {
-				return result, fmt.Errorf("新内核启动失败: %v；恢复旧内核或代理失败: %w", err, rollbackErr)
-			}
-			return result, fmt.Errorf("新内核启动失败，已恢复旧内核和代理: %w", err)
+			return result, fmt.Errorf("新内核启动失败: %w", err)
 		}
 	}
-	_ = os.Remove(backupPath)
+	if backupPath != "" {
+		_ = os.Remove(backupPath)
+	}
 	result.CurrentVersion = latest
 	result.Updated = true
 	result.Message = "sing-box 已更新并通过配置校验"

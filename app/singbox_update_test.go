@@ -101,6 +101,18 @@ func TestLatestSingBoxReleaseFallsBackToOfficialReleasePageOnRateLimit(t *testin
 	}
 }
 
+func TestSingBoxBinaryFromZipAllowsCurrentWindowsKernelSize(t *testing.T) {
+	content := bytes.Repeat([]byte{0x41}, 65<<20)
+	archiveData := makeSingBoxZip(t, content)
+	binary, err := singBoxBinaryFromZip(archiveData, "sing-box.exe")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if len(binary) != len(content) {
+		t.Fatalf("binary size=%d want=%d", len(binary), len(content))
+	}
+}
+
 func TestDownloadSingBoxRejectsDigestMismatch(t *testing.T) {
 	archiveData := makeSingBoxZip(t, []byte("binary"))
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {

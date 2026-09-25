@@ -379,6 +379,9 @@ textarea.input { resize: vertical; }
 .rule-menu-action:hover { color: #fff; background: #1e293b; }
 .rule-menu-action.danger { color: #fda4af; }
 .rule-menu-action:disabled { opacity: .45; cursor: not-allowed; }
+.rule-inline-download { padding: 4px 9px; border: 1px solid #334155; border-radius: 5px; color: #67e8f9; background: rgba(34, 211, 238, .08); cursor: pointer; font: inherit; font-size: 12px; }
+.rule-inline-download:hover { border-color: #22d3ee; }
+.rule-inline-download:disabled { opacity: .55; cursor: wait; }
 .rule-set-form.card { padding: 18px; background: #111522; box-shadow: none; }
 .rule-set-form h3 { margin: 0; color: #e2e8f0; font-size: 16px; }
 .rule-set-form > .muted { margin: 7px 0 18px; font-size: 12px; line-height: 1.5; }
