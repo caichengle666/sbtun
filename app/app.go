@@ -436,7 +436,7 @@ func (a *App) startWithConfigLocked(cfg config.Config) error {
 	if !ok {
 		return errors.New("尚未选择节点")
 	}
-	health := testNodeWithBinary(a.ctx, node, a.binary)
+	health := a.testNode(a.ctx, node)
 	if !health.Healthy {
 		return fmt.Errorf("节点不可用: %s", health.Message)
 	}
@@ -524,10 +524,20 @@ func (a *App) TestNode(id string) NodeHealthDTO {
 	}
 	for _, node := range cfg.Nodes {
 		if node.ID == id {
-			return testNodeWithBinary(a.ctx, node, a.binary)
+			return a.testNode(a.ctx, node)
 		}
 	}
 	return NodeHealthDTO{NodeID: id, Message: "节点不存在"}
+}
+
+func (a *App) testNode(ctx context.Context, node config.Node) NodeHealthDTO {
+	if a.runtime != nil && a.runtime.State != nil && a.runtime.State.IsRunning() {
+		return testNodeOnRunningInstance(ctx, node)
+	}
+	if _, err := currentSelectorContext(ctx); err == nil {
+		return testNodeOnRunningInstance(ctx, node)
+	}
+	return testNodeWithBinary(ctx, node, a.binary)
 }
 
 func currentNode(cfg config.Config) (config.Node, bool) {
@@ -1065,7 +1075,7 @@ func testNodePort(node config.Node) bool {
 func (a *App) testNodeHealthy(node config.Node) bool {
 	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
 	defer cancel()
-	return testNodeWithBinary(ctx, node, a.binary).Healthy
+	return a.testNode(ctx, node).Healthy
 }
 
 func (a *App) SetRoutingMode(mode config.RoutingMode) error {

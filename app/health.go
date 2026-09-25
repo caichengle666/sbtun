@@ -3,6 +3,7 @@ package app
 import (
 	"bytes"
 	"context"
+	"encoding/json"
 	"fmt"
 	"net"
 	"net/http"
@@ -70,6 +71,31 @@ func testNodeWithBinary(ctx context.Context, node config.Node, binary string) No
 		result.Message = result.URL.Message
 	}
 	return result
+}
+
+func testNodeOnRunningInstance(ctx context.Context, node config.Node) NodeHealthDTO {
+	if ctx == nil {
+		ctx = context.Background()
+	}
+	result := newNodeHealth(node)
+	result.Ping = pingNode(ctx, node.Server)
+	result.Port = probePort(ctx, net.JoinHostPort(node.Server, strconv.Itoa(int(node.Port))), result.Transport)
+	result.URL = probeURLViaClash(ctx, node)
+	result.Healthy = result.URL.OK
+	if result.Healthy {
+		result.Message = "URL 访问成功"
+	} else {
+		result.Message = result.URL.Message
+	}
+	return result
+}
+
+func newNodeHealth(node config.Node) NodeHealthDTO {
+	transport := "tcp"
+	if node.Protocol == "hysteria2" {
+		transport = "udp"
+	}
+	return NodeHealthDTO{NodeID: node.ID, Protocol: node.Protocol, Transport: transport}
 }
 
 func pingNode(ctx context.Context, host string) HealthCheckDTO {
@@ -165,6 +191,41 @@ func probeURL(ctx context.Context, binary string, node config.Node) HealthCheckD
 		return HealthCheckDTO{StatusCode: response.StatusCode, Message: fmt.Sprintf("URL 返回 HTTP %d", response.StatusCode)}
 	}
 	return HealthCheckDTO{OK: true, StatusCode: response.StatusCode, Message: "URL 访问成功", Latency: time.Since(started).Milliseconds()}
+}
+
+func probeURLViaClash(ctx context.Context, node config.Node) HealthCheckDTO {
+	endpoint := clashAPIBaseURL + "/proxies/" + url.PathEscape("node-"+node.ID) + "/delay"
+	query := url.Values{}
+	query.Set("timeout", "5000")
+	query.Set("url", "https://www.gstatic.com/generate_204")
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, endpoint+"?"+query.Encode(), nil)
+	if err != nil {
+		return HealthCheckDTO{Message: fmt.Sprintf("URL 请求创建失败: %v", err)}
+	}
+	client := &http.Client{Timeout: 8 * time.Second}
+	response, err := client.Do(request)
+	if err != nil {
+		return HealthCheckDTO{Message: fmt.Sprintf("URL 测试失败: %v", err)}
+	}
+	defer response.Body.Close()
+	var payload struct {
+		Delay   int64  `json:"delay"`
+		Message string `json:"message"`
+	}
+	if err := json.NewDecoder(response.Body).Decode(&payload); err != nil {
+		return HealthCheckDTO{Message: fmt.Sprintf("URL 测试失败: 解析响应失败: %v", err)}
+	}
+	if response.StatusCode < 200 || response.StatusCode >= 300 {
+		message := payload.Message
+		if message == "" {
+			message = response.Status
+		}
+		return HealthCheckDTO{Message: fmt.Sprintf("URL 测试失败: %s", message)}
+	}
+	if payload.Delay <= 0 {
+		return HealthCheckDTO{Message: "URL 测试失败: sing-box 未返回有效延迟"}
+	}
+	return HealthCheckDTO{OK: true, StatusCode: http.StatusNoContent, Message: "URL 访问成功", Latency: payload.Delay}
 }
 
 func waitForURL(ctx context.Context, client *http.Client, request *http.Request, cmd *exec.Cmd, timeout time.Duration) (*http.Response, error) {
