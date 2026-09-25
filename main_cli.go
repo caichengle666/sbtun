@@ -251,7 +251,7 @@ func printCommandHelp(command string, args []string) bool {
 	case "add-rule":
 		usage = "sbtun add-rule <链接|文件|文本>"
 	case "rules":
-		usage = "sbtun rules [list|update <id>|update-all]"
+		usage = "sbtun rules [list|add|edit|delete|update|update-all]"
 	case "capture":
 		if len(args) > 0 && args[0] == "cert" {
 			usage = certificateCLIUsage()
@@ -337,10 +337,20 @@ func validateCLIArgs(command string, args []string) error {
 		}
 		return nil
 	case "rules":
-		if len(args) == 0 || len(args) == 1 && (args[0] == "list" || args[0] == "update-all") || len(args) == 2 && args[0] == "update" && strings.TrimSpace(args[1]) != "" {
+		switch {
+		case len(args) == 0, len(args) == 1 && (args[0] == "list" || args[0] == "update-all"):
 			return nil
+		case len(args) == 2 && args[0] == "update" && strings.TrimSpace(args[1]) != "":
+			return nil
+		case len(args) == 3 && args[0] == "add" && strings.TrimSpace(args[1]) != "" && strings.TrimSpace(args[2]) != "":
+			return nil
+		case len(args) == 4 && args[0] == "edit" && strings.TrimSpace(args[1]) != "" && strings.TrimSpace(args[2]) != "" && strings.TrimSpace(args[3]) != "":
+			return nil
+		case len(args) == 2 && args[0] == "delete" && strings.TrimSpace(args[1]) != "":
+			return nil
+		default:
+			return usageError("sbtun rules [list|add <名称> <SRS_URL>|edit <ID> <名称> <SRS_URL>|delete <ID>|update <ID>|update-all]")
 		}
-		return usageError("sbtun rules [list|update <id>|update-all]")
 	case "capture":
 		return validateCaptureArgs(args)
 	default:
@@ -433,6 +443,9 @@ func printHelp() {
 		{"route <模式>", "设置路由: smart/global/direct/custom"},
 		{"add-rule <链接|文件|文本>", "添加自定义规则"},
 		{"rules list", "列出规则集"},
+		{"rules add <名称> <SRS_URL>", "添加广告或其他 SRS 规则集"},
+		{"rules edit <ID> <名称> <SRS_URL>", "编辑规则集"},
+		{"rules delete <ID>", "删除规则集"},
 		{"rules update <id>", "更新指定规则集"},
 		{"rules update-all", "更新全部规则集"},
 	})
@@ -507,6 +520,24 @@ func runRulesCommand(application *app.App, args []string) error {
 		return nil
 	}
 	switch args[0] {
+	case "add":
+		if err := application.AddRuleSet(args[1], args[2]); err != nil {
+			return err
+		}
+		fmt.Println("规则集已添加")
+		return nil
+	case "edit":
+		if err := application.EditRuleSet(args[1], args[2], args[3]); err != nil {
+			return err
+		}
+		fmt.Println("规则集已修改")
+		return nil
+	case "delete":
+		if err := application.DeleteRuleSet(args[1]); err != nil {
+			return err
+		}
+		fmt.Println("规则集已删除")
+		return nil
 	case "update":
 		if err := application.UpdateRule(args[1]); err != nil {
 			return err
@@ -521,7 +552,7 @@ func runRulesCommand(application *app.App, args []string) error {
 		fmt.Println("全部规则集更新成功")
 		return nil
 	default:
-		return fmt.Errorf("用法: sbtun rules [list|update <id>|update-all]")
+		return fmt.Errorf("用法: sbtun rules [list|add <名称> <SRS_URL>|edit <ID> <名称> <SRS_URL>|delete <ID>|update <ID>|update-all]")
 	}
 }
 

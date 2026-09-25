@@ -50,6 +50,9 @@ func TestValidateCLIArgsAcceptsSupportedCommands(t *testing.T) {
 		{command: "route", args: []string{"smart"}},
 		{command: "info", args: []string{"1"}},
 		{command: "rules", args: []string{"update-all"}},
+		{command: "rules", args: []string{"add", "AdGuard", "https://example.com/adguard.srs"}},
+		{command: "rules", args: []string{"edit", "custom-1", "AdGuard 2", "https://example.com/adguard-2.srs"}},
+		{command: "rules", args: []string{"delete", "custom-1"}},
 		{command: "capture", args: []string{"enable", "*"}},
 	} {
 		if err := validateCLIArgs(test.command, test.args); err != nil {

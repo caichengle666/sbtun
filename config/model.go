@@ -33,12 +33,14 @@ type Config struct {
 	RoutingMode        RoutingMode `json:"routing_mode"`
 	DNSMode            DNSMode     `json:"dns_mode"`
 	TUNEnabled         bool        `json:"tun_enabled"`
+	IPv6Enabled        bool        `json:"ipv6_enabled"`
 	DiagnosticsEnabled bool        `json:"diagnostics_enabled,omitempty"`
 	CaptureEnabled     bool        `json:"capture_enabled,omitempty"`
 	CaptureDomains     []string    `json:"capture_domains,omitempty"`
 	CurrentNodeID      string      `json:"current_node_id"`
 	Nodes              []Node      `json:"nodes"`
 	CustomRules        []Rule      `json:"custom_rules,omitempty"`
+	DNSFilterRules     []Rule      `json:"dns_filter_rules,omitempty"`
 }
 
 // Node 是统一的用户节点模型。
@@ -58,6 +60,7 @@ func Default() Config {
 		DNSMode:        DNSAuto,
 		Nodes:          []Node{},
 		CustomRules:    []Rule{},
+		DNSFilterRules: []Rule{},
 		CaptureDomains: []string{},
 	}
 }

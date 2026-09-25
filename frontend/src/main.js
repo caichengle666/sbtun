@@ -21,8 +21,13 @@ const state = {
   customRuleForm: { match_type: 'domain_suffix', value: '', action: 'proxy' },
   customRuleImport: '',
   rules: null,
+  ruleSetForm: { name: '', url: '' },
+  editingRuleSetID: '',
+  ruleFilter: 'all',
   ruleUpdating: '',
   allRulesUpdating: false,
+  ruleMenuDocumentBound: false,
+  dnsFilterFormOpen: false,
   nodeSwitching: false,
   nodeHealth: {},
   selectedNodes: new Set(),
@@ -30,6 +35,7 @@ const state = {
   nodeFilter: 'all',
   traffic: { up: 0, down: 0 },
   diagnostics: null,
+  ipv6Status: null,
   captureStatus: null,
   captureFlows: [],
   captureDraft: '',
@@ -315,13 +321,45 @@ function renderRoutingPage() {
   const matchType = RULE_MATCH_TYPES.find(item => item.id === state.customRuleForm.match_type) || RULE_MATCH_TYPES[0]
   const action = RULE_ACTIONS.find(item => item.id === state.customRuleForm.action) || RULE_ACTIONS[0]
   const diagnostics = state.diagnostics
-  return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div><label class="toggle-field"><input id="diagnosticsToggle" type="checkbox" ${state.config?.diagnostics_enabled ? 'checked' : ''}><span>启用诊断信息</span><small>显示当前 selector 和运行节点，仅用于排查问题</small></label></section>${state.config?.diagnostics_enabled ? `<section class="card"><h2>运行诊断</h2><div class="diagnostics-grid"><span>当前配置节点</span><strong>${escapeHtml(diagnostics?.current_node_id || '未选择')}</strong><span>实际 selector</span><strong>${escapeHtml(diagnostics?.selector || '未读取')}</strong><span>状态</span><strong>${escapeHtml(diagnostics?.message || '读取中')}</strong></div></section>` : ''}
+  return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div><label class="toggle-field"><input id="ipv6Toggle" type="checkbox" ${state.config?.ipv6_enabled ? 'checked' : ''}><span>启用 IPv6</span><small>${escapeHtml(state.ipv6Status?.message || '正在检测设备 IPv6')}</small></label><label class="toggle-field"><input id="diagnosticsToggle" type="checkbox" ${state.config?.diagnostics_enabled ? 'checked' : ''}><span>启用诊断信息</span><small>显示当前 selector 和运行节点，仅用于排查问题</small></label></section>${state.config?.diagnostics_enabled ? `<section class="card"><h2>运行诊断</h2><div class="diagnostics-grid"><span>当前配置节点</span><strong>${escapeHtml(diagnostics?.current_node_id || '未选择')}</strong><span>实际 selector</span><strong>${escapeHtml(diagnostics?.selector || '未读取')}</strong><span>状态</span><strong>${escapeHtml(diagnostics?.message || '读取中')}</strong></div></section>` : ''}
     ${state.config?.routing_mode === 'custom' ? `<section class="card"><div class="section-heading"><div><h2>自定义分流规则</h2><p class="muted">先选择匹配对象，再填写内容和处理方式。</p></div></div><div id="customRulesPanel">${renderCustomRules()}</div><div class="rule-editor"><label class="rule-field"><span>匹配对象</span><select id="ruleMatchType" class="select">${RULE_MATCH_TYPES.map(item => `<option value="${item.id}" ${item.id === matchType.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-field"><span>匹配内容</span><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="${matchType.placeholder}" /></label><label class="rule-field"><span>处理方式</span><select id="ruleAction" class="select">${RULE_ACTIONS.map(item => `<option value="${item.id}" ${item.id === action.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><button id="addRuleBtn" class="btn btn-primary">添加规则</button><small class="rule-hint value-hint" id="ruleValueHint">${matchType.hint}</small><small class="rule-hint action-hint" id="ruleActionHint">${action.hint}</small></div><details class="rule-import" open><summary>批量导入规则</summary><div class="rule-import-body"><textarea id="ruleImport" class="input" rows="3" placeholder="每行一条，例如：proxy,domain_suffix,example.com"></textarea><button id="importRuleBtn" class="btn btn-ghost">导入</button></div></details></section>` : ''}
   </div>`
 }
 
 function renderRulesPage() {
-  return `<div class="page-stack"><section class="card"><div id="rulesPanel">${renderRules()}</div><button id="updateAllRules" class="btn btn-primary">${state.allRulesUpdating ? '更新中...' : '更新全部规则集'}</button></section></div>`
+  const filter = state.ruleFilter || 'all'
+  return `<div class="page-stack rules-page">
+    <section class="card rules-card">
+      <div class="section-heading rules-page-heading">
+        <div><h2>规则集</h2><p class="muted">管理默认规则集和用户添加的 DNS 规则集。</p></div>
+        <select id="ruleSetFilter" class="select rule-filter-select" aria-label="筛选规则集">
+          <option value="all" ${filter === 'all' ? 'selected' : ''}>全部规则</option>
+          <option value="default" ${filter === 'default' ? 'selected' : ''}>默认规则</option>
+          <option value="custom" ${filter === 'custom' ? 'selected' : ''}>用户规则</option>
+        </select>
+      </div>
+      ${renderRuleSummary()}
+      <div class="rule-layout">
+        <div class="rule-list-column">
+          <div id="rulesPanel">${renderRules()}</div>
+          <div class="rules-toolbar"><span class="rules-summary-note">启用的规则集会参与当前路由模式，更新失败时保留旧文件。</span><button id="updateAllRules" class="btn btn-primary">${state.allRulesUpdating ? '更新中...' : '更新全部规则集'}</button></div>
+        </div>
+        <aside class="rule-set-form card">
+          <h3>${state.editingRuleSetID ? '编辑规则集' : '添加规则集'}</h3>
+          <p class="muted">添加 sing-box SRS 或 DNS 域名规则集 URL。</p>
+          <label class="rule-form-field"><span>规则集名称</span><input id="ruleSetName" class="input" value="${escapeHtml(state.ruleSetForm.name)}" placeholder="例如 广告过滤规则" /></label>
+          <label class="rule-form-field"><span>规则集 URL</span><input id="ruleSetURL" class="input" value="${escapeHtml(state.ruleSetForm.url)}" placeholder="https://example.com/rules.srs" /></label>
+          <div class="rule-form-actions"><button id="addRuleSetBtn" class="btn btn-primary">${state.editingRuleSetID ? '保存修改' : '添加规则集'}</button>${state.editingRuleSetID ? '<button id="cancelEditRuleSet" class="btn btn-ghost">取消</button>' : '<a class="btn btn-ghost rule-source-link" href="https://github.com/razaxq/dns-blocklists-sing-box/blob/main/README_zh.md" target="_blank" rel="noopener noreferrer">查找规则集 ↗</a><button id="restoreDefaultRules" class="btn btn-ghost">恢复默认规则</button>'}</div>
+        </aside>
+      </div>
+    </section>
+    <section class="card dns-filter-card">
+      <div class="section-heading"><div><h2>手动 DNS 过滤规则</h2><p class="muted">单独添加域名或 IP，命中后直接阻断。优先级高于规则集。</p></div><button id="openFilterRuleBtn" class="btn btn-primary">添加过滤规则</button></div>
+      ${state.dnsFilterFormOpen ? `<div class="dns-filter-editor"><label class="rule-form-field"><span>匹配对象</span><select id="filterRuleMatchType" class="select">${RULE_MATCH_TYPES.filter(item => item.id !== 'port').map(item => `<option value="${item.id}">${item.label}</option>`).join('')}</select></label><label class="rule-form-field"><span>匹配内容</span><input id="filterRuleValue" class="input" placeholder="例如 ads.example.com" /></label><div class="rule-form-actions"><button id="addFilterRuleBtn" class="btn btn-primary">添加规则</button><button id="cancelFilterRuleBtn" class="btn btn-ghost">取消</button></div></div>` : ''}
+      ${renderDNSFilterRules()}
+      <div class="rules-toolbar dns-filter-toolbar"><span class="rules-summary-note">共 ${(state.config?.dns_filter_rules || []).length} 条手动过滤规则</span></div>
+    </section>
+  </div>`
 }
 
 function renderCapturePage() {
@@ -449,23 +487,41 @@ function formatTraffic(t) {
   return '实时 ↑ ' + fmt(t?.up) + '/s  ↓ ' + fmt(t?.down) + '/s'
 }
 
+function renderRuleSummary() {
+  const rules = state.rules || []
+  const downloaded = rules.filter(rule => rule.exists).length
+  const enabled = rules.filter(rule => rule.enabled).length
+  const latest = rules.filter(rule => rule.updated_at).sort((a, b) => new Date(b.updated_at) - new Date(a.updated_at))[0]
+  const latestText = latest ? new Date(latest.updated_at).toLocaleDateString('zh-CN') : '暂无'
+  return `<div class="rules-summary-grid">
+    <div class="rules-summary-item"><span>规则集</span><strong>${rules.length}</strong><small>默认与用户规则</small></div>
+    <div class="rules-summary-item"><span>已启用</span><strong>${enabled}</strong><small>当前参与分流</small></div>
+    <div class="rules-summary-item"><span>已下载</span><strong>${downloaded}/${rules.length}</strong><small>本地文件状态</small></div>
+    <div class="rules-summary-item"><span>最近更新</span><strong>${latestText}</strong><small>最后一次成功更新</small></div>
+  </div>`
+}
+
 function renderRules() {
-  if (!state.rules?.length) {
+  if (!state.rules) {
     return '<div class="empty">正在加载规则集信息...</div>'
   }
-  const downloaded = state.rules.filter(r => r.exists).length
-  return state.rules.map(r => `
-    <div class="node-item rule-item">
-      <span class="badge ${r.exists ? 'proxy' : ''}">${r.exists ? '已下载' : '未下载'}</span>
-      <span style="flex:1">
-        <span class="node-name">${r.name}</span>
-        <span class="node-server">${r.exists ? formatRuleInfo(r) : '点击更新下载'}</span>
-      </span>
-      <span class="node-actions">
-        <button class="btn btn-ghost update-rule" data-id="${r.id}" ${state.ruleUpdating || state.allRulesUpdating ? 'disabled' : ''}>${state.ruleUpdating === r.id ? '更新中...' : '更新'}</button>
-      </span>
-    </div>
-  `).join('') + `<div class="rules-summary">已准备 ${downloaded}/${state.rules.length} 个规则集 · 智能分流会使用全部规则集</div>`
+  const filter = state.ruleFilter || 'all'
+  const rules = state.rules.filter(rule => filter === 'all' || (filter === 'default' ? rule.source === 'default' : rule.source !== 'default'))
+  if (!rules.length) return '<div class="empty">没有符合条件的规则集</div>'
+  return `<div class="rule-set-list">${rules.map(r => `
+    <div class="rule-set-row">
+      <button class="rule-switch ${r.enabled ? 'on' : ''} toggle-rule" data-id="${r.id}" aria-label="${r.enabled ? '停用' : '启用'} ${escapeHtml(r.name)}"><span></span></button>
+      <div class="rule-set-main"><div class="rule-set-title"><strong>${escapeHtml(r.name)}</strong><span class="rule-tag ${r.source === 'default' ? 'default' : 'custom'}">${r.source === 'default' ? '默认' : '用户添加'}</span></div><div class="rule-set-file">${r.exists ? escapeHtml(formatRuleInfo(r)) : '未下载 · 点击更新下载'}</div></div>
+      <span class="rule-tag ${r.exists ? 'ready' : 'missing'}">${r.exists ? '已下载' : '未下载'}</span>
+      <span class="rule-set-date">${r.updated_at ? escapeHtml(new Date(r.updated_at).toLocaleDateString('zh-CN')) : '尚未更新'}</span>
+      <details class="rule-menu" data-rule-menu-id="${r.id}"><summary aria-label="规则集操作">⋯</summary><div class="rule-menu-list"><button class="rule-menu-action update-rule" data-id="${r.id}" ${state.ruleUpdating || state.allRulesUpdating ? 'disabled' : ''}>${state.ruleUpdating === r.id ? '更新中...' : '更新'}</button><button class="rule-menu-action edit-rule" data-id="${r.id}">编辑</button><button class="rule-menu-action rule-copy-url" data-url="${escapeHtml(r.url || '')}">查看 URL</button><button class="rule-menu-action danger delete-rule" data-id="${r.id}">删除</button></div></details>
+    </div>`).join('')}</div>`
+}
+
+function renderDNSFilterRules() {
+  const rules = state.config?.dns_filter_rules || []
+  if (!rules.length) return '<div class="dns-empty empty">暂无手动 DNS 过滤规则</div>'
+  return `<div class="dns-filter-table"><div class="dns-filter-head"><span>状态</span><span>匹配对象</span><span>匹配内容</span><span>处理</span><span></span></div>${rules.map((rule, index) => `<div class="dns-filter-row"><span class="rule-tag ready">已启用</span><span>${escapeHtml(ruleMatchLabel(rule.match_type))}</span><strong>${escapeHtml(rule.value)}</strong><span class="rule-tag block">阻断</span><button class="btn btn-ghost remove-filter-rule" data-index="${index}">删除</button></div>`).join('')}</div>`
 }
 
 function formatRuleInfo(rule) {
@@ -617,6 +673,14 @@ async function refreshConfig() {
   }
 }
 
+async function refreshIPv6Status() {
+  try {
+    state.ipv6Status = await window.go.app.App.GetIPv6Status()
+  } catch (e) {
+    state.ipv6Status = { available: false, message: 'IPv6 状态检测失败，运行时将使用 IPv4' }
+  }
+}
+
 function ruleMatchLabel(id) { return RULE_MATCH_TYPES.find(item => item.id === id)?.label || id }
 function ruleActionLabel(id) { return RULE_ACTIONS.find(item => item.id === id)?.label || id }
 
@@ -694,9 +758,14 @@ function renderApp() {
   if (captureList) state.captureListScroll = captureList.scrollTop
   if (captureDetail) state.captureDetailScroll = captureDetail.scrollTop
   if (captureBody) state.captureBodyScroll[captureBody.dataset.captureBodyScroll] = { top: captureBody.scrollTop, left: captureBody.scrollLeft }
+  const openRuleMenus = [...document.querySelectorAll('.rule-menu[open]')].map(menu => menu.dataset.ruleMenuId)
   document.documentElement.dataset.theme = state.theme
   app.innerHTML = render()
   bindEvents()
+  openRuleMenus.forEach(id => {
+    const menu = document.querySelector(`.rule-menu[data-rule-menu-id="${CSS.escape(id)}"]`)
+    if (menu) menu.open = true
+  })
   const restoredList = document.querySelector('#captureList')
   const restoredDetail = document.querySelector('#captureDetail')
   const restoredBody = document.querySelector('[data-capture-body-scroll]')
@@ -721,6 +790,15 @@ function renderApp() {
 }
 
 function bindEvents() {
+  if (!state.ruleMenuDocumentBound) {
+    document.addEventListener('click', event => {
+      const clickedMenu = event.target.closest?.('.rule-menu')
+      document.querySelectorAll('.rule-menu[open]').forEach(menu => {
+        if (!clickedMenu || menu !== clickedMenu) menu.open = false
+      })
+    })
+    state.ruleMenuDocumentBound = true
+  }
   const themeToggle = document.querySelector('#themeToggle')
   if (themeToggle) {
     themeToggle.addEventListener('click', () => {
@@ -732,6 +810,7 @@ function bindEvents() {
   document.querySelectorAll('[data-view]').forEach(item => {
     item.addEventListener('click', async () => {
       state.view = item.dataset.view
+      if (state.view === 'routing') await refreshIPv6Status()
       if (state.view === 'capture') await refreshCapture()
       renderApp()
     })
@@ -881,6 +960,27 @@ function bindEvents() {
       } catch (e) {
         diagnosticsToggle.checked = !diagnosticsToggle.checked
         showToast(e.message || String(e), 'error')
+      }
+    })
+  }
+
+  const ipv6Toggle = document.querySelector('#ipv6Toggle')
+  if (ipv6Toggle) {
+    ipv6Toggle.addEventListener('change', async () => {
+      const cfg = JSON.parse(JSON.stringify(state.config))
+      cfg.ipv6_enabled = ipv6Toggle.checked
+      ipv6Toggle.disabled = true
+      try {
+        await window.go.app.App.SaveConfig(cfg)
+        state.config = cfg
+        await refreshIPv6Status()
+        renderApp()
+        showToast(cfg.ipv6_enabled && !state.ipv6Status?.available ? '设备没有可用 IPv6，已自动使用 IPv4' : 'IPv6 设置已应用', 'success')
+      } catch (e) {
+        ipv6Toggle.checked = !ipv6Toggle.checked
+        showToast(e.message || String(e), 'error')
+      } finally {
+        ipv6Toggle.disabled = false
       }
     })
   }
@@ -1165,6 +1265,135 @@ function bindEvents() {
     })
   })
 
+  const ruleSetFilter = document.querySelector('#ruleSetFilter')
+  if (ruleSetFilter) ruleSetFilter.addEventListener('change', () => {
+    state.ruleFilter = ruleSetFilter.value
+    renderApp()
+  })
+  document.querySelectorAll('.rule-copy-url').forEach(btn => btn.addEventListener('click', async () => {
+    const url = btn.dataset.url || ''
+    if (!url) { showToast('这个规则集没有可用 URL', 'error'); return }
+    try {
+      await navigator.clipboard.writeText(url)
+      showToast('规则集 URL 已复制', 'success')
+    } catch (_) {
+      showToast(url, 'info')
+    }
+  }))
+  document.querySelectorAll('.edit-rule').forEach(btn => btn.addEventListener('click', () => {
+    const rule = state.rules?.find(item => item.id === btn.dataset.id)
+    if (!rule) return
+    state.editingRuleSetID = rule.id
+    state.ruleSetForm = { name: rule.name, url: rule.url }
+    renderApp()
+    document.querySelector('#ruleSetName')?.focus()
+  }))
+
+  const ruleSetName = document.querySelector('#ruleSetName')
+  const ruleSetURL = document.querySelector('#ruleSetURL')
+  if (ruleSetName) ruleSetName.addEventListener('input', () => { state.ruleSetForm.name = ruleSetName.value })
+  if (ruleSetURL) ruleSetURL.addEventListener('input', () => { state.ruleSetForm.url = ruleSetURL.value })
+  const addRuleSetBtn = document.querySelector('#addRuleSetBtn')
+  if (addRuleSetBtn) addRuleSetBtn.addEventListener('click', async () => {
+    const name = state.ruleSetForm.name.trim()
+    const url = state.ruleSetForm.url.trim()
+    if (!name || !url) { showToast('请输入规则集名称和 URL', 'error'); return }
+    addRuleSetBtn.disabled = true
+    const editing = Boolean(state.editingRuleSetID)
+    try {
+      if (state.editingRuleSetID) {
+        await window.go.app.App.EditRuleSet(state.editingRuleSetID, name, url)
+      } else {
+        await window.go.app.App.AddRuleSet(name, url)
+      }
+      state.ruleSetForm = { name: '', url: '' }
+      state.editingRuleSetID = ''
+      await refreshRules()
+      showToast(editing ? '规则集已修改' : '规则集已添加', 'success')
+    } catch (e) { showToast(e.message || String(e), 'error') }
+    finally { addRuleSetBtn.disabled = false }
+  })
+  const cancelEditRuleSet = document.querySelector('#cancelEditRuleSet')
+  if (cancelEditRuleSet) cancelEditRuleSet.addEventListener('click', () => {
+    state.editingRuleSetID = ''
+    state.ruleSetForm = { name: '', url: '' }
+    renderApp()
+  })
+  document.querySelectorAll('.toggle-rule').forEach(btn => btn.addEventListener('click', async () => {
+    const rule = state.rules?.find(item => item.id === btn.dataset.id)
+    if (!rule) return
+    btn.disabled = true
+    try {
+      await window.go.app.App.SetRuleEnabled(rule.id, !rule.enabled)
+      await refreshRules()
+      showToast(rule.enabled ? '规则集已停用' : '规则集已启用', 'success')
+    } catch (e) { showToast(e.message || String(e), 'error') }
+    finally { btn.disabled = false }
+  }))
+  document.querySelectorAll('.delete-rule').forEach(btn => btn.addEventListener('click', async () => {
+    if (!window.confirm('删除这个规则集及其本地文件？')) return
+    btn.disabled = true
+    try {
+      await window.go.app.App.DeleteRuleSet(btn.dataset.id)
+      await refreshRules()
+      showToast('规则集已删除', 'success')
+    } catch (e) { showToast(e.message || String(e), 'error') }
+    finally { btn.disabled = false }
+  }))
+  const restoreDefaultRules = document.querySelector('#restoreDefaultRules')
+  if (restoreDefaultRules) restoreDefaultRules.addEventListener('click', async () => {
+    restoreDefaultRules.disabled = true
+    try {
+      await window.go.app.App.RestoreDefaultRuleSets()
+      await refreshRules()
+      showToast('默认规则集已恢复', 'success')
+    } catch (e) { showToast(e.message || String(e), 'error') }
+    finally { restoreDefaultRules.disabled = false }
+  })
+
+  const addFilterRuleBtn = document.querySelector('#addFilterRuleBtn')
+  if (addFilterRuleBtn) addFilterRuleBtn.addEventListener('click', async () => {
+    const matchType = document.querySelector('#filterRuleMatchType')?.value || 'domain_suffix'
+    const value = document.querySelector('#filterRuleValue')?.value.trim() || ''
+    const error = validateCustomRule(matchType, value)
+    if (error && matchType !== 'ip_cidr') { showToast(error, 'error'); return }
+    if (!value) { showToast('请输入过滤内容', 'error'); return }
+    const cfg = JSON.parse(JSON.stringify(state.config))
+    cfg.dns_filter_rules = cfg.dns_filter_rules || []
+    const duplicate = cfg.dns_filter_rules.some(rule => rule.match_type === matchType && rule.value.toLowerCase() === value.toLowerCase())
+    if (duplicate) { showToast('这条过滤规则已经存在', 'error'); return }
+    cfg.dns_filter_rules.push({ match_type: matchType, value, action: 'block' })
+    addFilterRuleBtn.disabled = true
+    try {
+      await window.go.app.App.SaveConfig(cfg)
+      state.config = cfg
+      state.dnsFilterFormOpen = false
+      renderApp()
+      showToast('过滤规则已添加', 'success')
+    } catch (e) { showToast(e.message || String(e), 'error') }
+    finally { addFilterRuleBtn.disabled = false }
+  })
+  const openFilterRuleBtn = document.querySelector('#openFilterRuleBtn')
+  if (openFilterRuleBtn) openFilterRuleBtn.addEventListener('click', () => {
+    state.dnsFilterFormOpen = true
+    renderApp()
+  })
+  const cancelFilterRuleBtn = document.querySelector('#cancelFilterRuleBtn')
+  if (cancelFilterRuleBtn) cancelFilterRuleBtn.addEventListener('click', () => {
+    state.dnsFilterFormOpen = false
+    renderApp()
+  })
+  document.querySelectorAll('.remove-filter-rule').forEach(btn => btn.addEventListener('click', async () => {
+    const cfg = JSON.parse(JSON.stringify(state.config))
+    cfg.dns_filter_rules.splice(Number(btn.dataset.index), 1)
+    try {
+      await window.go.app.App.SaveConfig(cfg)
+      state.config = cfg
+      renderApp()
+      showToast('过滤规则已删除', 'success')
+    } catch (e) { showToast(e.message || String(e), 'error') }
+  }))
+
   const updateAllRules = document.querySelector('#updateAllRules')
   if (updateAllRules) {
     updateAllRules.disabled = Boolean(state.ruleUpdating || state.allRulesUpdating)
@@ -1295,6 +1524,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (window.go?.app?.App) {
     await refreshStatus()
     await refreshConfig()
+    await refreshIPv6Status()
     await refreshRules()
     await refreshDiagnostics()
     await refreshCapture()

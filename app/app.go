@@ -16,6 +16,7 @@ import (
 	"github.com/caichengle666/sbtun/core"
 	"github.com/caichengle666/sbtun/core/capture"
 	"github.com/caichengle666/sbtun/core/rules"
+	"github.com/caichengle666/sbtun/core/singbox"
 )
 
 type App struct {
@@ -224,6 +225,18 @@ func (a *App) InstallCaptureCertificate(level string) error {
 		return errors.New("流量分析器未初始化")
 	}
 	return a.runtime.Capture.InstallCertificate(level)
+}
+
+type IPv6StatusDTO struct {
+	Available bool   `json:"available"`
+	Message   string `json:"message"`
+}
+
+func (a *App) GetIPv6Status() IPv6StatusDTO {
+	if singbox.HasUsableIPv6() {
+		return IPv6StatusDTO{Available: true, Message: "检测到可用 IPv6"}
+	}
+	return IPv6StatusDTO{Message: "未检测到可用 IPv6，将使用 IPv4"}
 }
 
 func (a *App) UninstallCaptureCertificate(level string) error {
@@ -1094,6 +1107,68 @@ func (a *App) ListRules() []rules.RuleInfo {
 		return nil
 	}
 	return a.rulesManager.List()
+}
+
+func (a *App) AddRuleSet(name, url string) error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	if a.rulesManager == nil {
+		return errors.New("规则管理器未初始化")
+	}
+	if err := a.rulesManager.Add(name, url); err != nil {
+		return err
+	}
+	return a.reloadIfRunningLocked()
+}
+
+func (a *App) EditRuleSet(id, name, url string) error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	if a.rulesManager == nil {
+		return errors.New("规则管理器未初始化")
+	}
+	if err := a.rulesManager.Edit(id, name, url); err != nil {
+		return err
+	}
+	return a.reloadIfRunningLocked()
+}
+
+func (a *App) SetRuleEnabled(id string, enabled bool) error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	if a.rulesManager == nil {
+		return errors.New("规则管理器未初始化")
+	}
+	if err := a.rulesManager.SetEnabled(id, enabled); err != nil {
+		return err
+	}
+	return a.reloadIfRunningLocked()
+}
+
+func (a *App) DeleteRuleSet(id string) error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	if a.rulesManager == nil {
+		return errors.New("规则管理器未初始化")
+	}
+	if err := a.rulesManager.Delete(id); err != nil {
+		return err
+	}
+	return a.reloadIfRunningLocked()
+}
+
+func (a *App) RestoreDefaultRuleSets() error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	if a.rulesManager == nil {
+		return errors.New("规则管理器未初始化")
+	}
+	restoreErr := a.rulesManager.RestoreDefaults()
+	reloadErr := a.reloadIfRunningLocked()
+	if restoreErr != nil {
+		return restoreErr
+	}
+	return reloadErr
 }
 
 func (a *App) UpdateRule(id string) error {

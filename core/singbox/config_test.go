@@ -311,12 +311,33 @@ func TestTUNKeepsWindowsCompatibleRouteMode(t *testing.T) {
 		t.Fatalf("strict_route=%v want=false", runtime.Inbounds[0]["strict_route"])
 	}
 	addresses := runtime.Inbounds[0]["address"].([]any)
-	if len(addresses) != 2 || addresses[0] != "172.18.0.1/30" || addresses[1] != "fdfe:dcba:9876::1/126" {
-		t.Fatalf("tun addresses=%v want IPv4 and IPv6", runtime.Inbounds[0]["address"])
+	if len(addresses) != 1 || addresses[0] != "172.18.0.1/30" {
+		t.Fatalf("tun addresses=%v want IPv4 only by default", runtime.Inbounds[0]["address"])
 	}
 	rules := runtime.Route["rules"].([]any)
 	if rules[0].(map[string]any)["action"] != "sniff" || rules[2].(map[string]any)["action"] != "resolve" {
 		t.Fatalf("route sniff/resolve actions missing: %+v", rules[:3])
+	}
+}
+
+func TestTUNIPv6FallsBackWhenUnavailable(t *testing.T) {
+	cfg := testConfig(config.RoutingGlobal)
+	cfg.IPv6Enabled = true
+	data, err := BuildConfig(cfg, "D:\\test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runtime RuntimeConfig
+	if err := json.Unmarshal(data, &runtime); err != nil {
+		t.Fatal(err)
+	}
+	addresses := runtime.Inbounds[0]["address"].([]any)
+	want := 1
+	if HasUsableIPv6() {
+		want = 2
+	}
+	if len(addresses) != want {
+		t.Fatalf("tun addresses=%v want %d addresses", addresses, want)
 	}
 }
 

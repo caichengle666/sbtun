@@ -51,7 +51,7 @@ func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 	}
 	inbounds := []map[string]any{{
 		"type": "tun", "tag": "tun-in",
-		"address":    []string{"172.18.0.1/30", "fdfe:dcba:9876::1/126"},
+		"address":    tunAddresses(cfg.IPv6Enabled),
 		"auto_route": true, "strict_route": false, "stack": "system",
 	}}
 	if cfg.CaptureEnabled && len(normalizeCaptureDomains(cfg.CaptureDomains)) > 0 {
@@ -66,7 +66,7 @@ func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 		DNS:       buildDNS(cfg.DNSMode, cfg.RoutingMode),
 		Inbounds:  inbounds,
 		Outbounds: outbounds,
-		Route:     routeForMode(cfg.RoutingMode, cfg.CustomRules, cfg.CaptureEnabled, cfg.CaptureDomains, exeDir),
+		Route:     routeForMode(cfg.RoutingMode, cfg.CustomRules, cfg.DNSFilterRules, cfg.CaptureEnabled, cfg.CaptureDomains, exeDir),
 		Experimental: map[string]any{
 			"cache_file": map[string]any{"enabled": true},
 			"clash_api":  map[string]any{"external_controller": "127.0.0.1:9090"},
@@ -147,7 +147,7 @@ func buildDNS(mode config.DNSMode, routeMode config.RoutingMode) map[string]any 
 	return map[string]any{"servers": servers, "rules": rules, "final": final, "strategy": "prefer_ipv4"}
 }
 
-func routeForMode(mode config.RoutingMode, custom []config.Rule, captureEnabled bool, captureDomains []string, exeDir string) map[string]any {
+func routeForMode(mode config.RoutingMode, custom, filterRules []config.Rule, captureEnabled bool, captureDomains []string, exeDir string) map[string]any {
 	private := map[string]any{"ip_is_private": true, "outbound": "direct"}
 	dns := map[string]any{"protocol": "dns", "action": "hijack-dns"}
 	base := []map[string]any{
@@ -182,6 +182,21 @@ func routeForMode(mode config.RoutingMode, custom []config.Rule, captureEnabled 
 			base = append(base, rr)
 		}
 	}
+	for _, r := range filterRules {
+		if rr, ok := customRule(r); ok {
+			base = append(base, rr)
+		}
+	}
+	ruleSets := configuredRuleSets(exeDir)
+	for _, set := range ruleSets {
+		if !set.Enabled || !ruleSetExists(exeDir, filepath.Base(set.Path)) {
+			continue
+		}
+		if set.Source == "default" && mode != config.RoutingSmart {
+			continue
+		}
+		base = append(base, map[string]any{"rule_set": []string{set.ID}, "outbound": set.Action})
+	}
 	base = append(base, private)
 	final := "proxy"
 
@@ -194,32 +209,58 @@ func routeForMode(mode config.RoutingMode, custom []config.Rule, captureEnabled 
 		final = "direct"
 	case config.RoutingSmart:
 		// 中国域名/IP 直连；非中国域名和其余流量代理。
-		if ruleSetExists(exeDir, "geosite-geolocation-cn.srs") {
-			base = append(base, map[string]any{"rule_set": []string{"geosite-cn"}, "outbound": "direct"})
-		}
-		if ruleSetExists(exeDir, "geoip-cn.srs") {
-			base = append(base, map[string]any{"rule_set": []string{"geoip-cn"}, "outbound": "direct"})
-		}
 		final = "proxy"
 	case config.RoutingCustom:
 		final = "proxy"
 	}
 
-	ruleSets := []map[string]any{}
-	if mode == config.RoutingSmart {
-		if ruleSetExists(exeDir, "geosite-geolocation-cn.srs") {
-			ruleSets = append(ruleSets, map[string]any{"type": "local", "tag": "geosite-cn", "format": "binary", "path": filepath.Join(exeDir, "rules", "geosite-geolocation-cn.srs")})
+	ruleSetConfigs := []map[string]any{}
+	for _, set := range ruleSets {
+		if !set.Enabled || !ruleSetExists(exeDir, filepath.Base(set.Path)) {
+			continue
 		}
-		if ruleSetExists(exeDir, "geoip-cn.srs") {
-			ruleSets = append(ruleSets, map[string]any{"type": "local", "tag": "geoip-cn", "format": "binary", "path": filepath.Join(exeDir, "rules", "geoip-cn.srs")})
+		if set.Source == "default" && mode != config.RoutingSmart {
+			continue
 		}
+		ruleSetConfigs = append(ruleSetConfigs, map[string]any{"type": "local", "tag": set.ID, "format": "binary", "path": filepath.Join(exeDir, "rules", filepath.Base(set.Path))})
 	}
 	return map[string]any{
 		"auto_detect_interface":   true,
 		"default_domain_resolver": "dns-local",
-		"rule_set":                ruleSets,
+		"rule_set":                ruleSetConfigs,
 		"rules":                   base,
 		"final":                   final,
+	}
+}
+
+type configuredRuleSet struct {
+	ID      string `json:"id"`
+	Path    string `json:"path"`
+	Enabled bool   `json:"enabled"`
+	Source  string `json:"source"`
+	Action  string `json:"action"`
+}
+
+func configuredRuleSets(exeDir string) []configuredRuleSet {
+	data, err := os.ReadFile(filepath.Join(exeDir, "rules", "sets.json"))
+	if err == nil {
+		var sets []configuredRuleSet
+		if json.Unmarshal(data, &sets) == nil {
+			for i := range sets {
+				if sets[i].Action == "" {
+					sets[i].Action = "block"
+				}
+				if sets[i].Source == "" {
+					sets[i].Source = "custom"
+				}
+			}
+			return sets
+		}
+	}
+	return []configuredRuleSet{
+		{ID: "geosite-cn", Path: "geosite-geolocation-cn.srs", Enabled: true, Source: "default", Action: "direct"},
+		{ID: "geoip-cn", Path: "geoip-cn.srs", Enabled: true, Source: "default", Action: "direct"},
+		{ID: "geosite-non-cn", Path: "geosite-geolocation-!cn.srs", Enabled: true, Source: "default", Action: "proxy"},
 	}
 }
 

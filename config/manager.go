@@ -189,6 +189,18 @@ func Validate(cfg Config) error {
 			return fmt.Errorf("第 %d 条自定义规则无效: %w", i+1, err)
 		}
 	}
+	for i, r := range cfg.DNSFilterRules {
+		if strings.ToLower(strings.TrimSpace(r.Action)) != "block" {
+			return fmt.Errorf("第 %d 条 DNS 过滤规则必须使用阻断动作", i+1)
+		}
+		match := strings.ToLower(strings.TrimSpace(r.MatchType))
+		if match != "domain_suffix" && match != "domain_keyword" && match != "domain" && match != "ip_cidr" {
+			return fmt.Errorf("第 %d 条 DNS 过滤规则不支持匹配类型 %q", i+1, r.MatchType)
+		}
+		if strings.TrimSpace(r.Value) == "" {
+			return fmt.Errorf("第 %d 条 DNS 过滤规则内容不能为空", i+1)
+		}
+	}
 	if cfg.CaptureEnabled && len(cfg.CaptureDomains) == 0 {
 		return errors.New("启用流量分析时至少需要一个域名")
 	}

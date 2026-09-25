@@ -160,8 +160,11 @@ edit <编号>                 交互式编辑节点
 
 route                       查看当前路由模式
 add-rule                    交互式添加自定义规则
-rules list                  列出自定义规则
-rules update                更新规则集
+rules list                  列出规则集
+rules add <名称> <SRS_URL>  添加规则集
+rules edit <ID> <名称> <URL> 编辑规则集
+rules delete <ID>           删除规则集
+rules update <ID>           更新指定规则集
 rules update-all            更新全部规则集
 
 capture run <规则>          启动流量分析
