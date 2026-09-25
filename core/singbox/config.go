@@ -187,14 +187,8 @@ func routeForMode(mode config.RoutingMode, custom, filterRules []config.Rule, ca
 			base = append(base, rr)
 		}
 	}
-	ruleSets := configuredRuleSets(exeDir)
+	ruleSets := activeRuleSets(mode, exeDir)
 	for _, set := range ruleSets {
-		if !set.Enabled || !ruleSetExists(exeDir, filepath.Base(set.Path)) {
-			continue
-		}
-		if set.Source == "default" && mode != config.RoutingSmart {
-			continue
-		}
 		base = append(base, map[string]any{"rule_set": []string{set.ID}, "outbound": set.Action})
 	}
 	base = append(base, private)
@@ -214,14 +208,8 @@ func routeForMode(mode config.RoutingMode, custom, filterRules []config.Rule, ca
 		final = "proxy"
 	}
 
-	ruleSetConfigs := []map[string]any{}
+	ruleSetConfigs := make([]map[string]any, 0, len(ruleSets))
 	for _, set := range ruleSets {
-		if !set.Enabled || !ruleSetExists(exeDir, filepath.Base(set.Path)) {
-			continue
-		}
-		if set.Source == "default" && mode != config.RoutingSmart {
-			continue
-		}
 		ruleSetConfigs = append(ruleSetConfigs, map[string]any{"type": "local", "tag": set.ID, "format": "binary", "path": filepath.Join(exeDir, "rules", filepath.Base(set.Path))})
 	}
 	return map[string]any{
@@ -239,6 +227,25 @@ type configuredRuleSet struct {
 	Enabled bool   `json:"enabled"`
 	Source  string `json:"source"`
 	Action  string `json:"action"`
+}
+
+func activeRuleSets(mode config.RoutingMode, exeDir string) []configuredRuleSet {
+	sets := configuredRuleSets(exeDir)
+	userSets := make([]configuredRuleSet, 0, len(sets))
+	defaultSets := make([]configuredRuleSet, 0, len(sets))
+	for _, set := range sets {
+		if !set.Enabled || !ruleSetExists(exeDir, filepath.Base(set.Path)) {
+			continue
+		}
+		if set.Source == "default" {
+			if mode == config.RoutingSmart {
+				defaultSets = append(defaultSets, set)
+			}
+			continue
+		}
+		userSets = append(userSets, set)
+	}
+	return append(userSets, defaultSets...)
 }
 
 func configuredRuleSets(exeDir string) []configuredRuleSet {

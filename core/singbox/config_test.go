@@ -126,6 +126,56 @@ func TestSmartRoutingUsesChinaRuleSets(t *testing.T) {
 	}
 }
 
+func TestUserRuleSetsPrecedeDefaultRuleSets(t *testing.T) {
+	exeDir := t.TempDir()
+	rulesDir := filepath.Join(exeDir, "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	files := []string{"geosite-geolocation-cn.srs", "geoip-cn.srs", "geosite-geolocation-!cn.srs", "ads-a.srs", "ads-b.srs"}
+	for _, name := range files {
+		if err := os.WriteFile(filepath.Join(rulesDir, name), []byte("test"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	sets := `[{"id":"geosite-cn","path":"geosite-geolocation-cn.srs","enabled":true,"source":"default","action":"direct"},{"id":"geoip-cn","path":"geoip-cn.srs","enabled":true,"source":"default","action":"direct"},{"id":"geosite-non-cn","path":"geosite-geolocation-!cn.srs","enabled":true,"source":"default","action":"proxy"},{"id":"ads-a","path":"ads-a.srs","enabled":true,"source":"custom","action":"block"},{"id":"ads-disabled","path":"missing.srs","enabled":false,"source":"custom","action":"block"},{"id":"ads-b","path":"ads-b.srs","enabled":true,"source":"custom","action":"block"}]`
+	if err := os.WriteFile(filepath.Join(rulesDir, "sets.json"), []byte(sets), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	data, err := BuildConfig(testConfig(config.RoutingSmart), exeDir)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runtime RuntimeConfig
+	if err := json.Unmarshal(data, &runtime); err != nil {
+		t.Fatal(err)
+	}
+	rules := runtime.Route["rules"].([]any)
+	want := []string{"ads-a", "ads-b", "geosite-cn", "geoip-cn", "geosite-non-cn"}
+	got := make([]string, 0, len(want))
+	for _, raw := range rules {
+		rule := raw.(map[string]any)
+		refs, ok := rule["rule_set"].([]any)
+		if ok && len(refs) > 0 {
+			got = append(got, refs[0].(string))
+		}
+	}
+	if len(got) != len(want) {
+		t.Fatalf("route rule-set order=%v want=%v", got, want)
+	}
+	for i := range want {
+		if got[i] != want[i] {
+			t.Fatalf("route rule-set order=%v want=%v", got, want)
+		}
+	}
+	declared := runtime.Route["rule_set"].([]any)
+	for i, id := range want {
+		if declared[i].(map[string]any)["tag"] != id {
+			t.Fatalf("declared rule-set order[%d]=%v want=%s", i, declared[i].(map[string]any)["tag"], id)
+		}
+	}
+}
+
 func TestCustomRoutingRule(t *testing.T) {
 	cfg := testConfig(config.RoutingSmart)
 	cfg.CustomRules = []config.Rule{{MatchType: "domain_suffix", Value: "example.com", Action: "direct"}, {MatchType: "port", Value: "443", Action: "proxy"}}

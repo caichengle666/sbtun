@@ -8,6 +8,10 @@ const state = {
   theme: initialTheme,
   running: false,
   version: '',
+  singBoxVersion: '',
+  singBoxUpdating: false,
+  singBoxUpdateMessage: '',
+  singBoxUpdateState: 'idle',
   statusState: 'stopped',
   statusMessage: '',
   runtimeNodeID: '',
@@ -175,9 +179,11 @@ function render() {
           ].map(([id, label]) => `<button class="nav-item ${state.view === id ? 'active' : ''}" data-view="${id}">${label}</button>`).join('')}
         </nav>
         <div class="sidebar-status">
-          <span class="dot ${dotClass(state.statusState)}"></span>
-          <span>${statusLabel(state.statusState, state.statusMessage)}</span>
-          ${state.version ? `<span class="app-version" title="sbtun 版本">v${escapeHtml(state.version)}</span>` : ''}
+          <div class="sidebar-status-line"><span class="dot ${dotClass(state.statusState)}"></span><span>${statusLabel(state.statusState, state.statusMessage)}</span></div>
+          <div class="sidebar-versions">
+            ${state.version ? `<span class="app-version" title="管理器版本 v${escapeHtml(state.version)}">程序 v${escapeHtml(state.version)}</span>` : ''}
+            <span class="app-version" title="sing-box 内核版本 ${state.singBoxVersion ? 'v' + escapeHtml(state.singBoxVersion) : '读取中'}">内核 ${state.singBoxVersion ? 'v' + escapeHtml(state.singBoxVersion) : '--'}</span>
+          </div>
         </div>
       </aside>
 
@@ -245,6 +251,9 @@ function renderOverview() {
     <section class="card overview-wide">
       <div class="section-heading"><h2>路由模式</h2><button class="btn btn-ghost" data-view="routing">调整</button></div>
       <div class="mode-summary"><strong>${MODES.find(m => m.id === state.config?.routing_mode)?.name || '未设置'}</strong><span class="muted">${MODES.find(m => m.id === state.config?.routing_mode)?.desc || ''}</span></div>
+    </section>
+    <section class="card overview-wide">
+      <div class="kernel-update-row"><div><h2>sing-box 内核</h2><p class="muted">当前版本：${state.singBoxVersion ? 'v' + escapeHtml(state.singBoxVersion) : '读取中'}</p>${state.singBoxUpdateMessage ? `<p class="kernel-update-status ${state.singBoxUpdateState}">${escapeHtml(state.singBoxUpdateMessage)}</p>` : ''}</div><button id="updateSingBox" class="btn btn-ghost" ${state.singBoxUpdating ? 'disabled' : ''}>${state.singBoxUpdating ? '正在检查更新…' : '更新内核'}</button></div>
     </section>
   </div>`
 }
@@ -630,6 +639,15 @@ async function refreshStatus() {
   }
 }
 
+async function refreshSingBoxVersion() {
+  try {
+    state.singBoxVersion = await window.go.app.App.SingBoxVersion()
+    renderApp()
+  } catch (e) {
+    console.error('read sing-box version failed:', e)
+  }
+}
+
 function renderCustomRules() {
   const rules = state.config?.custom_rules || []
   if (!rules.length) return '<div class="empty">暂无自定义规则</div>'
@@ -815,6 +833,29 @@ function bindEvents() {
       renderApp()
     })
   })
+  const updateSingBox = document.querySelector('#updateSingBox')
+  if (updateSingBox) {
+    updateSingBox.addEventListener('click', async () => {
+      state.singBoxUpdating = true
+      state.singBoxUpdateState = 'loading'
+      state.singBoxUpdateMessage = '正在检查官方稳定版并校验资源…'
+      renderApp()
+      try {
+        const result = await window.go.app.App.UpdateSingBox()
+        state.singBoxVersion = result.current_version || state.singBoxVersion
+        state.singBoxUpdateState = 'success'
+        state.singBoxUpdateMessage = result.message || 'sing-box 更新完成'
+        showToast(result.message || 'sing-box 更新完成', 'success')
+      } catch (e) {
+        state.singBoxUpdateState = 'error'
+        state.singBoxUpdateMessage = e.message || String(e)
+        showToast(e.message || String(e), 'error')
+      } finally {
+        state.singBoxUpdating = false
+        renderApp()
+      }
+    })
+  }
   document.querySelectorAll('[data-scroll]').forEach(item => {
     item.addEventListener('click', () => document.querySelector('#' + item.dataset.scroll)?.scrollIntoView({ behavior: 'smooth' }))
   })
@@ -1524,6 +1565,7 @@ window.addEventListener('DOMContentLoaded', async () => {
   if (window.go?.app?.App) {
     await refreshStatus()
     await refreshConfig()
+    await refreshSingBoxVersion()
     await refreshIPv6Status()
     await refreshRules()
     await refreshDiagnostics()
