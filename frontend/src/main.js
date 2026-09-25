@@ -194,7 +194,6 @@ function render() {
             <h1>${viewTitle(state.view)}</h1>
           </div>
           <div class="topbar-actions">
-            <span class="traffic-chip" id="trafficText">${formatTraffic(state.traffic)}</span>
             <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">${state.theme === 'dark' ? '☀' : '<span class="moon-icon" aria-hidden="true"></span>'}</button>
             <button id="power" class="switch ${state.running ? 'on' : ''}">${state.running ? '关闭 TUN' : '开启 TUN'}</button>
           </div>
@@ -203,7 +202,7 @@ function render() {
           <span class="dot ${dotClass(state.statusState)}"></span>
           <strong id="statusText">${statusLabel(state.statusState, state.statusMessage)}</strong>
           ${state.running && state.selectorSyncState !== 'idle' ? `<span class="badge selector-sync ${state.selectorSyncState}" title="${escapeHtml(state.selectorSyncMessage)}">${selectorSyncLabel(state.selectorSyncState)}</span>` : ''}
-          <span class="muted">节点、DNS、路由和 TUN 由程序自动管理。</span>
+	  <span class="muted" id="statusTraffic">${formatTraffic(state.traffic)}</span>
         </section>
         ${renderView()}
       </section>
@@ -236,17 +235,14 @@ function renderView() {
 function renderOverview() {
   const current = state.config?.nodes?.find(n => n.id === activeNodeID())
   return `<div class="overview-grid">
-    <section class="card focus-card">
-      <div class="section-kicker">当前节点</div>
-      <h2>${escapeHtml(current?.name || '未选择节点')}</h2>
-      <p class="muted">${current ? escapeHtml(current.server) + ':' + current.port : '请先在节点页导入或添加节点'}</p>
-      ${current ? renderNodeHealth(current.id) : '<div class="empty">暂无健康检测结果</div>'}
+    <section class="card focus-card overview-wide">
+      <div class="focus-card-main">
+        <div class="section-kicker">当前节点</div>
+        <h2>${escapeHtml(current?.name || '未选择节点')}</h2>
+        <p class="muted">${current ? escapeHtml(current.server) + ':' + current.port : '请先在节点页导入或添加节点'}</p>
+        ${current ? renderNodeHealth(current.id) : '<div class="empty">暂无健康检测结果</div>'}
+      </div>
       <button class="btn btn-primary" data-view="nodes">管理节点</button>
-    </section>
-    <section class="card metric-card">
-      <div class="section-kicker">连接状态</div>
-      <div class="metric-value"><span class="dot ${dotClass(state.statusState)}"></span>${statusLabel(state.statusState, state.statusMessage)}</div>
-      <span class="muted">${formatTraffic(state.traffic)}</span>
     </section>
     <section class="card overview-wide">
       <div class="section-heading"><h2>路由模式</h2><button class="btn btn-ghost" data-view="routing">调整</button></div>
@@ -493,7 +489,7 @@ function formatTraffic(t) {
     if (n < 1024 * 1024 * 1024) return (n / 1024 / 1024).toFixed(1) + ' MB'
     return (n / 1024 / 1024 / 1024).toFixed(2) + ' GB'
   }
-  return '实时 ↑ ' + fmt(t?.up) + '/s  ↓ ' + fmt(t?.down) + '/s'
+  return '实时 ↑ ' + fmt(t?.up) + '/s  ↓ ' + fmt(t?.down) + '/s  ·  累计 ↑ ' + fmt(t?.upTotal) + '  ↓ ' + fmt(t?.downTotal)
 }
 
 function renderRuleSummary() {
@@ -625,7 +621,7 @@ async function refreshStatus() {
     state.running = s.running
     state.statusState = s.state
     state.statusMessage = s.message
-    state.traffic = { up: s.upload_bytes || 0, down: s.download_bytes || 0 }
+    state.traffic = { up: s.upload_bytes || 0, down: s.download_bytes || 0, upTotal: s.upload_total_bytes || 0, downTotal: s.download_total_bytes || 0 }
     state.runtimeNodeID = s.running ? (s.current_node_id || '') : ''
     state.selectorSyncState = s.selector_sync_state || 'idle'
     state.selectorSyncMessage = s.selector_sync_message || ''
@@ -662,15 +658,15 @@ function renderCustomRules() {
 
 function updateStatusView() {
   const statusText = document.querySelector('#statusText')
-  const trafficText = document.querySelector('#trafficText')
+  const statusTraffic = document.querySelector('#statusTraffic')
   const power = document.querySelector('#power')
   const dot = document.querySelector('.status .dot')
-  if (!statusText || !trafficText || !power || !dot) {
+  if (!statusText || !power || !dot) {
     renderApp()
     return
   }
   statusText.textContent = statusLabel(state.statusState, state.statusMessage)
-  trafficText.textContent = formatTraffic(state.traffic)
+  if (statusTraffic) statusTraffic.textContent = formatTraffic(state.traffic)
   power.textContent = state.running ? '关闭 TUN' : '开启 TUN'
   power.className = 'switch ' + (state.running ? 'on' : '')
   dot.className = 'dot ' + dotClass(state.statusState)

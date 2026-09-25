@@ -42,6 +42,8 @@ type App struct {
 	failoverBlocked map[string]time.Time
 	uploadRate      uint64
 	downloadRate    uint64
+	uploadTotal     uint64
+	downloadTotal   uint64
 }
 
 var clashAPIBaseURL = "http://127.0.0.1:9090"
@@ -118,6 +120,8 @@ type StatusDTO struct {
 	Running             bool   `json:"running"`
 	UploadBytes         uint64 `json:"upload_bytes"`
 	DownloadBytes       uint64 `json:"download_bytes"`
+	UploadTotalBytes    uint64 `json:"upload_total_bytes"`
+	DownloadTotalBytes  uint64 `json:"download_total_bytes"`
 	Selector            string `json:"selector,omitempty"`
 	CurrentNodeID       string `json:"current_node_id,omitempty"`
 	SelectorSyncState   string `json:"selector_sync_state,omitempty"`
@@ -252,9 +256,9 @@ func (a *App) GetStatus() StatusDTO {
 	}
 	state, message := a.runtime.State.Get()
 	a.trafficMu.RLock()
-	up, down := a.uploadRate, a.downloadRate
+	up, down, upTotal, downTotal := a.uploadRate, a.downloadRate, a.uploadTotal, a.downloadTotal
 	a.trafficMu.RUnlock()
-	result := StatusDTO{Version: Version(), State: string(state), Message: message, Running: state == core.StateRunning, UploadBytes: up, DownloadBytes: down}
+	result := StatusDTO{Version: Version(), State: string(state), Message: message, Running: state == core.StateRunning, UploadBytes: up, DownloadBytes: down, UploadTotalBytes: upTotal, DownloadTotalBytes: downTotal}
 	result.SelectorSyncState, result.SelectorSyncMessage = a.selectorSyncStatus()
 	if a.manager == nil {
 		if result.Message == "" {
@@ -300,22 +304,28 @@ func nodeIDFromSelector(cfg config.Config, selector string) string {
 	return ""
 }
 
-func (a *App) refreshTraffic() (uint64, uint64) {
+func (a *App) refreshTraffic() (uint64, uint64, uint64, uint64) {
 	if a.runtime == nil || a.runtime.SingBox == nil || !a.runtime.SingBox.Running() {
 		a.trafficMu.Lock()
-		a.uploadRate, a.downloadRate = 0, 0
+		a.uploadRate, a.downloadRate, a.uploadTotal, a.downloadTotal = 0, 0, 0, 0
 		a.trafficMu.Unlock()
-		return 0, 0
+		return 0, 0, 0, 0
 	}
-	up, down := trafficStats()
+	up, down, upTotal, downTotal := trafficStats()
 	a.trafficMu.Lock()
-	a.uploadRate, a.downloadRate = up, down
+	a.uploadRate, a.downloadRate, a.uploadTotal, a.downloadTotal = up, down, upTotal, downTotal
 	a.trafficMu.Unlock()
-	return up, down
+	return up, down, upTotal, downTotal
 }
 
-func trafficStats() (uint64, uint64) {
+func trafficStats() (uint64, uint64, uint64, uint64) {
 	client := http.Client{Timeout: 1500 * time.Millisecond}
+	up, down := trafficRates(client)
+	upTotal, downTotal := trafficTotals(client)
+	return up, down, upTotal, downTotal
+}
+
+func trafficRates(client http.Client) (uint64, uint64) {
 	resp, err := client.Get(clashAPIBaseURL + "/traffic?interval=1000")
 	if err != nil {
 		return 0, 0
@@ -341,6 +351,25 @@ func trafficStats() (uint64, uint64) {
 		v = latest
 	}
 	return v.Up, v.Down
+}
+
+func trafficTotals(client http.Client) (uint64, uint64) {
+	resp, err := client.Get(clashAPIBaseURL + "/connections")
+	if err != nil {
+		return 0, 0
+	}
+	defer resp.Body.Close()
+	if resp.StatusCode != http.StatusOK {
+		return 0, 0
+	}
+	var totals struct {
+		Up   uint64 `json:"uploadTotal"`
+		Down uint64 `json:"downloadTotal"`
+	}
+	if err := json.NewDecoder(resp.Body).Decode(&totals); err != nil {
+		return 0, 0
+	}
+	return totals.Up, totals.Down
 }
 
 func (a *App) GetConfig() config.Config {

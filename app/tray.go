@@ -89,7 +89,7 @@ func (a *App) StartTray() {
 						continue
 					}
 					state, _ := a.runtime.State.Get()
-					up, down := a.refreshTraffic()
+					up, down, upTotal, downTotal := a.refreshTraffic()
 					currentNodeID := ""
 					if cfg, err := a.manager.Load(); err == nil {
 						currentNodeID = cfg.CurrentNodeID
@@ -131,7 +131,7 @@ func (a *App) StartTray() {
 						startItem.Disable()
 						stopItem.Enable()
 						runningNodeItem.SetTitle(fmt.Sprintf("当前运行节点：%s", trayNodeName(nodeNames, currentNodeID)))
-						systray.SetTooltip(fmt.Sprintf("sbtun | 运行中 | 上行 %s/s | 下行 %s/s", formatTraffic(up), formatTraffic(down)))
+						systray.SetTooltip(fmt.Sprintf("sbtun | 实时 ↑ %s/s ↓ %s/s | 累计 ↑ %s ↓ %s", formatTraffic(up), formatTraffic(down), formatTraffic(upTotal), formatTraffic(downTotal)))
 					case core.StateError:
 						startItem.Enable()
 						stopItem.Disable()
