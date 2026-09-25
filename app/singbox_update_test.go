@@ -10,6 +10,7 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"fmt"
+	"io"
 	"net/http"
 	"net/http/httptest"
 	"strings"
@@ -62,6 +63,41 @@ func TestDownloadSingBoxUsesMatchingOfficialPlatformAsset(t *testing.T) {
 				t.Fatalf("version=%q binary=%q", version, got)
 			}
 		})
+	}
+}
+
+func TestLatestSingBoxReleaseFallsBackToOfficialReleasePageOnRateLimit(t *testing.T) {
+	const digest = "sha256:0123456789abcdef0123456789abcdef0123456789abcdef0123456789abcdef"
+	var server *httptest.Server
+	server = httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		switch r.URL.Path {
+		case "/repos/SagerNet/sing-box/releases/latest":
+			w.WriteHeader(http.StatusForbidden)
+		case "/SagerNet/sing-box/releases/latest":
+			http.Redirect(w, r, server.URL+"/SagerNet/sing-box/releases/tag/v1.2.3", http.StatusFound)
+		case "/SagerNet/sing-box/releases/tag/v1.2.3":
+			_, _ = io.WriteString(w, "<html>release page</html>")
+		case "/SagerNet/sing-box/releases/expanded_assets/v1.2.3":
+			_, _ = fmt.Fprintf(w, `<a href="%s/SagerNet/sing-box/releases/download/v1.2.3/sing-box-1.2.3-windows-amd64.zip" rel="nofollow"><span class="text-bold">sing-box-1.2.3-windows-amd64.zip</span></a><clipboard-copy aria-label="Copy to clipboard digest for sing-box-1.2.3-windows-amd64.zip" value="%s"></clipboard-copy>`, server.URL, digest)
+		default:
+			http.NotFound(w, r)
+		}
+	}))
+	defer server.Close()
+
+	release, err := latestSingBoxRelease(context.Background(), server.Client(), server.URL+"/repos/SagerNet/sing-box/releases/latest")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if release.TagName != "v1.2.3" || len(release.Assets) != 1 {
+		t.Fatalf("unexpected release: %+v", release)
+	}
+	asset := release.Assets[0]
+	if asset.Name != "sing-box-1.2.3-windows-amd64.zip" || asset.Digest != digest {
+		t.Fatalf("unexpected asset: %+v", asset)
+	}
+	if asset.BrowserDownloadURL != server.URL+"/SagerNet/sing-box/releases/download/v1.2.3/sing-box-1.2.3-windows-amd64.zip" {
+		t.Fatalf("unexpected asset URL: %q", asset.BrowserDownloadURL)
 	}
 }
 

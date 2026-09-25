@@ -13,6 +13,7 @@ import (
 	"fmt"
 	"io"
 	"net/http"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -30,6 +31,8 @@ const maxSingBoxArchiveSize = 128 << 20
 const maxSingBoxBinarySize = 64 << 20
 
 var singBoxVersionPattern = regexp.MustCompile(`(?m)(\d+\.\d+\.\d+(?:[-+][0-9A-Za-z.-]+)?)`)
+var singBoxReleaseAssetPattern = regexp.MustCompile(`(?s)<a\s+href="([^"]*/releases/download/[^"]+)"[^>]*>\s*<span class="text-bold">([^<]+)</span>`)
+var singBoxReleaseDigestPattern = regexp.MustCompile(`(?s)<clipboard-copy[^>]*aria-label="Copy to clipboard digest for ([^"]+)"[^>]*value="(sha256:[0-9a-fA-F]{64})"`)
 
 type SingBoxUpdateResult struct {
 	CurrentVersion string `json:"current_version"`
@@ -39,12 +42,14 @@ type SingBoxUpdateResult struct {
 }
 
 type singBoxRelease struct {
-	TagName string `json:"tag_name"`
-	Assets  []struct {
-		Name               string `json:"name"`
-		BrowserDownloadURL string `json:"browser_download_url"`
-		Digest             string `json:"digest"`
-	} `json:"assets"`
+	TagName string         `json:"tag_name"`
+	Assets  []singBoxAsset `json:"assets"`
+}
+
+type singBoxAsset struct {
+	Name               string `json:"name"`
+	BrowserDownloadURL string `json:"browser_download_url"`
+	Digest             string `json:"digest"`
 }
 
 func (a *App) SingBoxVersion() (string, error) {
@@ -188,6 +193,10 @@ func latestSingBoxRelease(ctx context.Context, client *http.Client, releaseURL s
 	if err != nil {
 		return singBoxRelease{}, fmt.Errorf("查询 sing-box 官方版本失败: %w", err)
 	}
+	if response.StatusCode == http.StatusForbidden || response.StatusCode == http.StatusTooManyRequests {
+		response.Body.Close()
+		return latestSingBoxReleaseFromHTML(ctx, client, releaseURL)
+	}
 	defer response.Body.Close()
 	if response.StatusCode != http.StatusOK {
 		return singBoxRelease{}, fmt.Errorf("查询 sing-box 官方版本失败: HTTP %d", response.StatusCode)
@@ -203,6 +212,127 @@ func latestSingBoxRelease(ctx context.Context, client *http.Client, releaseURL s
 	return release, nil
 }
 
+func latestSingBoxReleaseFromHTML(ctx context.Context, client *http.Client, releaseURL string) (singBoxRelease, error) {
+	releasesURL, err := singBoxReleasesPageURL(releaseURL)
+	if err != nil {
+		return singBoxRelease{}, err
+	}
+	page, err := getSingBoxHTML(ctx, client, releasesURL)
+	if err != nil {
+		return singBoxRelease{}, fmt.Errorf("查询 sing-box 官方版本失败，备用页面也不可用: %w", err)
+	}
+	defer page.Body.Close()
+	finalURL := page.Request.URL
+	tag, err := singBoxReleaseTag(finalURL.Path)
+	if err != nil {
+		return singBoxRelease{}, err
+	}
+	version := strings.TrimPrefix(tag, "v")
+	if !singBoxVersionPattern.MatchString(version) {
+		return singBoxRelease{}, fmt.Errorf("官方页面返回了无效的 sing-box 版本号: %q", tag)
+	}
+	assetsURL := *finalURL
+	assetsURL.Path = strings.Replace(finalURL.Path, "/tag/"+tag, "/expanded_assets/"+tag, 1)
+	assetsURL.RawQuery = ""
+	assetsURL.Fragment = ""
+	assetsPage, err := getSingBoxHTML(ctx, client, assetsURL.String())
+	if err != nil {
+		return singBoxRelease{}, fmt.Errorf("查询 sing-box 官方资源失败: %w", err)
+	}
+	defer assetsPage.Body.Close()
+	assetsHTML, err := io.ReadAll(io.LimitReader(assetsPage.Body, 4<<20))
+	if err != nil {
+		return singBoxRelease{}, fmt.Errorf("读取 sing-box 官方资源失败: %w", err)
+	}
+	assets := parseSingBoxReleaseAssets(assetsPage.Request.URL, assetsHTML)
+	if len(assets) == 0 {
+		return singBoxRelease{}, errors.New("sing-box 官方发布页面没有可用的下载资源")
+	}
+	return singBoxRelease{TagName: tag, Assets: assets}, nil
+}
+
+func getSingBoxHTML(ctx context.Context, client *http.Client, pageURL string) (*http.Response, error) {
+	request, err := http.NewRequestWithContext(ctx, http.MethodGet, pageURL, nil)
+	if err != nil {
+		return nil, err
+	}
+	request.Header.Set("Accept", "text/html,application/xhtml+xml")
+	request.Header.Set("User-Agent", "sbtun-sing-box-updater")
+	response, err := client.Do(request)
+	if err != nil {
+		return nil, err
+	}
+	if response.StatusCode != http.StatusOK {
+		response.Body.Close()
+		return nil, fmt.Errorf("HTTP %d", response.StatusCode)
+	}
+	return response, nil
+}
+
+func singBoxReleasesPageURL(releaseURL string) (string, error) {
+	parsed, err := url.Parse(releaseURL)
+	if err != nil {
+		return "", err
+	}
+	const apiPath = "/repos/SagerNet/sing-box/releases/latest"
+	if parsed.Path == apiPath {
+		if strings.EqualFold(parsed.Host, "api.github.com") {
+			parsed.Host = "github.com"
+		}
+		parsed.Path = "/SagerNet/sing-box/releases/latest"
+		parsed.RawQuery = ""
+		parsed.Fragment = ""
+		return parsed.String(), nil
+	}
+	if strings.HasSuffix(parsed.Path, "/releases/latest") {
+		return parsed.String(), nil
+	}
+	return "", fmt.Errorf("无法从 %q 生成 sing-box 官方发布页面地址", releaseURL)
+}
+
+func singBoxReleaseTag(path string) (string, error) {
+	const marker = "/releases/tag/"
+	index := strings.Index(path, marker)
+	if index < 0 {
+		return "", fmt.Errorf("sing-box 官方发布页面地址无效: %q", path)
+	}
+	tag, err := url.PathUnescape(strings.Trim(path[index+len(marker):], "/"))
+	if err != nil || tag == "" {
+		return "", fmt.Errorf("sing-box 官方发布页面缺少版本号: %q", path)
+	}
+	return tag, nil
+}
+
+func parseSingBoxReleaseAssets(baseURL *url.URL, page []byte) []singBoxAsset {
+	digests := make(map[string]string)
+	for _, match := range singBoxReleaseDigestPattern.FindAllSubmatch(page, -1) {
+		if len(match) == 3 {
+			digests[string(match[1])] = string(match[2])
+		}
+	}
+	assets := make([]singBoxAsset, 0, len(digests))
+	for _, match := range singBoxReleaseAssetPattern.FindAllSubmatch(page, -1) {
+		if len(match) != 3 {
+			continue
+		}
+		name := string(match[2])
+		digest, ok := digests[name]
+		if !ok {
+			continue
+		}
+		downloadURL, err := url.Parse(string(match[1]))
+		if err != nil {
+			continue
+		}
+		assets = append(assets, singBoxAsset{
+			Name:               name,
+			BrowserDownloadURL: baseURL.ResolveReference(downloadURL).String(),
+			Digest:             digest,
+		})
+	}
+	return assets
+}
+
 func downloadSingBoxAsset(ctx context.Context, client *http.Client, release singBoxRelease, goos, goarch string) ([]byte, error) {
 	assetSuffix, binaryName, archiveType, err := singBoxAssetTarget(goos, goarch)
 	if err != nil {
@@ -212,11 +342,7 @@ func downloadSingBoxAsset(ctx context.Context, client *http.Client, release sing
 	if !singBoxVersionPattern.MatchString(version) {
 		return nil, fmt.Errorf("官方返回了无效的 sing-box 版本号: %q", release.TagName)
 	}
-	var asset *struct {
-		Name               string `json:"name"`
-		BrowserDownloadURL string `json:"browser_download_url"`
-		Digest             string `json:"digest"`
-	}
+	var asset *singBoxAsset
 	for i := range release.Assets {
 		if strings.HasSuffix(release.Assets[i].Name, assetSuffix) {
 			asset = &release.Assets[i]
