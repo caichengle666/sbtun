@@ -210,6 +210,8 @@ func main() {
 		err = runRulesCommand(application, commandArgs)
 	case "capture":
 		err = runCaptureCommand(application, commandArgs)
+	case "kernel":
+		err = runKernelCommand(application, commandArgs)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -258,6 +260,8 @@ func printCommandHelp(command string, args []string) bool {
 		} else {
 			usage = "sbtun capture <run|enable|disable|status|list|show|clear|cert>"
 		}
+	case "kernel":
+		usage = "sbtun kernel <version|update>"
 	default:
 		return false
 	}
@@ -353,8 +357,22 @@ func validateCLIArgs(command string, args []string) error {
 		}
 	case "capture":
 		return validateCaptureArgs(args)
+	case "kernel":
+		return validateKernelArgs(args)
 	default:
 		return fmt.Errorf("未知命令: %s", command)
+	}
+}
+
+func validateKernelArgs(args []string) error {
+	if len(args) != 1 {
+		return errors.New("用法: sbtun kernel <version|update>")
+	}
+	switch args[0] {
+	case "version", "update":
+		return nil
+	default:
+		return fmt.Errorf("未知内核命令: %s", args[0])
 	}
 }
 
@@ -460,6 +478,8 @@ func printHelp() {
 		{"capture cert <install|uninstall> [user|system]", "安装或卸载抓包根证书，默认系统级"},
 	})
 	printHelpGroup("其他", []helpEntry{
+		{"kernel version", "查看当前 sing-box 内核版本"},
+		{"kernel update", "更新到 sing-box 官方最新稳定版"},
 		{"help", "显示帮助"},
 		{"version", "显示版本"},
 	})
@@ -553,6 +573,33 @@ func runRulesCommand(application *app.App, args []string) error {
 		return nil
 	default:
 		return fmt.Errorf("用法: sbtun rules [list|add <名称> <SRS_URL>|edit <ID> <名称> <SRS_URL>|delete <ID>|update <ID>|update-all]")
+	}
+}
+
+func runKernelCommand(application *app.App, args []string) error {
+	if len(args) == 0 {
+		return errors.New("用法: sbtun kernel <version|update>")
+	}
+	switch args[0] {
+	case "version":
+		version, err := application.SingBoxVersion()
+		if err != nil {
+			return err
+		}
+		fmt.Println(version)
+		return nil
+	case "update":
+		if status := application.GetStatus(); status.Running {
+			return errors.New("检测到 sing-box 正在运行，请先执行 sbtun stop 再更新内核")
+		}
+		result, err := application.UpdateSingBox()
+		if err != nil {
+			return err
+		}
+		fmt.Println(result.Message)
+		return nil
+	default:
+		return errors.New("用法: sbtun kernel <version|update>")
 	}
 }
 

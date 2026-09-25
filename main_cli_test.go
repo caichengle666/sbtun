@@ -33,6 +33,8 @@ func TestValidateCLIArgsRejectsInvalidInputBeforeElevation(t *testing.T) {
 		{command: "test", want: "sbtun test"},
 		{command: "del", want: "sbtun del"},
 		{command: "capture", args: []string{"cert"}, want: "capture cert"},
+		{command: "kernel", want: "sbtun kernel"},
+		{command: "kernel", args: []string{"invalid"}, want: "未知内核命令"},
 	}
 	for _, test := range tests {
 		err := validateCLIArgs(test.command, test.args)
@@ -54,6 +56,8 @@ func TestValidateCLIArgsAcceptsSupportedCommands(t *testing.T) {
 		{command: "rules", args: []string{"edit", "custom-1", "AdGuard 2", "https://example.com/adguard-2.srs"}},
 		{command: "rules", args: []string{"delete", "custom-1"}},
 		{command: "capture", args: []string{"enable", "*"}},
+		{command: "kernel", args: []string{"version"}},
+		{command: "kernel", args: []string{"update"}},
 	} {
 		if err := validateCLIArgs(test.command, test.args); err != nil {
 			t.Fatalf("command=%s args=%v err=%v", test.command, test.args, err)

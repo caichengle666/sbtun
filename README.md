@@ -192,6 +192,9 @@ capture show <编号>         查看请求详情
 capture clear               删除抓包记录
 capture cert install        安装分析证书
 capture cert uninstall      卸载分析证书
+
+kernel version              查看 sing-box 内核版本
+kernel update               更新 sing-box 内核到官方最新稳定版
 ```
 
 `edit` 需要交互式终端。节点测试会按完成顺序输出结果，不必等待全部节点结束才看到第一个结果。
