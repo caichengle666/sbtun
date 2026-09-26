@@ -4,9 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
-	"os"
 	"os/exec"
-	"path/filepath"
 	"strings"
 	"time"
 )
@@ -21,18 +19,9 @@ func (a *App) validateRuleSet(path string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	output, err := os.CreateTemp(filepath.Dir(path), ".rule-set-validation-*.json")
-	if err != nil {
-		return fmt.Errorf("创建规则集校验文件失败: %w", err)
-	}
-	outputPath := output.Name()
-	if err := output.Close(); err != nil {
-		_ = os.Remove(outputPath)
-		return fmt.Errorf("关闭规则集校验文件失败: %w", err)
-	}
-	defer os.Remove(outputPath)
-	command := exec.CommandContext(ctx, a.binary, "rule-set", "decompile", path, "-o", outputPath)
-	command.Dir = filepath.Dir(a.binary)
+	// match 会按 sing-box 实际加载规则集的方式解析 binary 格式，兼容
+	// sing-box SRS 和由 AdGuard DNS 规则转换得到的 SRS。
+	command := exec.CommandContext(ctx, a.binary, "rule-set", "match", "--format", "binary", path, "example.com")
 	configureProcess(command)
 	result, err := command.CombinedOutput()
 	if err == nil {
