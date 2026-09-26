@@ -121,6 +121,20 @@ textarea.input { resize: vertical; }
 .mode-btn:hover { border-color: #d946ef; }
 .mode-btn.active { border-color: #22d3ee; color: #e2e8f0; background: #162338; }
 .mode-desc { display: block; margin-top: 6px; color: #64748b; font-size: 11px; }
+.network-options { display: grid; gap: 0; margin-top: 18px; border-top: 1px solid #25284a; }
+.network-options-title { padding: 14px 0 4px; color: #64748b; font-size: 11px; letter-spacing: .04em; }
+.setting-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; padding: 12px 0; border-bottom: 1px solid #1b2035; cursor: pointer; }
+.setting-toggle-row:last-child { border-bottom: 0; }
+.setting-toggle-copy { display: grid; gap: 4px; min-width: 0; }
+.setting-toggle-copy strong { color: #e2e8f0; font-size: 13px; font-weight: 600; }
+.setting-toggle-copy small { color: #94a3b8; font-size: 11px; line-height: 1.45; }
+.toggle-switch { position: relative; display: inline-flex; flex: 0 0 auto; width: 42px; height: 24px; }
+.toggle-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
+.toggle-switch > span { position: relative; display: block; width: 42px; height: 24px; border-radius: 999px; background: #334155; transition: background .18s ease; }
+.toggle-switch > span::after { content: ''; position: absolute; top: 4px; left: 4px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .18s ease; }
+.toggle-switch input:checked + span { background: #0ea5e9; }
+.toggle-switch input:checked + span::after { transform: translateX(18px); }
+.toggle-switch input:focus-visible + span { outline: 2px solid #22d3ee; outline-offset: 2px; }
 .rule-item { min-height: 58px; }
 .rules-summary { padding-top: 10px; color: #64748b; font-size: 11px; }
 .capture-page { --capture-normal: #7dd3fc; --capture-direct: #86efac; --capture-proxy: #67e8f9; --capture-warning: #fde047; --capture-error: #fca5a5; }

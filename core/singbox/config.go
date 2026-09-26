@@ -52,7 +52,7 @@ func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 	inbounds := []map[string]any{{
 		"type": "tun", "tag": "tun-in",
 		"address":    tunAddresses(cfg.IPv6Enabled),
-		"auto_route": true, "strict_route": false, "stack": "system",
+		"auto_route": true, "strict_route": cfg.WebRTCProtectionEnabled, "stack": "system",
 	}}
 	if cfg.CaptureEnabled && len(normalizeCaptureDomains(cfg.CaptureDomains)) > 0 {
 		inbounds = append(inbounds, map[string]any{

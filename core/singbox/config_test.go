@@ -391,6 +391,22 @@ func TestTUNIPv6FallsBackWhenUnavailable(t *testing.T) {
 	}
 }
 
+func TestTUNWebRTCProtectionEnablesStrictRoute(t *testing.T) {
+	cfg := testConfig(config.RoutingGlobal)
+	cfg.WebRTCProtectionEnabled = true
+	data, err := BuildConfig(cfg, "D:\\test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	var runtime RuntimeConfig
+	if err := json.Unmarshal(data, &runtime); err != nil {
+		t.Fatal(err)
+	}
+	if runtime.Inbounds[0]["strict_route"] != true {
+		t.Fatalf("strict_route=%v want=true", runtime.Inbounds[0]["strict_route"])
+	}
+}
+
 func TestBuildConfigSkipsInvalidBackupNode(t *testing.T) {
 	cfg := testConfig(config.RoutingGlobal)
 	cfg.Nodes = append(cfg.Nodes, config.Node{ID: "bad", Name: "坏节点", Protocol: "unsupported", Server: "bad.example", Port: 443})
