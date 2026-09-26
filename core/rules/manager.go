@@ -40,6 +40,9 @@ type RuleInfo struct {
 	UpdatedAt string `json:"updated_at"`
 }
 
+// RuleSetValidator validates a downloaded temporary rule-set before install.
+type RuleSetValidator func(path string) error
+
 // Manager 管理规则集。
 type Manager struct {
 	rulesDir  string
@@ -172,6 +175,28 @@ func (m *Manager) Add(name, rawURL string) error {
 	return m.save()
 }
 
+// AddAndUpdate downloads and validates a new rule-set before saving its metadata.
+func (m *Manager) AddAndUpdate(name, rawURL string, validate RuleSetValidator) error {
+	name = strings.TrimSpace(name)
+	rawURL = strings.TrimSpace(rawURL)
+	if err := validateRuleSetInput(m.sets, name, rawURL, ""); err != nil {
+		return err
+	}
+	hash := sha256.Sum256([]byte(rawURL))
+	id := "custom-" + hex.EncodeToString(hash[:])[:12]
+	set := RuleSet{ID: id, Name: name, URL: rawURL, Path: filepath.Join(m.rulesDir, id+".srs"), Enabled: true, Source: "custom", Action: "block"}
+	if err := m.download(set, validate); err != nil {
+		return fmt.Errorf("添加规则集失败: %w", err)
+	}
+	m.sets = append(m.sets, set)
+	if err := m.save(); err != nil {
+		m.sets = m.sets[:len(m.sets)-1]
+		_ = os.Remove(set.Path)
+		return fmt.Errorf("保存规则集失败: %w", err)
+	}
+	return nil
+}
+
 // Edit 修改规则集名称和 URL，保留现有规则集 ID 与启用状态。
 func (m *Manager) Edit(id, name, rawURL string) error {
 	name = strings.TrimSpace(name)
@@ -193,6 +218,29 @@ func (m *Manager) Edit(id, name, rawURL string) error {
 			m.sets[i].URL = rawURL
 			return m.save()
 		}
+	}
+	return fmt.Errorf("未知规则集: %s", id)
+}
+
+// EditAndUpdate validates the replacement before changing the saved rule-set.
+func (m *Manager) EditAndUpdate(id, name, rawURL string, validate RuleSetValidator) error {
+	for i := range m.sets {
+		if m.sets[i].ID != id {
+			continue
+		}
+		name = strings.TrimSpace(name)
+		rawURL = strings.TrimSpace(rawURL)
+		if err := validateRuleSetInput(m.sets, name, rawURL, id); err != nil {
+			return err
+		}
+		set := m.sets[i]
+		set.Name = name
+		set.URL = rawURL
+		if err := m.download(set, validate); err != nil {
+			return fmt.Errorf("更新规则集失败: %w", err)
+		}
+		m.sets[i] = set
+		return m.save()
 	}
 	return fmt.Errorf("未知规则集: %s", id)
 }
@@ -222,6 +270,11 @@ func (m *Manager) Delete(id string) error {
 }
 
 func (m *Manager) RestoreDefaults() error {
+	return m.RestoreDefaultsWithValidation(nil)
+}
+
+// RestoreDefaultsWithValidation restores defaults and validates every download.
+func (m *Manager) RestoreDefaultsWithValidation(validate RuleSetValidator) error {
 	defaults := defaultRuleSets(m.rulesDir)
 	defaultIDs := make(map[string]bool, len(defaults))
 	for _, set := range defaults {
@@ -240,7 +293,7 @@ func (m *Manager) RestoreDefaults() error {
 
 	var failures []string
 	for _, set := range defaults {
-		if err := m.Update(set.ID); err != nil {
+		if err := m.UpdateWithValidation(set.ID, validate); err != nil {
 			failures = append(failures, set.Name+": "+err.Error())
 		}
 	}
@@ -252,6 +305,11 @@ func (m *Manager) RestoreDefaults() error {
 
 // Update 下载指定规则集的最新版本。
 func (m *Manager) Update(id string) error {
+	return m.UpdateWithValidation(id, nil)
+}
+
+// UpdateWithValidation installs a downloaded rule-set only after validation.
+func (m *Manager) UpdateWithValidation(id string, validate RuleSetValidator) error {
 	var target *RuleSet
 	for i := range m.sets {
 		if m.sets[i].ID == id {
@@ -262,6 +320,10 @@ func (m *Manager) Update(id string) error {
 	if target == nil {
 		return fmt.Errorf("未知规则集: %s", id)
 	}
+	return m.download(*target, validate)
+}
+
+func (m *Manager) download(target RuleSet, validate RuleSetValidator) error {
 	client := &http.Client{Timeout: 30 * time.Second}
 	req, err := http.NewRequest(http.MethodGet, target.URL, nil)
 	if err != nil {
@@ -296,6 +358,11 @@ func (m *Manager) Update(id string) error {
 	if err := tmp.Close(); err != nil {
 		return err
 	}
+	if validate != nil {
+		if err := validate(tmpName); err != nil {
+			return err
+		}
+	}
 	if err := os.Rename(tmpName, target.Path); err != nil {
 		return err
 	}
@@ -304,14 +371,34 @@ func (m *Manager) Update(id string) error {
 
 // UpdateAll 更新所有启用的规则集。
 func (m *Manager) UpdateAll() []error {
+	return m.UpdateAllWithValidation(nil)
+}
+
+// UpdateAllWithValidation updates all enabled rule-sets with validation.
+func (m *Manager) UpdateAllWithValidation(validate RuleSetValidator) []error {
 	var errs []error
 	for _, s := range m.sets {
 		if !s.Enabled {
 			continue
 		}
-		if err := m.Update(s.ID); err != nil {
+		if err := m.UpdateWithValidation(s.ID, validate); err != nil {
 			errs = append(errs, fmt.Errorf("%s: %w", s.ID, err))
 		}
 	}
 	return errs
+}
+
+func validateRuleSetInput(sets []RuleSet, name, rawURL, existingID string) error {
+	if name == "" || rawURL == "" {
+		return fmt.Errorf("规则集名称和 URL 不能为空")
+	}
+	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
+		return fmt.Errorf("规则集 URL 必须使用 http:// 或 https://")
+	}
+	for _, set := range sets {
+		if set.ID != existingID && set.URL == rawURL {
+			return fmt.Errorf("规则集已经存在")
+		}
+	}
+	return nil
 }

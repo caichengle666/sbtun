@@ -1154,7 +1154,7 @@ func (a *App) AddRuleSet(name, url string) error {
 	if a.rulesManager == nil {
 		return errors.New("规则管理器未初始化")
 	}
-	if err := a.rulesManager.Add(name, url); err != nil {
+	if err := a.rulesManager.AddAndUpdate(name, url, a.validateRuleSet); err != nil {
 		return err
 	}
 	return a.reloadIfRunningLocked()
@@ -1166,7 +1166,7 @@ func (a *App) EditRuleSet(id, name, url string) error {
 	if a.rulesManager == nil {
 		return errors.New("规则管理器未初始化")
 	}
-	if err := a.rulesManager.Edit(id, name, url); err != nil {
+	if err := a.rulesManager.EditAndUpdate(id, name, url, a.validateRuleSet); err != nil {
 		return err
 	}
 	return a.reloadIfRunningLocked()
@@ -1202,7 +1202,7 @@ func (a *App) RestoreDefaultRuleSets() error {
 	if a.rulesManager == nil {
 		return errors.New("规则管理器未初始化")
 	}
-	restoreErr := a.rulesManager.RestoreDefaults()
+	restoreErr := a.rulesManager.RestoreDefaultsWithValidation(a.validateRuleSet)
 	reloadErr := a.reloadIfRunningLocked()
 	if restoreErr != nil {
 		return restoreErr
@@ -1216,7 +1216,7 @@ func (a *App) UpdateRule(id string) error {
 	if a.rulesManager == nil {
 		return errors.New("规则管理器未初始化")
 	}
-	if err := a.rulesManager.Update(id); err != nil {
+	if err := a.rulesManager.UpdateWithValidation(id, a.validateRuleSet); err != nil {
 		return err
 	}
 	return a.reloadIfRunningLocked()
@@ -1228,7 +1228,7 @@ func (a *App) UpdateAllRules() []error {
 	if a.rulesManager == nil {
 		return []error{errors.New("规则管理器未初始化")}
 	}
-	errs := a.rulesManager.UpdateAll()
+	errs := a.rulesManager.UpdateAllWithValidation(a.validateRuleSet)
 	if err := a.reloadIfRunningLocked(); err != nil {
 		errs = append(errs, err)
 	}
