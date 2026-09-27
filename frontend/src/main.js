@@ -400,7 +400,7 @@ function renderCapturePage() {
     <section class="card capture-status-panel">
       <div><span class="section-kicker">抓包状态</span><strong class="capture-status-title">${escapeHtml(status.message || (status.running ? '分析器运行中' : '分析器未运行'))}</strong></div>
       <div class="capture-status-metrics"><span><i class="dot ${status.running ? 'running' : ''}"></i>分析器 ${status.running ? '运行中' : '未运行'}</span><span><i class="dot ${state.running ? 'running' : dotClass(state.statusState)}"></i>TUN ${state.running ? '运行中' : '未运行'}</span><span>记录 <strong>${state.captureFlows.length}</strong>/${status.max_flows || '—'}</span><span>路由 <strong>${escapeHtml(mode)}</strong></span><span class="${status.unsaved ? 'capture-unsaved' : ''}">${status.unsaved ? '有未保存内容' : '已写入磁盘'}</span></div>
-      <label class="toggle-field"><input id="captureEnabled" type="checkbox" ${enabled ? 'checked' : ''}><span>启用分析</span></label>
+      <label class="capture-toggle"><span>启用分析</span><span class="toggle-switch"><input id="captureEnabled" type="checkbox" ${enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label>
     </section>
     <details class="card capture-settings" id="captureSettings" ${state.captureSettingsOpen ? 'open' : ''}>
       <summary class="capture-settings-summary"><div><h2>抓包规则与证书</h2><p class="muted">每行一个域名或关键词；输入 * 抓取全部 HTTP/HTTPS 请求。</p></div><span class="capture-settings-actions" aria-hidden="true">⌄</span></summary>
@@ -1124,6 +1124,15 @@ function bindEvents() {
   }
   const captureEnabled = document.querySelector('#captureEnabled')
   if (captureEnabled) captureEnabled.addEventListener('change', async () => {
+    const domains = [...new Set(readCaptureDomains())]
+    if (captureEnabled.checked && !domains.length) {
+      captureEnabled.checked = false
+      state.captureEnabledDraft = false
+      state.captureEnabledDirty = false
+      showToast('请先填写抓包规则；输入 * 可分析全部 HTTP/HTTPS 请求', 'error')
+      captureDomains?.focus()
+      return
+    }
     state.captureEnabledDraft = captureEnabled.checked
     state.captureEnabledDirty = true
     captureEnabled.disabled = true
