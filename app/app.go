@@ -1142,6 +1142,8 @@ func fileExists(path string) bool {
 }
 
 func (a *App) ListRules() []rules.RuleInfo {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
 	if a.rulesManager == nil {
 		return nil
 	}
