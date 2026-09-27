@@ -3,6 +3,10 @@ import './style.css'
 
 const app = document.querySelector('#app')
 const initialTheme = localStorage.getItem('sbtun-theme') === 'light' ? 'light' : 'dark'
+const savedView = localStorage.getItem('sbtun-ui-view')
+const initialView = ['overview', 'nodes', 'routing', 'rules', 'capture'].includes(savedView) ? savedView : 'overview'
+const savedNodeFilter = localStorage.getItem('sbtun-ui-node-filter') || 'all'
+const validNodeFilters = ['all', 'hysteria2', 'vless', 'vmess', 'trojan', 'shadowsocks', 'socks', 'http']
 
 const state = {
   theme: initialTheme,
@@ -36,8 +40,12 @@ const state = {
   nodeHealth: {},
   selectedNodes: new Set(),
   batchTesting: false,
-  nodeFilter: 'all',
+  nodeFilter: validNodeFilters.includes(savedNodeFilter) ? savedNodeFilter : 'all',
+  nodeSearch: localStorage.getItem('sbtun-ui-node-search') || '',
+  nodeFormOpen: localStorage.getItem('sbtun-ui-node-form-open') === 'true',
+  rulesTab: localStorage.getItem('sbtun-ui-rules-tab') === 'manual' ? 'manual' : 'sets',
   traffic: { up: 0, down: 0 },
+  trafficHistory: [],
   diagnostics: null,
   ipv6Status: null,
   captureStatus: null,
@@ -54,7 +62,8 @@ const state = {
   captureListScroll: 0,
   captureDetailScroll: 0,
   captureBodyScroll: {},
-  view: 'overview',
+  captureSettingsOpen: localStorage.getItem('sbtun-ui-capture-settings-open') !== 'false',
+  view: initialView,
   statusRefreshing: false,
   configRefreshing: false,
 }
@@ -169,6 +178,7 @@ function render() {
     <main class="shell">
       <aside class="sidebar">
         <div class="brand"><span class="brand-mark">s</span><span>sbtun</span></div>
+        <div class="nav-caption">工作区</div>
         <nav class="nav-list">
           ${[
             ['overview', '运行概览'],
@@ -176,7 +186,7 @@ function render() {
             ['routing', '路由模式'],
             ['rules', '分流规则'],
             ['capture', '流量分析'],
-          ].map(([id, label]) => `<button class="nav-item ${state.view === id ? 'active' : ''}" data-view="${id}">${label}</button>`).join('')}
+          ].map(([id, label], index) => `<button class="nav-item ${state.view === id ? 'active' : ''}" data-view="${id}"><span class="nav-code">${String(index + 1).padStart(2, '0')}</span><span>${label}</span></button>`).join('')}
         </nav>
         <div class="sidebar-status">
           <div class="sidebar-status-line"><span class="dot ${dotClass(state.statusState)}"></span><span>${statusLabel(state.statusState, state.statusMessage)}</span></div>
@@ -202,7 +212,9 @@ function render() {
           <span class="dot ${dotClass(state.statusState)}"></span>
           <strong id="statusText">${statusLabel(state.statusState, state.statusMessage)}</strong>
           ${state.running && state.selectorSyncState !== 'idle' ? `<span class="badge selector-sync ${state.selectorSyncState}" title="${escapeHtml(state.selectorSyncMessage)}">${selectorSyncLabel(state.selectorSyncState)}</span>` : ''}
-	  <span class="muted" id="statusTraffic">${formatTraffic(state.traffic)}</span>
+          <span class="status-context" id="statusNode">节点：${escapeHtml(state.config?.nodes?.find(node => node.id === activeNodeID())?.name || '未选择')}</span>
+          <span class="status-context" id="statusMode">模式：${MODES.find(mode => mode.id === state.config?.routing_mode)?.name || '未设置'}</span>
+          <span class="muted" id="statusTraffic">${formatTraffic(state.traffic)}</span>
         </section>
         ${renderView()}
       </section>
@@ -234,33 +246,39 @@ function renderView() {
 
 function renderOverview() {
   const current = state.config?.nodes?.find(n => n.id === activeNodeID())
-  return `<div class="overview-grid">
-    <section class="card focus-card overview-wide">
-      <div class="focus-card-main">
-        <div class="section-kicker">当前节点</div>
-        <h2>${escapeHtml(current?.name || '未选择节点')}</h2>
-        <p class="muted">${current ? escapeHtml(current.server) + ':' + current.port : '请先在节点页导入或添加节点'}</p>
-        ${current ? renderNodeHealth(current.id) : '<div class="empty">暂无健康检测结果</div>'}
-      </div>
-      <button class="btn btn-primary" data-view="nodes">管理节点</button>
-    </section>
-    <section class="card overview-wide">
-      <div class="section-heading"><h2>路由模式</h2><button class="btn btn-ghost" data-view="routing">调整</button></div>
-      <div class="mode-summary"><strong>${MODES.find(m => m.id === state.config?.routing_mode)?.name || '未设置'}</strong><span class="muted">${MODES.find(m => m.id === state.config?.routing_mode)?.desc || ''}</span></div>
-    </section>
-    <section class="card overview-wide">
-      <div class="kernel-update-row"><div><h2>sing-box 内核</h2><p class="muted">当前版本：${state.singBoxVersion ? 'v' + escapeHtml(state.singBoxVersion) : '读取中'}</p>${state.singBoxUpdateMessage ? `<p class="kernel-update-status ${state.singBoxUpdateState}">${escapeHtml(state.singBoxUpdateMessage)}</p>` : ''}</div><button id="updateSingBox" class="btn btn-ghost" ${state.singBoxUpdating ? 'disabled' : ''}>${state.singBoxUpdating ? '正在检查更新…' : '更新内核'}</button></div>
-    </section>
-  </div>`
+  const mode = MODES.find(item => item.id === state.config?.routing_mode)
+  const rules = state.rules || []
+  const enabledRules = rules.filter(rule => rule.enabled).length
+  return `<div class="overview-heading"><div><h2>网络运行概览</h2><p class="muted">当前连接与流量状态</p></div><span class="badge ${state.running ? 'direct' : ''}">${state.running ? '服务运行中' : '服务已停止'}</span></div>
+    <div class="overview-grid">
+      <section class="card focus-card overview-node-panel">
+        <div class="focus-card-main">
+          <div class="section-kicker"><i class="dot ${state.running ? 'running' : ''}"></i>${state.running ? '当前代理节点' : '当前节点'}</div>
+          <h2>${escapeHtml(current?.name || '未选择节点')}</h2>
+          <p class="muted">${current ? escapeHtml(current.server) + ':' + current.port : '请先在节点页导入或添加节点'}</p>
+          ${current ? `<div class="overview-tags"><span class="badge proxy">${escapeHtml(current.protocol || '节点')}</span>${renderNodeHealth(current.id)}</div>` : '<div class="empty">暂无健康检测结果</div>'}
+        </div>
+      </section>
+      <section class="card overview-route-panel"><span class="section-kicker">当前路由</span><strong>${escapeHtml(mode?.name || '未设置')}</strong><div class="route-line"><span>路由策略</span><b>${escapeHtml(mode?.desc || '请先选择路由模式')}</b></div><div class="route-line"><span>IPv6</span><b class="${state.config?.ipv6_enabled ? 'good' : ''}">${state.config?.ipv6_enabled ? '已启用' : '未启用'}</b></div></section>
+      <section class="card traffic-panel"><div class="section-heading"><h2>实时流量</h2><span class="muted">最近 60 秒</span></div><div class="traffic-numbers"><span>上行<strong id="trafficUp">${formatBytes(state.traffic.up)}/s</strong></span><span>下行<strong id="trafficDown">${formatBytes(state.traffic.down)}/s</strong></span></div><div class="traffic-chart" id="trafficChart" role="img" aria-label="最近 60 秒实时流量">${renderTrafficChart()}</div><div class="traffic-chart-label"><span>60 秒前</span><span>现在</span></div></section>
+    </div>
+    <div class="overview-quick"><button data-view="nodes"><span>可用节点</span><strong>${(state.config?.nodes || []).length} 个　›</strong></button><button data-view="rules"><span>规则集</span><strong>已启用 ${enabledRules} / ${rules.length}　›</strong></button><button data-view="capture"><span>流量分析</span><strong>${state.captureStatus?.running ? '分析器运行中' : '分析器已停止'}　›</strong></button></div>`
+}
+
+function renderTrafficChart() {
+  const samples = state.trafficHistory.slice(-30)
+  if (!samples.length) return '<span class="traffic-chart-empty">等待状态数据</span>'
+  const max = Math.max(1, ...samples.flatMap(sample => [sample.up, sample.down]))
+  return samples.map(sample => `<span class="traffic-bar-pair" title="↑ ${formatBytes(sample.up)}/s · ↓ ${formatBytes(sample.down)}/s"><i style="height:${Math.max(2, sample.up / max * 100)}%"></i><i style="height:${Math.max(2, sample.down / max * 100)}%"></i></span>`).join('')
 }
 
 function renderNodesPage() {
   const nodes = state.config?.nodes || []
   const allSelected = nodes.length > 0 && nodes.every(node => state.selectedNodes.has(node.id))
   return `<section class="page-stack">
-      <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">选择节点后可批量测试、导出或删除。</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="toggleSelectNodes" ${nodes.length ? '' : 'disabled'}>${allSelected ? '反选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes" ${state.batchTesting ? 'disabled' : ''}>${state.batchTesting ? '测试中' : '批量测试'}</button><button class="btn btn-ghost" id="batchExportNodes">批量导出</button><button class="btn btn-danger" id="batchDeleteNodes">批量删除</button><button class="btn btn-primary" data-scroll="node-import">导入节点</button></span></div>
-    <div id="nodePanel">${renderNodes()}</div>
-    <div class="card node-import" id="node-import"><h2>${state.editingNodeId ? '编辑节点全部参数' : '添加节点'}</h2>
+      <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">${nodes.length} 个节点 · 选择节点后可批量测试、导出或删除。</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="toggleSelectNodes" ${nodes.length ? '' : 'disabled'}>${allSelected ? '反选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes" ${state.batchTesting ? 'disabled' : ''}>${state.batchTesting ? '测试中' : '批量测试'}</button><button class="btn btn-ghost" id="batchExportNodes">批量导出</button><button class="btn btn-danger" id="batchDeleteNodes">批量删除</button><button class="btn btn-primary" id="toggleNodeForm">${state.nodeFormOpen || state.editingNodeId ? '收起添加' : '导入 / 添加'}</button></span></div>
+      <div id="nodePanel">${renderNodes()}</div>
+    ${state.nodeFormOpen || state.editingNodeId ? `<div class="card node-import" id="node-import"><h2>${state.editingNodeId ? '编辑节点全部参数' : '添加节点'}</h2>
       <div class="row"><input id="nodeUrl" class="input" value="${escapeHtml(state.manualForm.url)}" placeholder="节点链接 vmess:// vless:// ss:// 或订阅" /><button id="importBtn" class="btn btn-primary">导入</button></div>
       <div class="row"><select id="nodeProtocol" class="select"><option value="vless" ${state.manualProtocol === 'vless' ? 'selected' : ''}>VLESS</option><option value="vmess" ${state.manualProtocol === 'vmess' ? 'selected' : ''}>VMess</option><option value="trojan" ${state.manualProtocol === 'trojan' ? 'selected' : ''}>Trojan</option><option value="shadowsocks" ${state.manualProtocol === 'shadowsocks' ? 'selected' : ''}>Shadowsocks</option><option value="socks" ${state.manualProtocol === 'socks' ? 'selected' : ''}>SOCKS</option><option value="http" ${state.manualProtocol === 'http' ? 'selected' : ''}>HTTP</option><option value="hysteria2" ${state.manualProtocol === 'hysteria2' ? 'selected' : ''}>Hysteria2</option></select></div>
       <div class="row"><input id="nodeName" class="input" value="${escapeHtml(state.manualForm.name)}" placeholder="节点名称" /></div>
@@ -268,7 +286,7 @@ function renderNodesPage() {
       ${renderManualAdvancedFields()}
       <button id="addNodeBtn" class="btn btn-ghost">${state.editingNodeId ? '保存节点修改' : '手动添加节点'}</button>
       ${state.editingNodeId ? '<button id="cancelEditNode" class="btn btn-ghost">取消编辑</button>' : ''}
-    </div>
+    </div>` : ''}
   </section>`
 }
 
@@ -334,6 +352,8 @@ function renderRoutingPage() {
 function renderRulesPage() {
   const filter = state.ruleFilter || 'all'
   return `<div class="page-stack rules-page">
+    <div class="rules-tabs" role="tablist" aria-label="规则页面"><button class="filter-btn ${state.rulesTab === 'sets' ? 'active' : ''}" data-rules-tab="sets" role="tab" aria-selected="${state.rulesTab === 'sets'}">规则集</button><button class="filter-btn ${state.rulesTab === 'manual' ? 'active' : ''}" data-rules-tab="manual" role="tab" aria-selected="${state.rulesTab === 'manual'}">手动过滤</button></div>
+    ${state.rulesTab === 'sets' ? `
     <section class="card rules-card">
       <div class="section-heading rules-page-heading">
         <div><h2>规则集</h2><p class="muted">管理默认规则集和用户添加的 DNS 规则集。</p></div>
@@ -358,12 +378,14 @@ function renderRulesPage() {
         </aside>
       </div>
     </section>
+    ` : `
     <section class="card dns-filter-card">
       <div class="section-heading"><div><h2>手动 DNS 过滤规则</h2><p class="muted">单独添加域名或 IP，命中后直接阻断。优先级高于规则集。</p></div><button id="openFilterRuleBtn" class="btn btn-primary">添加过滤规则</button></div>
       ${state.dnsFilterFormOpen ? `<div class="dns-filter-editor"><label class="rule-form-field"><span>匹配对象</span><select id="filterRuleMatchType" class="select">${RULE_MATCH_TYPES.filter(item => item.id !== 'port').map(item => `<option value="${item.id}">${item.label}</option>`).join('')}</select></label><label class="rule-form-field"><span>匹配内容</span><input id="filterRuleValue" class="input" placeholder="例如 ads.example.com" /></label><div class="rule-form-actions"><button id="addFilterRuleBtn" class="btn btn-primary">添加规则</button><button id="cancelFilterRuleBtn" class="btn btn-ghost">取消</button></div></div>` : ''}
       ${renderDNSFilterRules()}
       <div class="rules-toolbar dns-filter-toolbar"><span class="rules-summary-note">共 ${(state.config?.dns_filter_rules || []).length} 条手动过滤规则</span></div>
     </section>
+    `}
   </div>`
 }
 
@@ -380,11 +402,13 @@ function renderCapturePage() {
       <div class="capture-status-metrics"><span><i class="dot ${status.running ? 'running' : ''}"></i>分析器 ${status.running ? '运行中' : '未运行'}</span><span><i class="dot ${state.running ? 'running' : dotClass(state.statusState)}"></i>TUN ${state.running ? '运行中' : '未运行'}</span><span>记录 <strong>${state.captureFlows.length}</strong>/${status.max_flows || '—'}</span><span>路由 <strong>${escapeHtml(mode)}</strong></span><span class="${status.unsaved ? 'capture-unsaved' : ''}">${status.unsaved ? '有未保存内容' : '已写入磁盘'}</span></div>
       <label class="toggle-field"><input id="captureEnabled" type="checkbox" ${enabled ? 'checked' : ''}><span>启用分析</span></label>
     </section>
-    <section class="card capture-settings">
-      <div class="section-heading"><div><h2>抓包规则</h2><p class="muted">每行一个域名或关键词；输入 * 抓取全部 HTTP/HTTPS 请求。</p></div><button id="saveCapture" class="btn btn-primary">保存并应用</button></div>
+    <details class="card capture-settings" id="captureSettings" ${state.captureSettingsOpen ? 'open' : ''}>
+      <summary class="capture-settings-summary"><div><h2>抓包规则与证书</h2><p class="muted">每行一个域名或关键词；输入 * 抓取全部 HTTP/HTTPS 请求。</p></div><span class="capture-settings-actions" aria-hidden="true">⌄</span></summary>
+      <div class="capture-settings-content"><div class="section-heading"><span></span><button id="saveCapture" class="btn btn-primary">保存并应用</button></div>
       <textarea id="captureDomains" class="input" rows="4" placeholder="例如 example.com、google；输入 * 抓取全部 HTTP/HTTPS">${escapeHtml(domains)}</textarea>
       <div class="capture-settings-footer"><div class="capture-cert"><span class="badge ${status.certificate_installed ? 'direct' : ''}">${status.certificate_installed ? `证书已安装（${escapeHtml(status.certificate_level || '未知级别')}）` : '证书未安装'}</span>${status.user_certificate_supported ? '<select id="captureCertLevel" class="input capture-cert-level"><option value="system">系统级</option><option value="user">当前用户</option></select>' : '<span class="muted">Linux 使用系统级证书</span>'}<button id="installCaptureCA" class="btn btn-ghost">安装系统证书</button><button id="uninstallCaptureCA" class="btn btn-ghost">卸载系统证书</button></div><span class="capture-storage" title="${escapeHtml(status.storage_path || '')}">${escapeHtml(status.storage_path || 'capture.json')}</span></div>
-    </section>
+      </div>
+    </details>
     <section class="card capture-records">
       <div class="section-heading capture-records-heading"><div><h2>请求记录</h2><p class="muted">显示 ${visibleFlows.length} 条，共 ${state.captureFlows.length} 条</p></div><div class="capture-record-actions"><button id="saveCaptureFile" class="btn btn-ghost">保存记录</button><button id="clearCapture" class="btn btn-danger">删除全部</button></div></div>
       <div class="capture-filters"><input id="captureSearch" class="input" value="${escapeHtml(state.captureSearch)}" placeholder="搜索 URL、Host 或方法"><div class="capture-filter-group">${[['all', '全部'], ['error', '错误'], ['2xx', '2xx'], ['4xx5xx', '4xx/5xx']].map(([id, label]) => `<button class="filter-btn ${state.captureFilter === id ? 'active' : ''}" data-capture-filter="${id}">${label}</button>`).join('')}</div></div>
@@ -540,11 +564,12 @@ function renderNodes() {
   const allNodes = state.config?.nodes || []
   const currentNodeID = activeNodeID()
   const filterBtns = [['all', '全部'], ['hysteria2', 'Hysteria2'], ['vless', 'VLESS'], ['vmess', 'VMess'], ['trojan', 'Trojan'], ['shadowsocks', 'SS'], ['socks', 'SOCKS'], ['http', 'HTTP']]
-  const filterHtml = `<div class="node-filters">${filterBtns.map(([id, label]) => {
+  const filterHtml = `<div class="node-tools"><input id="nodeSearch" class="input" value="${escapeHtml(state.nodeSearch)}" placeholder="搜索名称、服务器或协议" aria-label="搜索节点"><div class="node-filters">${filterBtns.map(([id, label]) => {
     const count = id === 'all' ? allNodes.length : allNodes.filter(n => n.protocol === id).length
     return `<button class="filter-btn ${state.nodeFilter === id ? 'active' : ''}" data-filter="${id}">${label} (${count})</button>`
-  }).join('')}</div>`
-  const filtered = allNodes.filter(n => state.nodeFilter === 'all' || n.protocol === state.nodeFilter)
+  }).join('')}</div></div>`
+  const query = state.nodeSearch.trim().toLowerCase()
+  const filtered = allNodes.filter(n => (state.nodeFilter === 'all' || n.protocol === state.nodeFilter) && (!query || `${n.name} ${n.server} ${n.port} ${n.protocol}`.toLowerCase().includes(query)))
   if (!filtered.length) return filterHtml + '<div class="empty">没有匹配的节点</div>'
   const groups = {}
   for (const n of filtered) {
@@ -622,6 +647,8 @@ async function refreshStatus() {
     state.statusState = s.state
     state.statusMessage = s.message
     state.traffic = { up: s.upload_bytes || 0, down: s.download_bytes || 0, upTotal: s.upload_total_bytes || 0, downTotal: s.download_total_bytes || 0 }
+    state.trafficHistory.push({ up: state.traffic.up, down: state.traffic.down })
+    if (state.trafficHistory.length > 30) state.trafficHistory.shift()
     state.runtimeNodeID = s.running ? (s.current_node_id || '') : ''
     state.selectorSyncState = s.selector_sync_state || 'idle'
     state.selectorSyncMessage = s.selector_sync_message || ''
@@ -660,13 +687,25 @@ function updateStatusView() {
   const statusText = document.querySelector('#statusText')
   const statusTraffic = document.querySelector('#statusTraffic')
   const power = document.querySelector('#power')
-  const dot = document.querySelector('.status .dot')
+  const dot = document.querySelector('.status-bar .dot')
   if (!statusText || !power || !dot) {
     renderApp()
     return
   }
   statusText.textContent = statusLabel(state.statusState, state.statusMessage)
   if (statusTraffic) statusTraffic.textContent = formatTraffic(state.traffic)
+  const statusNode = document.querySelector('#statusNode')
+  const statusMode = document.querySelector('#statusMode')
+  const current = state.config?.nodes?.find(node => node.id === activeNodeID())
+  const mode = MODES.find(item => item.id === state.config?.routing_mode)
+  if (statusNode) statusNode.textContent = '节点：' + (current?.name || '未选择')
+  if (statusMode) statusMode.textContent = '模式：' + (mode?.name || '未设置')
+  const trafficUp = document.querySelector('#trafficUp')
+  const trafficDown = document.querySelector('#trafficDown')
+  if (trafficUp) trafficUp.textContent = formatBytes(state.traffic.up) + '/s'
+  if (trafficDown) trafficDown.textContent = formatBytes(state.traffic.down) + '/s'
+  const trafficChart = document.querySelector('#trafficChart')
+  if (trafficChart) trafficChart.innerHTML = renderTrafficChart()
   power.textContent = state.running ? '关闭 TUN' : '开启 TUN'
   power.className = 'switch ' + (state.running ? 'on' : '')
   dot.className = 'dot ' + dotClass(state.statusState)
@@ -824,11 +863,30 @@ function bindEvents() {
   document.querySelectorAll('[data-view]').forEach(item => {
     item.addEventListener('click', async () => {
       state.view = item.dataset.view
+      localStorage.setItem('sbtun-ui-view', state.view)
       if (state.view === 'routing') await refreshIPv6Status()
       if (state.view === 'capture') await refreshCapture()
       renderApp()
     })
   })
+  const nodeSearch = document.querySelector('#nodeSearch')
+  if (nodeSearch) nodeSearch.addEventListener('input', () => {
+    state.nodeSearch = nodeSearch.value
+    localStorage.setItem('sbtun-ui-node-search', state.nodeSearch)
+    renderApp()
+  })
+  const toggleNodeForm = document.querySelector('#toggleNodeForm')
+  if (toggleNodeForm) toggleNodeForm.addEventListener('click', () => {
+    state.nodeFormOpen = !state.nodeFormOpen
+    localStorage.setItem('sbtun-ui-node-form-open', String(state.nodeFormOpen))
+    renderApp()
+    if (state.nodeFormOpen) document.querySelector('#node-import')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+  })
+  document.querySelectorAll('[data-rules-tab]').forEach(button => button.addEventListener('click', () => {
+    state.rulesTab = button.dataset.rulesTab
+    localStorage.setItem('sbtun-ui-rules-tab', state.rulesTab)
+    renderApp()
+  }))
   const updateSingBox = document.querySelector('#updateSingBox')
   if (updateSingBox) {
     updateSingBox.addEventListener('click', async () => {
@@ -1043,6 +1101,11 @@ function bindEvents() {
   }
 
   const captureDomains = document.querySelector('#captureDomains')
+  const captureSettings = document.querySelector('#captureSettings')
+  if (captureSettings) captureSettings.addEventListener('toggle', () => {
+    state.captureSettingsOpen = captureSettings.open
+    localStorage.setItem('sbtun-ui-capture-settings-open', String(captureSettings.open))
+  })
   if (captureDomains) captureDomains.addEventListener('input', () => {
     state.captureDraft = captureDomains.value
     state.captureDraftDirty = true
@@ -1255,9 +1318,10 @@ function bindEvents() {
       renderApp()
     }
   })
-  document.querySelectorAll('.filter-btn').forEach(btn => {
+  document.querySelectorAll('.node-filters .filter-btn').forEach(btn => {
     btn.addEventListener('click', () => {
       state.nodeFilter = btn.dataset.filter
+      localStorage.setItem('sbtun-ui-node-filter', state.nodeFilter)
       renderApp()
     })
   })
@@ -1571,6 +1635,8 @@ function beginEditNode(node) {
   state.manualProtocol = node.protocol
   state.manualForm = form
   state.editingNodeId = node.id
+  state.nodeFormOpen = true
+  localStorage.setItem('sbtun-ui-node-form-open', 'true')
   state.view = 'nodes'
   renderApp()
   document.querySelector('#node-import')?.scrollIntoView({ behavior: 'smooth' })
