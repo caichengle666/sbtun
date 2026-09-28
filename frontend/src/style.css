@@ -379,8 +379,10 @@ textarea.input { resize: vertical; }
 .rules-summary-item small { overflow: hidden; color: #64748b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .rule-layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(360px, .85fr); align-items: start; gap: 18px; }
 .rule-list-column { min-width: 0; }
-.rule-set-list { display: grid; gap: 8px; }
-.rule-set-row { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto minmax(76px, auto) 34px; align-items: center; gap: 12px; min-width: 0; padding: 12px 14px; border: 1px solid #25284a; border-radius: 8px; background: #0d0e15; }
+.rule-set-list { display: grid; gap: 8px; max-height: 392px; padding-right: 4px; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--border) transparent; scrollbar-gutter: stable; scrollbar-width: thin; }
+.rule-set-list::-webkit-scrollbar { width: 6px; }
+.rule-set-list::-webkit-scrollbar-thumb { border-radius: 999px; background: var(--border); }
+.rule-set-row { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto minmax(76px, auto) 34px; align-items: center; gap: 12px; min-width: 0; min-height: 72px; padding: 12px 14px; border: 1px solid #25284a; border-radius: 8px; background: #0d0e15; }
 .rule-set-row:hover { border-color: #3b416c; background: #101522; }
 .rule-switch { position: relative; width: 28px; height: 16px; padding: 0; border: 0; border-radius: 999px; background: #334155; cursor: pointer; }
 .rule-switch span { position: absolute; top: 3px; left: 3px; width: 10px; height: 10px; border-radius: 50%; background: #cbd5e1; transition: transform .16s ease; }
@@ -416,6 +418,7 @@ textarea.input { resize: vertical; }
 .rule-form-field > span { color: #94a3b8; font-size: 12px; }
 .rule-form-actions { display: flex; flex-wrap: nowrap; gap: 6px; margin-top: 16px; }
 .rule-form-actions > .btn { min-width: 0; padding-right: 11px; padding-left: 11px; white-space: nowrap; }
+.rule-source-link { display: inline-flex; align-items: center; justify-content: center; text-decoration: none; }
 .rules-toolbar { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-top: 12px; }
 .rules-summary-note { color: #64748b; font-size: 11px; line-height: 1.5; }
 .dns-filter-card .section-heading { align-items: flex-start; }
@@ -454,6 +457,7 @@ textarea.input { resize: vertical; }
 
 @media (max-width: 1100px) {
   .rule-layout { grid-template-columns: 1fr; }
+  .rule-set-list { max-height: none; padding-right: 0; overflow: visible; scrollbar-gutter: auto; }
   .rule-set-form { order: 2; }
 }
 

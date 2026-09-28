@@ -374,7 +374,7 @@ function renderRulesPage() {
           <p class="muted">添加 sing-box SRS 或 DNS 域名规则集 URL。</p>
           <label class="rule-form-field"><span>规则集名称</span><input id="ruleSetName" class="input" value="${escapeHtml(state.ruleSetForm.name)}" placeholder="例如 广告过滤规则" /></label>
           <label class="rule-form-field"><span>规则集 URL</span><input id="ruleSetURL" class="input" value="${escapeHtml(state.ruleSetForm.url)}" placeholder="https://example.com/rules.srs" /></label>
-          <div class="rule-form-actions"><button id="addRuleSetBtn" class="btn btn-primary">${state.editingRuleSetID ? '保存修改' : '添加规则集'}</button>${state.editingRuleSetID ? '<button id="cancelEditRuleSet" class="btn btn-ghost">取消</button>' : '<a class="btn btn-ghost rule-source-link" href="https://github.com/razaxq/dns-blocklists-sing-box/blob/main/README_zh.md" target="_blank" rel="noopener noreferrer">查找规则集 ↗</a><button id="restoreDefaultRules" class="btn btn-ghost">恢复默认规则</button>'}</div>
+          <div class="rule-form-actions"><button id="addRuleSetBtn" class="btn btn-primary">${state.editingRuleSetID ? '保存修改' : '添加规则集'}</button>${state.editingRuleSetID ? '<button id="cancelEditRuleSet" class="btn btn-ghost">取消</button>' : '<a class="btn btn-ghost rule-source-link" href="https://github.com/razaxq/dns-blocklists-sing-box/blob/main/README_zh.md" target="_blank" rel="noopener noreferrer">查找规则集</a><button id="restoreDefaultRules" class="btn btn-ghost">恢复默认规则</button>'}</div>
         </aside>
       </div>
     </section>
