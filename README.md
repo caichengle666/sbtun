@@ -366,4 +366,6 @@ go vet -tags cli ./...
 
 ## License
 
-当前仓库尚未声明独立开源许可证。在添加许可证之前，默认不代表允许复制、修改或再分发。第三方组件仍分别受其自身许可证约束。
+MIT License，详见 [LICENSE](LICENSE) 文件。
+
+第三方组件（sing-box、Wails、Wintun 等）仍分别受其自身许可证约束。
