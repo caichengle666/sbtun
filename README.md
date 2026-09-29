@@ -1,25 +1,85 @@
 # sbtun
 
-轻量级 sing-box TUN 客户端，提供 Windows 和 Linux 桌面 GUI，同时提供跨平台 CLI。
+轻量级 sing-box TUN 客户端，为 Windows 和 Linux 提供桌面 GUI，同时保留适合脚本与服务器环境的 CLI。
 
-当前版本：`0.2.7`
+sbtun 负责节点、订阅、路由、规则集、健康检查和运行状态；代理内核由 sing-box 提供。用户配置与 sing-box 运行配置分离，不需要手写底层 JSON。
 
-## 功能
+## 主要特性
 
-- 基于 sing-box 的 TUN 网络代理
-- 节点和订阅管理
-- 支持 VLESS、VMess、Trojan、Shadowsocks、Hysteria2、SOCKS、HTTP 等常用节点类型
-- 智能分流、全局代理、全局直连和自定义规则
-- 自定义规则优先于内置分流规则
-- 国内域名和国内 IP 规则集自动更新
-- 广告过滤规则集和手动 DNS 过滤规则管理
-- 节点 Ping、TCP/UDP 端口和 URL 健康测试
-- 多节点批量测试，单个节点完成后立即显示结果
-- 节点失效检测和自动切换
-- Windows 托盘运行、主题切换、复制粘贴和右键编辑操作
-- HTTP/HTTPS 请求分析器，可保存分析结果到 JSON
-- CLI 管理节点、路由规则、抓包分析和运行状态
-- GitHub Actions 自动构建 Windows/Linux 发布包
+- **桌面与命令行双入口**：GUI 和 CLI 共用配置与运行状态。
+- **常用协议支持**：VLESS、VMess、Trojan、Shadowsocks、Hysteria2、SOCKS 和 HTTP。
+- **节点管理**：导入节点链接或订阅、手动编辑、批量测试、批量导出与删除。
+- **四种路由模式**：智能分流、全局代理、全局直连和自定义规则。
+- **规则集管理**：更新、启停和管理 sing-box SRS 规则集，并支持手动 DNS 过滤规则。
+- **真实可用性检查**：区分 Ping、TCP/UDP 端口探测与实际代理 URL 测试。
+- **运行时切换与容错**：运行中切换节点、节点失效检测和自动切换。
+- **流量分析**：按域名或关键词查看经过 TUN 的 HTTP/HTTPS 请求，并保存为 JSON。
+- **便携发布包**：GitHub Actions 构建 Windows/Linux 的 amd64 与 arm64 版本。
+
+## 界面预览
+
+![运行概览](docs/screenshots/sbtun-01-overview.png)
+![节点管理](docs/screenshots/sbtun-02-nodes.png)
+![路由模式](docs/screenshots/sbtun-03-routing.png)
+![分流规则](docs/screenshots/sbtun-04-rules.png)
+![流量分析](docs/screenshots/sbtun-05-traffic.png)
+
+以上为深色主题下的五个导航页面。截图取自空配置环境，因此没有真实节点、流量和曲线；实际使用时各页面会显示实时数据。
+
+---
+
+## 快速开始
+
+### Windows
+
+1. 在本仓库的 **Releases** 页面下载 `sbtun-windows-amd64.zip` 或 `sbtun-windows-arm64.zip`。
+2. 完整解压压缩包，不要只复制 `sbtun.exe`。
+3. 使用管理员权限运行：
+
+```powershell
+.\sbtun.exe
+```
+
+命令行入口：
+
+```powershell
+.\sbtun-cli.exe help
+.\sbtun-cli.exe status
+```
+
+Windows 发布包包含 sing-box、Wintun DLL 和默认分流规则集。TUN 模式需要管理员权限。
+
+### Linux
+
+1. 在本仓库的 **Releases** 页面下载对应架构的 `.tar.gz` 发布包。
+2. 解压后使用启动脚本：
+
+```bash
+chmod +x start-sbtun.sh
+./start-sbtun.sh
+```
+
+脚本会优先通过 `pkexec` 获取权限，不可用时尝试 `sudo`。命令行入口：
+
+```bash
+chmod +x sbtun-cli
+./sbtun-cli help
+```
+
+> [!NOTE]
+> Linux GUI 依赖 GTK3/WebKitGTK。官方发布包带有配套运行库和启动脚本；只复制 GUI 主程序可能导致 `libwebkit2gtk-4.0.so.37` 缺失。
+
+### 首次使用
+
+1. 打开“节点管理”，导入单个节点链接、订阅地址，或手动填写协议参数。
+2. 选择一个节点并执行健康测试。
+3. 在“路由模式”中选择所需策略。
+4. 检查规则集状态，必要时执行更新。
+5. 点击“开启 TUN”。
+
+只有 sing-box 进程、TUN 和必要的就绪检查全部成功后，界面才会显示“服务运行中”。启动失败时会报告错误并清理已启动的进程。
+
+---
 
 ## 支持平台
 
@@ -27,116 +87,91 @@
 | --- | --- | --- | --- |
 | Windows | 支持 | 支持 | amd64、arm64 |
 | Linux | 支持 | 支持 | amd64、arm64 |
-| macOS | 暂不提供构建 | 暂不提供构建 | - |
+| macOS | 暂无发布包 | 暂无发布包 | — |
 
-Windows GUI 使用 Wintun。Linux GUI 使用 GTK/WebKitGTK，TUN 模式通常需要 root 权限或系统授权工具。
+## 支持的节点类型
 
-## 下载
+| 协议 | 链接/订阅导入 | 手动配置 |
+| --- | --- | --- |
+| VLESS | 支持 | 支持 |
+| VMess | 支持 | 支持 |
+| Trojan | 支持 | 支持 |
+| Shadowsocks | 支持 | 支持 |
+| Hysteria2 | 支持 | 支持 |
+| SOCKS | 支持 | 支持 |
+| HTTP/HTTPS | 支持 | 支持 |
 
-打开 GitHub Releases，按操作系统和架构下载对应压缩包。
+VLESS、VMess 和 Trojan 可配置 TLS、SNI、ALPN、uTLS 及 WebSocket、HTTP、gRPC、HTTPUpgrade 等传输参数；Hysteria2 支持端口跳跃与 Salamander 混淆等参数。
 
-发布包会自动包含或准备以下运行资源：
-
-- 最新 sing-box
-- Windows Wintun DLL
-- 国内域名和国内 IP 规则集
-- Linux GUI 所需的 WebKitGTK 运行库及辅助进程
-- 对应平台的 GUI、CLI 和启动脚本
-
-## GUI 使用
-
-1. 启动 `sbtun`。
-2. 在“节点”页面导入节点链接、订阅，或使用协议字段手动添加节点。
-3. 在“路由模式”中选择智能分流、全局代理、全局直连或自定义规则。
-4. 检查规则集状态，必要时更新规则集。
-5. 点击启动 TUN。
-6. 需要停止时点击“关闭 TUN”，关闭窗口不会把运行中的 TUN 状态伪装成已停止。
-
-启动状态只有在 sing-box、TUN 和必要的网络检查成功后才会显示为运行中。启动失败时会显示错误并清理已启动的进程。
+---
 
 ## 路由模式
 
-### 智能分流
+| 模式 | 行为 | 适用场景 |
+| --- | --- | --- |
+| 智能分流 | 国内直连，其余代理 | 日常使用 |
+| 全局代理 | 非本机流量走代理 | 临时全局代理 |
+| 全局直连 | 流量不经过代理 | 排障或暂停代理 |
+| 自定义 | 按用户规则处理 | 精细控制 |
 
-国内域名和国内 IP 直连，其余流量通过当前代理节点。
+自定义规则支持：
 
-### 全局代理
+- 域名后缀
+- 域名关键词
+- 完整域名
+- IP/CIDR
+- 端口
 
-除本机保留地址等必要例外外，流量通过代理节点。
+每条规则可以选择 `proxy`、`direct` 或 `block`。用户规则优先于内置分流规则。
 
-### 全局直连
+### 网络选项
 
-流量直接连接，不经过代理节点。
+- **IPv6**：检测到可用 IPv6 时加入 TUN 地址；不可用时自动使用 IPv4。
+- **WebRTC 防泄漏**：启用更严格的 TUN 路由，减少 WebRTC 直连暴露地址的风险。
+- **诊断信息**：显示配置节点与 sing-box 实际 selector，用于排查状态不同步。
 
-### 自定义规则
-
-按用户规则控制流量。自定义规则命中后优先使用自定义处理方式，其他规则不会覆盖已经命中的自定义规则。
-
-规则支持域名后缀、域名关键词、完整域名、IP/CIDR 等匹配对象，并可选择直连或代理。
+---
 
 ## 规则集与广告过滤
 
-规则集页面用于管理 sing-box SRS 规则集和手动 DNS 过滤规则。规则集和手动规则会写入运行配置；规则集文件保存在程序旁边的 `rules/` 目录。
+sbtun 可以管理 sing-box 的 `.srs` 规则集：
 
-- 默认规则集包括国内域名、国内 IP 和非国内域名，可在页面中更新或停用。
-- 用户可以添加、编辑、更新和删除自定义 SRS 规则集；自定义规则集默认执行 `block`，适合广告和跟踪域名拦截。
-- “查找规则集”提供外部 SRS 规则集入口；“恢复默认规则”会重建三个默认规则集并重新下载对应文件。
-- 手动 DNS 过滤规则支持域名后缀、域名关键词、完整域名和 IP/CIDR，优先级高于规则集。
-- 停用规则集只修改启用状态，不删除 `.srs` 文件；删除规则集才会同时移除记录和本地文件。
-- 更新全部规则集只更新已启用的规则集；单个规则集下载失败时会保留旧文件。
+- 默认包含国内域名、国内 IP 和非国内域名规则集。
+- 可以添加、编辑、更新、停用和删除自定义规则集。
+- 单个规则集更新失败时保留旧文件，避免把可用规则替换成损坏文件。
+- 停用只改变启用状态；删除会同时移除记录和本地文件。
+- 手动 DNS 过滤规则的优先级高于规则集。
 
-规则集启用状态保存在 `rules/sets.json`。生成运行配置时，停用或缺失文件的规则集不会写入 `route.rule_set` 和 `route.rules`，因此不会参与实际分流。
+添加外部规则集时，请填写可直接下载的 `.srs` 文件地址，而不是仓库首页。广告过滤基于域名规则，不修改网页 CSS，也无法覆盖所有应用内广告；实际效果取决于上游列表。
 
-广告过滤基于 DNS 域名规则，不修改网页 CSS，也不能拦截所有应用内广告；规则集是否有效取决于上游列表的覆盖范围和更新状态。
-
-### 外部规则集来源
-
-规则集页面中的“规则集 URL”需要填写具体的 `.srs` 文件地址，不要填写仓库首页地址。下面这些来源都已提供 sing-box 可用的 SRS 文件：
-
-- [anti-AD](https://github.com/privacy-protection-tools/anti-AD)：中文社区维护的开源广告过滤项目，合并 hosts、EasyList 和 AdBlock 等上游列表，侧重中文区广告、电视盒子广告、App 内置广告和隐私统计域名。官网直接提供 sing-box SRS（需 sing-box 1.10+）：`https://anti-ad.net/anti-ad-sing-box.srs`。这里的“官网”指 anti-AD 项目站点，不是 sing-box 官方规则。
-- [xmdhs/sing-box-ruleset](https://github.com/xmdhs/sing-box-ruleset)：将 AdGuard DNS filter 转换为 sing-box SRS。仓库说明给出了当前可用地址，例如 `https://raw.githubusercontent.com/xmdhs/sing-box-ruleset/rule-set/AdGuardSDNSFilterSingBox.srs`。适合只需要 AdGuard DNS 过滤的用户。
-- [217heidai/adblockfilters](https://github.com/217heidai/adblockfilters)：合并、去重多个广告和跟踪规则源，每 8 小时更新。sing-box 1.12+ 可直接使用 `https://raw.githubusercontent.com/217heidai/adblockfilters/main/rules/adblocksingbox.srs`；如果完整规则体积过大，可改用 `https://raw.githubusercontent.com/217heidai/adblockfilters/main/rules/adblocksingboxlite.srs`。仓库还提供 jsDelivr 加速地址。
-- [razaxq/dns-blocklists-sing-box](https://github.com/razaxq/dns-blocklists-sing-box/blob/main/README_zh.md)：将多个 DNS 拦截列表转换为 sing-box SRS，规则文件位于独立的 `rule-set` 分支。中文说明列出了 HaGeZi、OISD、AdGuard、区域列表和安全列表等可选文件，例如 `https://cdn.jsdelivr.net/gh/razaxq/dns-blocklists-sing-box@rule-set/hagezi-normal.srs`。适合按需组合多个规则集。
-
-添加后可在规则集页面更新、停用或删除。多个拦截规则集可以同时启用；规则集过多或单个体积过大时，首次更新和 sing-box 启动会更慢，建议先使用 Lite 或 Normal 版本。
+---
 
 ## 节点健康测试
 
-节点卡片中的测试会根据协议选择合适的方法：
+sbtun 不把 Ping 结果直接当作节点可用：
 
-- Ping：测试基础网络连通性。
-- TCPing：适用于 TCP 服务端口。
-- UDP：适用于 Hysteria2 等 UDP 服务端口。
-- URL：通过临时 sing-box 出站访问测试地址，验证节点是否真的能代理请求。
+- **Ping**：检查目标主机基础连通性。
+- **TCPing**：检查 TCP 协议节点的服务端口。
+- **UDP**：检查 Hysteria2 等 UDP 节点是否可发送数据。
+- **URL**：通过 sing-box 临时出站或运行中的 selector 发起实际代理请求。
 
-Hysteria2 不使用 TCPing 代替 UDP 检查。URL 测试失败可能来自节点、DNS、目标站点或当前网络环境，不能只根据 Ping 结果判断节点可用。
+节点最终健康状态以 URL 测试为主。URL 失败也可能来自 DNS、测试目标或当前网络环境，建议结合各项结果判断。
+
+---
 
 ## HTTP/HTTPS 流量分析
 
-流量分析用于查看经过 TUN 的 HTTP/HTTPS 请求，不是通用 PCAP 抓包器。
+流量分析器按域名或关键词记录经过 TUN 的 HTTP/HTTPS 请求。输入单独一行 `*` 可以分析全部 HTTP/HTTPS 流量。
 
-### 使用方式
-
-1. 打开“流量分析”。
-2. 在分析规则输入框中填写域名或关键词，每行一条。
-3. 如果不知道目标域名，可以输入单独一行 `*`，表示分析所有经过 TUN 的 HTTP/HTTPS 请求。
-4. 点击“保存并应用”，再产生网络流量。
-5. HTTPS 请求需要先安装程序生成的根证书。
-6. 请求记录会保存到运行目录下的 `runtime-data/capture/capture.json`。
-
-支持的 CLI 示例：
-
-```powershell
-# 分析指定域名或关键词
+```bash
+# 分析指定域名或关键词，并前台启动 TUN
 ./sbtun-cli capture run example.com
 
-# 分析全部 HTTP/HTTPS 请求，* 建议加引号
+# 分析全部 HTTP/HTTPS 请求
 ./sbtun-cli capture run '*'
 
-# 启用分析规则
+# 保存规则、查看状态与记录
 ./sbtun-cli capture enable '*'
-
-# 查看分析状态和已保存记录
 ./sbtun-cli capture status
 ./sbtun-cli capture list
 ./sbtun-cli capture show 1
@@ -149,118 +184,99 @@ Hysteria2 不使用 TCPing 代替 UDP 检查。URL 测试失败可能来自节�
 ./sbtun-cli capture clear
 ```
 
-Linux/macOS shell 使用相同命令格式，将 `./sbtun-cli` 替换为实际文件路径即可。
+### 能分析什么
 
-### 分析范围和限制
+- HTTP 请求头及有限大小的请求/响应正文。
+- 安装并信任 sbtun 根证书后的 TCP HTTPS 流量。
+- 命中指定域名、关键词或 `*` 规则的请求。
 
-- HTTP 请求可以记录请求头和有限大小的请求/响应正文。
-- HTTPS 请求需要安装并信任 sbtun 根证书，且应用必须使用可被代理分析的 TCP HTTPS 流量。
-- HTTP/3 或 QUIC 使用 UDP 443 时不会直接解析为 HTTP；全量 HTTP/HTTPS 分析会引导其回退到 TCP HTTPS。
-- SSH、游戏协议、任意 TCP/UDP、自定义二进制协议不会变成 HTTP 请求记录。
-- `*` 表示全部 HTTP/HTTPS 分析，不表示所有网络协议，也不等于导出原始 PCAP。
-- 抓包记录是 JSON 文件，保存后可以复制、分析或直接删除。
+### 不能分析什么
+
+- 原始 PCAP 数据。
+- SSH、游戏协议或任意自定义 TCP/UDP 协议。
+- 未回退到 TCP 的 HTTP/3/QUIC 流量。
+- 使用证书固定且拒绝本地分析证书的应用。
+
+> [!WARNING]
+> HTTPS 分析会在本机生成并使用根证书。只应在你拥有或获准调试的设备和流量上启用。`runtime-data/capture/ca.key` 是私钥，不要分享、提交到 Git 或上传到公共位置。
+
+---
 
 ## CLI
 
-直接运行 CLI 或使用不完整参数时，会显示帮助信息。
+直接运行 `sbtun-cli` 或执行 `sbtun-cli help` 可以查看完整帮助。
+
+### 运行与状态
 
 ```text
-sbtun-cli help
-sbtun-cli version
+run                             前台启动 TUN 与代理
+start                           同 run
+stop                            停止运行中的实例
+status                          查看当前状态
+version                         查看 sbtun 版本
 ```
 
-常用命令：
+### 节点管理
 
 ```text
-run                         启动 TUN
-start                       启动 TUN
-stop                        停止 TUN
-status                      查看运行状态
-
-nodes                       列出节点
-info <编号>                 查看节点详情
-add-node <链接或订阅>       添加节点或订阅
-switch <编号>               切换当前节点
-test [编号...]              测试一个或多个节点
-del <编号>                  删除节点
-edit <编号>                 交互式编辑节点
-
-route                       查看当前路由模式
-add-rule                    交互式添加自定义规则
-rules list                  列出规则集
-rules add <名称> <SRS_URL>  添加规则集
-rules edit <ID> <名称> <URL> 编辑规则集
-rules delete <ID>           删除规则集
-rules update <ID>           更新指定规则集
-rules update-all            更新全部规则集
-
-capture run <规则>          启动流量分析
-capture enable <规则>       启用流量分析
-capture disable             停止流量分析
-capture status              查看分析状态
-capture list                列出请求记录
-capture show <编号>         查看请求详情
-capture clear               删除抓包记录
-capture cert install        安装分析证书
-capture cert uninstall      卸载分析证书
-
-kernel version              查看 sing-box 内核版本
-kernel update               更新 sing-box 内核到官方最新稳定版
+nodes                           列出节点
+info <编号>                     查看节点详情
+add-node <节点链接或订阅地址>   导入节点
+switch <编号>                   切换节点
+test <编号...>                  测试一个或多个节点
+del <编号...>                   删除一个或多个节点
+edit [编号]                     交互式编辑节点
+edit <编号> <节点链接>          用链接覆盖节点参数
 ```
 
-`edit` 需要交互式终端。节点测试会按完成顺序输出结果，不必等待全部节点结束才看到第一个结果。
-
-## 数据目录
-
-运行数据默认放在可执行文件旁边的 `runtime-data` 目录：
+### 路由与规则
 
 ```text
-runtime-data/
-├── config.json                  用户配置
-├── runtime/                     sing-box 运行配置
-├── rules/                       规则集文件
-└── capture/
-    ├── capture.json             HTTP/HTTPS 分析记录
-    ├── ca.crt                   分析根证书
-    └── ca.key                   分析根证书私钥
+route <smart|global|direct|custom>
+rules list
+rules add <名称> <SRS_URL>
+rules edit <ID> <名称> <SRS_URL>
+rules update <ID>
+rules update-all
+add-rule <链接|文件|文本>
 ```
 
-不要把包含私钥的 `runtime-data/capture` 目录上传到公共仓库。
+### 内核管理
 
-## Windows 运行
-
-解压后使用管理员权限运行 GUI：
-
-```powershell
-.\sbtun.exe
+```text
+kernel version                  查看 sing-box 版本
+kernel update                   更新到官方最新稳定版
 ```
 
-CLI：
+运行中修改节点、路由或规则时，sbtun 会同步配置并重载运行时。更新 sing-box 前需要先停止当前实例。
 
-```powershell
-.\sbtun-cli.exe help
-.\sbtun-cli.exe status
+---
+
+## 数据与目录
+
+sbtun 使用便携式目录结构，配置和运行数据默认保存在可执行文件旁边：
+
+```text
+sbtun/
+├── sbtun(.exe)                 GUI
+├── sbtun-cli(.exe)             CLI
+├── sing-box(.exe)              代理内核
+├── rules/
+│   ├── sets.json               规则集状态
+│   └── *.srs                   规则集文件
+└── runtime-data/
+    ├── config.json             用户配置
+    ├── runtime/                sing-box 运行配置
+    └── capture/
+        ├── capture.json        HTTP/HTTPS 分析记录
+        ├── ca.crt              分析根证书
+        └── ca.key              分析根证书私钥
 ```
 
-如果启用 TUN 时提示网卡不存在，请确认 Wintun DLL 与程序位数一致，并使用管理员权限启动。
+> [!IMPORTANT]
+> `runtime-data/config.json` 可能包含节点地址、认证参数和订阅相关信息。备份时请妥善保管，不要把 `runtime-data/` 提交到公开仓库。
 
-## Linux 运行
-
-GUI 发布包推荐使用启动脚本，它会优先尝试 `pkexec`，不可用时再使用 `sudo`：
-
-```bash
-chmod +x start-sbtun.sh
-./start-sbtun.sh
-```
-
-CLI：
-
-```bash
-chmod +x sbtun-cli
-./sbtun-cli help
-```
-
-如果系统提示 `webkit2gtk-4.0` 或 `libwebkit2gtk-4.0.so.37` 缺失，请使用 GitHub Releases 中与发行包配套的启动脚本和运行库，不要只复制 GUI 主程序。
+---
 
 ## 从源码构建
 
@@ -269,38 +285,47 @@ chmod +x sbtun-cli
 - Go 1.25 或更高版本
 - Node.js 22 或更高版本
 - Wails CLI 2.15 或更高版本
-- Linux GUI 构建需要 GTK3、WebKitGTK 4.0 和 `pkg-config`
+- Linux GUI：GTK3、WebKitGTK 4.x 和 `pkg-config`
 
-### GUI
+### 构建 GUI
 
 ```bash
+go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
 wails build
 ```
 
-### CLI
+Wails 会按照 `wails.json` 安装并构建前端依赖。
+
+> [!NOTE]
+> Ubuntu 24.04 的软件源只提供 WebKitGTK 4.1，不再提供 Wails 默认查找的 4.0。需要安装 `libwebkit2gtk-4.1-dev`，构建时加上 tag：
+>
+> ```bash
+> sudo apt install libgtk-3-dev libwebkit2gtk-4.1-dev pkg-config
+> wails build -tags webkit2_41
+> ```
+>
+> Ubuntu 22.04 及更早版本使用 `libwebkit2gtk-4.0-dev`，直接 `wails build` 即可。
+
+### 构建 CLI
 
 ```bash
 go build -tags cli -o sbtun-cli .
 ```
 
-Linux 交叉编译 CLI 示例：
+Linux 交叉编译 CLI：
 
 ```bash
 GOOS=linux GOARCH=amd64 go build -tags cli -o sbtun-cli-linux-amd64 .
 GOOS=linux GOARCH=arm64 go build -tags cli -o sbtun-cli-linux-arm64 .
 ```
 
-GUI 构建需要目标平台的 Wails、GTK/WebKitGTK 和系统打包环境；Windows 和 Linux 的完整发布包由 GitHub Actions 生成。
+GUI 构建依赖目标平台的 Wails 和系统图形库。完整便携发布包建议交给仓库中的 GitHub Actions 工作流构建。
 
-## GitHub Actions 发布
-
-仓库工作流会分别构建 Windows amd64/arm64、Linux amd64/arm64 的 GUI 和 CLI，并准备对应运行资源。构建时会从官方发布接口获取最新 sing-box，Windows 获取最新 Wintun，规则集使用 SRS 文件。
-
-推送 `0.*` 或 `v*` 格式的 tag 后，工作流会构建压缩包并创建 GitHub Release。普通分支推送只进行对应的构建检查，不会自动替换已有 release。
+---
 
 ## 开发与验证
 
-提交修改前建议执行：
+提交前建议执行：
 
 ```bash
 go test ./...
@@ -309,14 +334,36 @@ go vet ./...
 go vet -tags cli ./...
 ```
 
-项目坚持以下原则：
+项目实现遵循这些原则：
 
-- TUN 未真实启动时不显示“运行中”。
-- sing-box 配置先校验，再启动；失败时清理并恢复状态。
-- 用户配置和 sing-box runtime 配置分离。
-- 自定义规则优先级明确，不依赖前端显示顺序。
-- 网络测试区分 TCP、UDP 和实际代理 URL 测试。
+- TUN 未真实就绪时，不显示为“运行中”。
+- sing-box 配置先生成、校验，再启动。
+- 启动或重载失败时，清理运行状态并尽可能回滚配置。
+- 用户配置与 sing-box 运行配置分离。
+- 节点测试区分 ICMP、TCP、UDP 和实际代理请求。
+- GUI 与 CLI 使用相同的核心逻辑。
+
+### 技术栈
+
+- Go
+- Wails 2
+- Vite
+- sing-box
+- goproxy（HTTP/HTTPS 流量分析）
+
+---
+
+## 发布
+
+仓库工作流构建以下发布包：
+
+- Windows amd64 / arm64
+- Linux amd64 / arm64
+- GUI 与 CLI
+- 对应平台的 sing-box、规则集及必要运行资源
+
+推送 `v*` 或 `0.*` 格式的 tag 会触发 GitHub Release；普通分支推送只执行构建检查。
 
 ## License
 
-当前仓库未声明独立开源许可证。分发或二次开发前，请以仓库中的许可证文件和第三方组件许可证为准。
+当前仓库尚未声明独立开源许可证。在添加许可证之前，默认不代表允许复制、修改或再分发。第三方组件仍分别受其自身许可证约束。
