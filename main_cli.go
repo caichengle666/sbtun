@@ -72,6 +72,10 @@ func main() {
 			os.Exit(1)
 		}
 		defer release()
+		if err := application.ClearStopRequest(); err != nil {
+			fmt.Fprintln(os.Stderr, "清理旧停止请求失败:", err)
+			os.Exit(1)
+		}
 		if err := application.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -80,7 +84,16 @@ func main() {
 		if captureRun {
 			fmt.Println("抓包分析器已启动，等待流量...")
 		}
-		<-ctx.Done()
+		stopRequested := make(chan struct{})
+		go func() {
+			if application.WaitForStopRequest(ctx) {
+				close(stopRequested)
+			}
+		}()
+		select {
+		case <-ctx.Done():
+		case <-stopRequested:
+		}
 		if application.GetConfig().CaptureEnabled {
 			if saveErr := application.SaveCaptureFlows(); saveErr != nil {
 				fmt.Fprintln(os.Stderr, "保存抓包失败:", saveErr)

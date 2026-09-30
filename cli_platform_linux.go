@@ -10,6 +10,9 @@ import (
 	"strconv"
 	"strings"
 	"syscall"
+	"time"
+
+	"github.com/caichengle666/sbtun/app"
 )
 
 func cliSignals() []os.Signal { return []os.Signal{os.Interrupt, syscall.SIGTERM} }
@@ -64,8 +67,18 @@ func stopRunningInstance() error {
 				continue
 			}
 		}
-		if process, findErr := os.FindProcess(pid); findErr == nil && process.Signal(syscall.SIGTERM) == nil {
-			return nil
+		if _, findErr := os.FindProcess(pid); findErr == nil {
+			if err := app.RequestRunningInstanceStop(); err != nil {
+				return fmt.Errorf("发送停止请求失败: %w", err)
+			}
+			deadline := time.Now().Add(10 * time.Second)
+			for time.Now().Before(deadline) {
+				if _, err := os.Stat(filepath.Join("/proc", strconv.Itoa(pid))); os.IsNotExist(err) {
+					return nil
+				}
+				time.Sleep(100 * time.Millisecond)
+			}
+			return fmt.Errorf("等待 sbtun 正常退出超时")
 		}
 	}
 	return fmt.Errorf("没有运行中的 sbtun 实例")

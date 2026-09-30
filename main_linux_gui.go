@@ -3,9 +3,12 @@
 package main
 
 import (
+	"context"
 	"embed"
 	"fmt"
 	"os"
+	"os/signal"
+	"syscall"
 
 	"github.com/caichengle666/sbtun/app"
 	"github.com/wailsapp/wails/v2"
@@ -29,6 +32,15 @@ func main() {
 
 	application := app.New()
 	application.SetTrayIcon(trayIcon)
+	signals := make(chan os.Signal, 1)
+	signal.Notify(signals, os.Interrupt, syscall.SIGTERM)
+	defer signal.Stop(signals)
+	go func() {
+		if _, ok := <-signals; ok {
+			application.Shutdown(context.Background())
+			os.Exit(0)
+		}
+	}()
 	appOptions := &options.App{
 		Title:                    "sbtun",
 		Width:                    980,

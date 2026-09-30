@@ -58,6 +58,12 @@ func (a *App) SetTrayIcon(icon []byte) {
 
 func (a *App) Startup(ctx context.Context) {
 	a.startupCore(ctx)
+	_ = a.ClearStopRequest()
+	go func() {
+		if a.WaitForStopRequest(ctx) {
+			a.QuitApp()
+		}
+	}()
 	go a.StartTray()
 	go a.monitorNodes()
 }
