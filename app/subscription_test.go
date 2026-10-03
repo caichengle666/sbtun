@@ -116,14 +116,51 @@ func TestImportSubscriptionSelectsFirstNode(t *testing.T) {
 }
 
 func TestParseSOCKS5Links(t *testing.T) {
-	for _, link := range []string{"socks5://user:pass@example.com:1080#s5", "socks5h://example.com:1081#s5h"} {
-		node, err := parseSubscriptionLine(link)
+	for _, test := range []struct {
+		link    string
+		version string
+		user    string
+		pass    string
+	}{
+		{link: "socks5://user:pass@example.com:1080#s5", version: "5", user: "user", pass: "pass"},
+		{link: "socks5h://example.com:1081#s5h", version: "5"},
+		{link: "SOCKS4A://user@example.com:1082#s4a", version: "4a", user: "user"},
+	} {
+		node, err := parseSubscriptionLine(test.link)
 		if err != nil {
-			t.Fatalf("parse %s: %v", link, err)
+			t.Fatalf("parse %s: %v", test.link, err)
 		}
-		if node.Protocol != "socks" || node.Port == 0 {
-			t.Fatalf("unexpected SOCKS5 node: %+v", node)
+		if node.Protocol != "socks" || node.Port == 0 || node.Settings["version"] != test.version || node.Settings["username"] != test.user || node.Settings["password"] != test.pass {
+			t.Fatalf("unexpected SOCKS node: %+v", node)
 		}
+	}
+}
+
+func TestParseHy2Alias(t *testing.T) {
+	node, err := parseSubscriptionLine("hy2://secret@example.com:443?sni=example.com#test")
+	if err != nil {
+		t.Fatal(err)
+	}
+	if node.Protocol != "hysteria2" || node.Settings["password"] != "secret" || node.Name != "test" {
+		t.Fatalf("unexpected hy2 node: %+v", node)
+	}
+}
+
+func TestSOCKSExportKeepsCredentialsAndVersion(t *testing.T) {
+	node := config.Node{Protocol: "socks", Server: "example.com", Port: 1080, Name: "SOCKS", Settings: map[string]string{"version": "5", "username": "user name", "password": "p@ss:word"}}
+	link, err := nodeShareLink(node)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.HasPrefix(link, "socks5://user%20name:p%40ss%3Aword@example.com:1080") {
+		t.Fatalf("SOCKS credentials missing or not escaped: %s", link)
+	}
+	parsed, err := parseSubscriptionLine(link)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Settings["username"] != node.Settings["username"] || parsed.Settings["password"] != node.Settings["password"] || parsed.Settings["version"] != "5" {
+		t.Fatalf("SOCKS credentials round trip mismatch: got=%v want=%v link=%s", parsed.Settings, node.Settings, link)
 	}
 }
 

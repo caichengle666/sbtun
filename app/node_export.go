@@ -64,7 +64,7 @@ func nodeShareLink(node config.Node) (string, error) {
 	case "hysteria2":
 		return hysteria2ShareLink(node), nil
 	case "socks", "http":
-		return httpStyleShareLink(node), nil
+		return httpStyleShareLink(node)
 	default:
 		return "", fmt.Errorf("不支持的协议: %s", node.Protocol)
 	}
@@ -153,17 +153,31 @@ func hysteria2ShareLink(node config.Node) string {
 	return u.String()
 }
 
-func httpStyleShareLink(node config.Node) string {
+func httpStyleShareLink(node config.Node) (string, error) {
 	scheme := node.Protocol
 	if scheme == "socks" {
-		scheme = "socks5"
+		switch strings.ToLower(strings.TrimSpace(node.Settings["version"])) {
+		case "4":
+			scheme = "socks4"
+		case "4a":
+			scheme = "socks4a"
+		default:
+			scheme = "socks5"
+		}
 	} else if settingEnabled(node.Settings, "tls") {
 		scheme = "https"
 	}
 	u := &url.URL{Scheme: scheme, Host: nodeAddress(node), Fragment: node.Name}
 	username, password := node.Settings["username"], node.Settings["password"]
 	if username != "" || password != "" {
-		u.User = url.UserPassword(username, password)
+		if strings.HasPrefix(scheme, "socks4") && password != "" {
+			return "", fmt.Errorf("SOCKS%s 不支持密码认证，请改用 SOCKS5", strings.TrimPrefix(scheme, "socks"))
+		}
+		if password == "" {
+			u.User = url.User(username)
+		} else {
+			u.User = url.UserPassword(username, password)
+		}
 	}
 	q := url.Values{}
 	if settingEnabled(node.Settings, "tls") {
@@ -175,7 +189,7 @@ func httpStyleShareLink(node config.Node) string {
 		q.Set("insecure", "1")
 	}
 	u.RawQuery = q.Encode()
-	return u.String()
+	return u.String(), nil
 }
 
 func setTransportQuery(q url.Values, settings map[string]string) {

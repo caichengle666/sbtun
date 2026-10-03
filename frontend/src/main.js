@@ -236,6 +236,21 @@ function activeNodeID() {
   return state.config?.current_node_id || ''
 }
 
+function resetManualForm() {
+  for (const key of Object.keys(state.manualForm)) {
+    state.manualForm[key] = typeof state.manualForm[key] === 'boolean' ? false : ''
+  }
+  state.manualForm.version = '5'
+  state.manualProtocol = 'vless'
+}
+
+function visibleNodeIDs() {
+  const query = state.nodeSearch.trim().toLowerCase()
+  return (state.config?.nodes || [])
+    .filter(node => (state.nodeFilter === 'all' || node.protocol === state.nodeFilter) && (!query || `${node.name} ${node.server} ${node.port} ${node.protocol}`.toLowerCase().includes(query)))
+    .map(node => node.id)
+}
+
 function renderView() {
   if (state.view === 'nodes') return renderNodesPage()
   if (state.view === 'routing') return renderRoutingPage()
@@ -274,12 +289,13 @@ function renderTrafficChart() {
 
 function renderNodesPage() {
   const nodes = state.config?.nodes || []
-  const allSelected = nodes.length > 0 && nodes.every(node => state.selectedNodes.has(node.id))
+  const visibleIDs = visibleNodeIDs()
+  const allSelected = visibleIDs.length > 0 && visibleIDs.every(id => state.selectedNodes.has(id))
   return `<section class="page-stack">
-      <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">${nodes.length} 个节点 · 选择节点后可批量测试、导出或删除。</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="toggleSelectNodes" ${nodes.length ? '' : 'disabled'}>${allSelected ? '反选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes" ${state.batchTesting ? 'disabled' : ''}>${state.batchTesting ? '测试中' : '批量测试'}</button><button class="btn btn-ghost" id="batchExportNodes">批量导出</button><button class="btn btn-danger" id="batchDeleteNodes">批量删除</button><button class="btn btn-primary" id="toggleNodeForm">${state.nodeFormOpen || state.editingNodeId ? '收起添加' : '导入 / 添加'}</button></span></div>
+      <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">${nodes.length} 个节点 · 选择节点后可批量测试、导出或删除。</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="toggleSelectNodes" ${visibleIDs.length ? '' : 'disabled'}>${allSelected ? '反选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes" ${state.batchTesting ? 'disabled' : ''}>${state.batchTesting ? '测试中' : '批量测试'}</button><button class="btn btn-ghost" id="batchExportNodes">批量导出</button><button class="btn btn-danger" id="batchDeleteNodes">批量删除</button><button class="btn btn-primary" id="toggleNodeForm">${state.editingNodeId ? '取消编辑' : state.nodeFormOpen ? '收起添加' : '导入 / 添加'}</button></span></div>
       <div id="nodePanel">${renderNodes()}</div>
     ${state.nodeFormOpen || state.editingNodeId ? `<div class="card node-import" id="node-import"><h2>${state.editingNodeId ? '编辑节点全部参数' : '添加节点'}</h2>
-      <div class="row"><input id="nodeUrl" class="input" value="${escapeHtml(state.manualForm.url)}" placeholder="节点链接 vmess:// vless:// ss:// 或订阅" /><button id="importBtn" class="btn btn-primary">导入</button></div>
+      ${state.editingNodeId ? '' : `<div class="row"><input id="nodeUrl" class="input" value="${escapeHtml(state.manualForm.url)}" placeholder="节点链接 vmess:// vless:// ss:// hy2:// 或订阅" /><button id="importBtn" class="btn btn-primary">导入</button></div>`}
       <div class="row"><select id="nodeProtocol" class="select"><option value="vless" ${state.manualProtocol === 'vless' ? 'selected' : ''}>VLESS</option><option value="vmess" ${state.manualProtocol === 'vmess' ? 'selected' : ''}>VMess</option><option value="trojan" ${state.manualProtocol === 'trojan' ? 'selected' : ''}>Trojan</option><option value="shadowsocks" ${state.manualProtocol === 'shadowsocks' ? 'selected' : ''}>Shadowsocks</option><option value="socks" ${state.manualProtocol === 'socks' ? 'selected' : ''}>SOCKS</option><option value="http" ${state.manualProtocol === 'http' ? 'selected' : ''}>HTTP</option><option value="hysteria2" ${state.manualProtocol === 'hysteria2' ? 'selected' : ''}>Hysteria2</option></select></div>
       <div class="row"><input id="nodeName" class="input" value="${escapeHtml(state.manualForm.name)}" placeholder="节点名称" /></div>
       <div class="row"><input id="nodeServer" class="input" value="${escapeHtml(state.manualForm.server)}" placeholder="服务器地址" /><input id="nodePort" class="input port-input" value="${escapeHtml(state.manualForm.port)}" placeholder="端口" /></div>
@@ -877,6 +893,14 @@ function bindEvents() {
   })
   const toggleNodeForm = document.querySelector('#toggleNodeForm')
   if (toggleNodeForm) toggleNodeForm.addEventListener('click', () => {
+    if (state.editingNodeId) {
+      resetManualForm()
+      state.editingNodeId = ''
+      state.nodeFormOpen = false
+      localStorage.setItem('sbtun-ui-node-form-open', 'false')
+      renderApp()
+      return
+    }
     state.nodeFormOpen = !state.nodeFormOpen
     localStorage.setItem('sbtun-ui-node-form-open', String(state.nodeFormOpen))
     renderApp()
@@ -1239,10 +1263,17 @@ function bindEvents() {
 
   document.querySelectorAll('.rm-node').forEach(btn => {
     btn.addEventListener('click', async () => {
+      const node = state.config?.nodes?.find(item => item.id === btn.dataset.id)
+      if (!window.confirm(`确定删除节点“${node?.name || '此节点'}”吗？`)) return
       try {
         await window.go.app.App.RemoveNode(btn.dataset.id)
         await refreshConfig()
     await refreshRules()
+        if (state.editingNodeId === btn.dataset.id) {
+          resetManualForm()
+          state.editingNodeId = ''
+          state.nodeFormOpen = false
+        }
         showToast('节点已删除', 'success')
       } catch (e) {
         showToast(e.message, 'error')
@@ -1253,8 +1284,8 @@ function bindEvents() {
   const toggleSelectNodes = document.querySelector('#toggleSelectNodes')
   const syncToggleSelectLabel = () => {
     if (!toggleSelectNodes) return
-    const nodes = state.config?.nodes || []
-    toggleSelectNodes.textContent = nodes.length > 0 && nodes.every(node => state.selectedNodes.has(node.id)) ? '反选' : '全选'
+    const ids = visibleNodeIDs()
+    toggleSelectNodes.textContent = ids.length > 0 && ids.every(id => state.selectedNodes.has(id)) ? '反选' : '全选'
   }
   document.querySelectorAll('.node-select').forEach(input => {
     input.addEventListener('change', () => {
@@ -1264,11 +1295,11 @@ function bindEvents() {
     })
   })
   if (toggleSelectNodes) toggleSelectNodes.addEventListener('click', () => {
-    const nodes = state.config?.nodes || []
-    const allSelected = nodes.length > 0 && nodes.every(node => state.selectedNodes.has(node.id))
-    nodes.forEach(node => {
-      if (allSelected) state.selectedNodes.delete(node.id)
-      else state.selectedNodes.add(node.id)
+    const ids = visibleNodeIDs()
+    const allSelected = ids.length > 0 && ids.every(id => state.selectedNodes.has(id))
+    ids.forEach(id => {
+      if (allSelected) state.selectedNodes.delete(id)
+      else state.selectedNodes.add(id)
     })
     renderApp()
   })
@@ -1356,7 +1387,10 @@ function bindEvents() {
   })
   const cancelEdit = document.querySelector('#cancelEditNode')
   if (cancelEdit) cancelEdit.addEventListener('click', () => {
+    resetManualForm()
     state.editingNodeId = ''
+    state.nodeFormOpen = false
+    localStorage.setItem('sbtun-ui-node-form-open', 'false')
     renderApp()
   })
 
@@ -1590,13 +1624,14 @@ function bindEvents() {
       if (!name || !server || !Number.isInteger(port) || port < 1 || port > 65535) {
         showToast('请填写名称、服务器和端口', 'error'); return
       }
+      const editing = Boolean(state.editingNodeId)
       try {
         const node = {
           id: 'manual-' + Date.now(),
           name, server, port, protocol,
           settings: buildManualSettings(protocol, password),
         }
-        if (state.editingNodeId) {
+        if (editing) {
           node.id = state.editingNodeId
           await window.go.app.App.UpdateNode(state.editingNodeId, node)
           state.editingNodeId = ''
@@ -1605,14 +1640,11 @@ function bindEvents() {
         }
         await refreshConfig()
     await refreshRules()
-        showToast('节点已添加', 'success')
-        state.manualForm.name = ''
-        state.manualForm.server = ''
-        state.manualForm.port = ''
-        for (const key of Object.keys(state.manualForm)) state.manualForm[key] = typeof state.manualForm[key] === 'boolean' ? false : ''
-        for (const id of ['nodeName', 'nodeServer', 'nodePort']) {
-          const input = document.querySelector('#' + id)
-          if (input) input.value = ''
+        showToast(editing ? '节点已修改' : '节点已添加', 'success')
+        resetManualForm()
+        if (editing) {
+          state.nodeFormOpen = false
+          localStorage.setItem('sbtun-ui-node-form-open', 'false')
         }
         renderApp()
       } catch (e) {

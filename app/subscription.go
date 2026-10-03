@@ -15,7 +15,7 @@ import (
 )
 
 func parseSubscription(link string) ([]config.Node, error) {
-	link = strings.TrimSpace(link)
+	link = normalizeNodeLink(link)
 	if err := ValidateNodeSource(link); err != nil {
 		return nil, err
 	}
@@ -54,14 +54,14 @@ func parseSubscription(link string) ([]config.Node, error) {
 		}
 		return []config.Node{node}, nil
 	}
-	if strings.HasPrefix(link, "socks://") || strings.HasPrefix(link, "socks5://") || strings.HasPrefix(link, "socks5h://") {
+	if hasScheme(link, "socks", "socks4", "socks4a", "socks5", "socks5h") {
 		node, err := parseHTTPStyle(link)
 		if err != nil {
 			return nil, err
 		}
 		return []config.Node{node}, nil
 	}
-	if strings.HasPrefix(link, "http://") || strings.HasPrefix(link, "https://") {
+	if hasScheme(link, "http", "https") {
 		parsed, err := url.Parse(link)
 		isSubscription := err == nil && (parsed.Port() == "" || parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "")
 		if !isSubscription {
@@ -79,16 +79,14 @@ func parseSubscription(link string) ([]config.Node, error) {
 
 // ValidateNodeSource checks whether input can be parsed without performing network access.
 func ValidateNodeSource(link string) error {
-	link = strings.TrimSpace(link)
+	link = normalizeNodeLink(link)
 	if link == "" {
 		return fmt.Errorf("节点链接不能为空")
 	}
-	for _, prefix := range []string{"vmess://", "vless://", "trojan://", "ss://", "hysteria2://", "socks://", "socks5://", "socks5h://", "http://", "https://"} {
-		if strings.HasPrefix(link, prefix) {
-			return nil
-		}
+	if hasScheme(link, "vmess", "vless", "trojan", "ss", "hysteria2", "socks", "socks4", "socks4a", "socks5", "socks5h", "http", "https") {
+		return nil
 	}
-	return fmt.Errorf("无效节点链接: 支持 vmess、vless、trojan、ss、hysteria2、socks、http 或 https")
+	return fmt.Errorf("无效节点链接: 支持 vmess、vless、trojan、ss、hy2/hysteria2、socks、http 或 https")
 }
 
 func parseSubscriptionBody(link string) ([]config.Node, error) {
@@ -120,6 +118,7 @@ func parseSubscriptionBody(link string) ([]config.Node, error) {
 }
 
 func parseSubscriptionLine(line string) (config.Node, error) {
+	line = normalizeNodeLink(line)
 	switch {
 	case strings.HasPrefix(line, "vmess://"):
 		return parseVMess(line)
@@ -131,11 +130,41 @@ func parseSubscriptionLine(line string) (config.Node, error) {
 		return parseShadowsocks(line)
 	case strings.HasPrefix(line, "hysteria2://"):
 		return parseHysteria2(line)
-	case strings.HasPrefix(line, "socks://"), strings.HasPrefix(line, "socks5://"), strings.HasPrefix(line, "socks5h://"), strings.HasPrefix(line, "http://"), strings.HasPrefix(line, "https://"):
+	case hasScheme(line, "socks", "socks4", "socks4a", "socks5", "socks5h", "http", "https"):
 		return parseHTTPStyle(line)
 	default:
 		return config.Node{}, fmt.Errorf("不支持的协议前缀: %s", line)
 	}
+}
+
+func normalizeNodeLink(link string) string {
+	link = strings.TrimSpace(link)
+	if link == "" {
+		return ""
+	}
+	separator := strings.Index(link, "://")
+	if separator <= 0 {
+		return link
+	}
+	scheme := strings.ToLower(link[:separator])
+	if scheme == "hy2" {
+		scheme = "hysteria2"
+	}
+	return scheme + link[separator:]
+}
+
+func hasScheme(link string, schemes ...string) bool {
+	separator := strings.Index(link, "://")
+	if separator <= 0 {
+		return false
+	}
+	scheme := strings.ToLower(link[:separator])
+	for _, candidate := range schemes {
+		if scheme == candidate {
+			return true
+		}
+	}
+	return false
 }
 
 func tryBase64Decode(s string) (string, error) {
@@ -171,16 +200,16 @@ type vmessConfig struct {
 }
 
 func parseVMess(link string) (config.Node, error) {
-raw := strings.TrimPrefix(link, "vmess://")
-if idx := strings.IndexByte(raw, '#'); idx >= 0 {
-raw = raw[:idx]
-}
-decoded, err := tryBase64Decode(raw)
-if err != nil {
-return config.Node{}, fmt.Errorf("vmess base64 解码失败: %w", err)
-}
-var cfg vmessConfig
-if err := json.Unmarshal([]byte(decoded), &cfg); err != nil {
+	raw := strings.TrimPrefix(link, "vmess://")
+	if idx := strings.IndexByte(raw, '#'); idx >= 0 {
+		raw = raw[:idx]
+	}
+	decoded, err := tryBase64Decode(raw)
+	if err != nil {
+		return config.Node{}, fmt.Errorf("vmess base64 解码失败: %w", err)
+	}
+	var cfg vmessConfig
+	if err := json.Unmarshal([]byte(decoded), &cfg); err != nil {
 		return config.Node{}, fmt.Errorf("vmess JSON 解析失败: %w", err)
 	}
 	port, err := parsePort(cfg.Port)
@@ -457,10 +486,24 @@ func parseHTTPStyle(link string) (config.Node, error) {
 		return config.Node{}, fmt.Errorf("代理端口无效: %w", err)
 	}
 	protocol := "http"
-	if strings.HasPrefix(link, "socks://") || strings.HasPrefix(link, "socks5://") || strings.HasPrefix(link, "socks5h://") {
+	if hasScheme(link, "socks", "socks4", "socks4a", "socks5", "socks5h") {
 		protocol = "socks"
 	}
 	settings := map[string]string{}
+	if protocol == "socks" {
+		scheme := strings.ToLower(u.Scheme)
+		version := map[string]string{"socks4": "4", "socks4a": "4a", "socks5": "5", "socks5h": "5"}[scheme]
+		if version == "" {
+			version = u.Query().Get("version")
+		}
+		if version == "" {
+			version = "5"
+		}
+		if version != "4" && version != "4a" && version != "5" {
+			return config.Node{}, fmt.Errorf("SOCKS 版本无效: %s", version)
+		}
+		settings["version"] = version
+	}
 	if u.User != nil {
 		settings["username"] = u.User.Username()
 		if pw, ok := u.User.Password(); ok {
