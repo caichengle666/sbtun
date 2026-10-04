@@ -5,6 +5,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/caichengle666/sbtun/config"
 	"github.com/caichengle666/sbtun/core"
 	"github.com/caichengle666/sbtun/core/singbox"
 	"github.com/caichengle666/sbtun/core/tun"
@@ -49,6 +50,22 @@ func TestWatchSingBoxExitSynchronizesState(t *testing.T) {
 		}
 	}
 
+}
+
+func TestCaptureConfigChangedIgnoresOrderAndFormatting(t *testing.T) {
+	before := config.Config{CaptureEnabled: true, CaptureDomains: []string{" example.com", ".API.Example.com"}}
+	after := config.Config{CaptureEnabled: true, CaptureDomains: []string{"api.example.com", "example.com"}}
+	if captureConfigChanged(before, after) {
+		t.Fatal("equivalent capture domains should not require restarting capture")
+	}
+}
+
+func TestCaptureConfigChangedDetectsRuleChanges(t *testing.T) {
+	before := config.Config{CaptureEnabled: true, CaptureDomains: []string{"example.com"}}
+	after := config.Config{CaptureEnabled: true, CaptureDomains: []string{"example.com", "api.example.com"}}
+	if !captureConfigChanged(before, after) {
+		t.Fatal("changed capture domains should restart capture")
+	}
 }
 
 func TestWatchSingBoxExitDoesNotOverrideStopped(t *testing.T) {

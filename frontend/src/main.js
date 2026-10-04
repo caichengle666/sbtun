@@ -57,6 +57,7 @@ const state = {
   selectedCaptureID: 0,
   selectedCaptureFlow: null,
   captureDetailTab: 'overview',
+  captureBodyViewer: null,
   captureSearch: '',
   captureFilter: 'all',
   captureListScroll: 0,
@@ -219,6 +220,7 @@ function render() {
         ${renderView()}
       </section>
     </main>
+    ${renderCaptureBodyModal()}
     <div id="toast" class="toast" style="display:none"></div>
   `
 }
@@ -446,8 +448,8 @@ function renderCaptureDetail(flow) {
   switch (state.captureDetailTab) {
     case 'request-headers': content = `<div class="capture-tab-content">${renderHeaders(flow.request_headers)}</div>`; break
     case 'response-headers': content = `<div class="capture-tab-content">${renderHeaders(flow.response_headers)}</div>`; break
-    case 'request-body': content = `<div class="capture-tab-content"><h2>请求正文${flow.request_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.id, 'request-body', flow.request_body, flow.request_encoding)}</div>`; break
-    case 'response-body': content = `<div class="capture-tab-content"><h2>响应正文${flow.response_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow.id, 'response-body', flow.response_body, flow.response_encoding)}</div>`; break
+    case 'request-body': content = `<div class="capture-tab-content"><h2>请求正文${flow.request_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow, 'request-body')}</div>`; break
+    case 'response-body': content = `<div class="capture-tab-content"><h2>响应正文${flow.response_truncated ? '（已截断）' : ''}</h2>${renderCaptureBody(flow, 'response-body')}</div>`; break
     default: content = `<div class="capture-overview"><span>协议<strong>${escapeHtml(flow.protocol || '—')}</strong></span><span>状态<strong>${flow.status_code || '—'}</strong></span><span>出口<strong class="capture-route ${captureRouteClass(flow.route)}">${captureRouteLabel(flow.route)}</strong></span><span>耗时<strong>${flow.duration_ms || 0} ms</strong></span><span>请求<strong>${formatBytes(flow.request_bytes)}</strong></span><span>响应<strong>${formatBytes(flow.response_bytes)}</strong></span></div>${flow.error ? `<div class="capture-error">${escapeHtml(flow.error)}</div>` : ''}`
   }
   return `<div class="capture-detail-head"><span class="capture-method">${escapeHtml(flow.method)}</span><strong>${escapeHtml(flow.url)}</strong></div>
@@ -478,9 +480,45 @@ function captureRouteClass(route) {
   return ['direct', 'proxy', 'block', 'failed', 'smart'].includes(route) ? route : 'smart'
 }
 
-function renderCaptureBody(flowID, tab, body, encoding) {
+function renderCaptureBody(flow, tab) {
+  const response = tab === 'response-body'
+  const body = response ? flow.response_body : flow.request_body
+  const encoding = response ? flow.response_encoding : flow.request_encoding
+  const headers = response ? flow.response_headers : flow.request_headers
+  const contentType = captureHeader(headers, 'content-type')
   if (!body) return '<div class="empty">无</div>'
-  return `<pre data-capture-body-scroll="${flowID}:${tab}">${encoding === 'base64' ? 'Base64\n' : ''}${escapeHtml(body)}</pre>`
+  const formatted = formatCaptureBody(body, encoding, contentType)
+  return `<div class="capture-body-viewer"><div class="capture-body-toolbar"><span class="capture-body-meta">${escapeHtml(contentType || (encoding === 'base64' ? '二进制内容' : '文本内容'))} · ${formatBytes(body.length)}</span><span>${encoding === 'base64' ? '<span class="badge">Base64 编码</span>' : ''}${formatted.pretty ? '<span class="badge direct">已格式化</span>' : ''}</span><button class="btn btn-ghost capture-expand-body" data-capture-body-id="${flow.id}" data-capture-body-tab="${tab}">展开查看</button></div><pre data-capture-body-scroll="${flow.id}:${tab}">${escapeHtml(formatted.text)}</pre></div>`
+}
+
+function renderCaptureBodyModal() {
+  const viewer = state.captureBodyViewer
+  if (!viewer) return ''
+  const formatted = formatCaptureBody(viewer.body, viewer.encoding, viewer.contentType, viewer.mode === 'pretty')
+  return `<div class="capture-body-modal" id="captureBodyModal" role="dialog" aria-modal="true" aria-labelledby="captureBodyTitle"><div class="capture-body-modal-backdrop" data-close-capture-body></div><section class="capture-body-modal-panel"><header class="capture-body-modal-header"><div><h2 id="captureBodyTitle">${escapeHtml(viewer.title)}</h2><p class="muted">${escapeHtml(viewer.contentType || (viewer.encoding === 'base64' ? '二进制内容' : '文本内容'))} · ${formatBytes(viewer.body.length)}${viewer.truncated ? ' · 已截断' : ''}</p></div><button class="icon-btn" data-close-capture-body aria-label="关闭正文查看器" title="关闭">×</button></header><div class="capture-body-modal-actions"><button class="btn btn-ghost ${viewer.mode === 'pretty' ? 'active' : ''}" data-capture-body-mode="pretty">美化</button><button class="btn btn-ghost ${viewer.mode === 'raw' ? 'active' : ''}" data-capture-body-mode="raw">原文</button><button class="btn btn-primary" data-copy-capture-body>复制</button></div><pre class="capture-body-modal-content">${escapeHtml(formatted.text)}</pre></section></div>`
+}
+
+function captureHeader(headers, name) {
+  const key = Object.keys(headers || {}).find(item => item.toLowerCase() === name.toLowerCase())
+  return key ? (headers[key] || []).join(', ') : ''
+}
+
+function formatCaptureBody(body, encoding, contentType, pretty = true) {
+  const prefix = encoding === 'base64' ? 'Base64\n' : ''
+  if (!pretty || encoding === 'base64') return { text: prefix + body, pretty: false }
+  const mediaType = (contentType || '').split(';', 1)[0].trim().toLowerCase()
+  if (mediaType.includes('json') || looksLikeJSON(body)) {
+    try { return { text: JSON.stringify(JSON.parse(body), null, 2), pretty: true } } catch (_) {}
+  }
+  if (mediaType === 'application/x-www-form-urlencoded') {
+    try { return { text: new URLSearchParams(body).toString().replaceAll('&', '\n'), pretty: true } } catch (_) {}
+  }
+  return { text: body, pretty: false }
+}
+
+function looksLikeJSON(body) {
+  const value = body.trim()
+  return (value.startsWith('{') && value.endsWith('}')) || (value.startsWith('[') && value.endsWith(']'))
 }
 
 function renderHeaders(headers) {
@@ -1241,6 +1279,49 @@ function bindEvents() {
     state.captureDetailScroll = 0
     renderApp()
   }))
+  document.querySelectorAll('.capture-expand-body').forEach(button => button.addEventListener('click', () => {
+    const flow = state.selectedCaptureFlow?.id === Number(button.dataset.captureBodyId)
+      ? state.selectedCaptureFlow
+      : state.captureFlows.find(item => item.id === Number(button.dataset.captureBodyId))
+    if (!flow) return
+    const response = button.dataset.captureBodyTab === 'response-body'
+    state.captureBodyViewer = {
+      title: response ? '响应正文' : '请求正文',
+      body: response ? flow.response_body : flow.request_body,
+      encoding: response ? flow.response_encoding : flow.request_encoding,
+      contentType: captureHeader(response ? flow.response_headers : flow.request_headers, 'content-type'),
+      truncated: response ? flow.response_truncated : flow.request_truncated,
+      mode: 'pretty',
+    }
+    renderApp()
+  }))
+  document.querySelectorAll('[data-close-capture-body]').forEach(element => element.addEventListener('click', () => {
+    state.captureBodyViewer = null
+    renderApp()
+  }))
+  document.querySelectorAll('[data-capture-body-mode]').forEach(button => button.addEventListener('click', () => {
+    if (!state.captureBodyViewer) return
+    state.captureBodyViewer.mode = button.dataset.captureBodyMode
+    renderApp()
+  }))
+  const copyCaptureBody = document.querySelector('[data-copy-capture-body]')
+  if (copyCaptureBody) copyCaptureBody.addEventListener('click', async () => {
+    if (!state.captureBodyViewer) return
+    try {
+      await window.runtime.ClipboardSetText(state.captureBodyViewer.body)
+      showToast('正文已复制', 'success')
+    } catch (e) {
+      showToast(e.message || String(e), 'error')
+    }
+  })
+  if (state.captureBodyViewer) {
+    document.addEventListener('keydown', function closeCaptureBodyOnEscape(event) {
+      if (event.key !== 'Escape' || !state.captureBodyViewer) return
+      state.captureBodyViewer = null
+      renderApp()
+      document.removeEventListener('keydown', closeCaptureBodyOnEscape)
+    }, { once: true })
+  }
 
   document.querySelectorAll('.select-node').forEach(btn => {
     btn.addEventListener('click', async () => {

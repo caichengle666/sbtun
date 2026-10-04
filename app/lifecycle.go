@@ -6,6 +6,8 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
+	"strings"
 	"sync"
 	"time"
 
@@ -26,14 +28,16 @@ const (
 )
 
 type RuntimeCoordinator struct {
-	mu         sync.Mutex
-	State      *core.StateStore
-	SingBox    *singbox.Manager
-	TUN        *tun.Manager
-	Capture    *capture.Manager
-	WorkDir    string
-	Binary     string
-	ReadyCheck func(context.Context) error
+	mu              sync.Mutex
+	State           *core.StateStore
+	SingBox         *singbox.Manager
+	TUN             *tun.Manager
+	Capture         *capture.Manager
+	WorkDir         string
+	Binary          string
+	ReadyCheck      func(context.Context) error
+	activeConfig    config.Config
+	activeConfigSet bool
 }
 
 func NewRuntimeCoordinator(workDir, binary string) *RuntimeCoordinator {
@@ -110,11 +114,19 @@ func (r *RuntimeCoordinator) Reload(ctx context.Context, cfg config.Config) erro
 	if state != core.StateRunning && state != core.StateError {
 		return fmt.Errorf("runtime cannot reload from state: %s", state)
 	}
+	configPath, err := r.SyncConfig(cfg)
+	if err != nil {
+		return fmt.Errorf("%s: %w", ErrConfigInvalid, err)
+	}
+	if err := singbox.ValidateConfig(ctx, r.Binary, configPath); err != nil {
+		return fmt.Errorf("%s: %w", ErrConfigInvalid, err)
+	}
+	captureRestart := !r.activeConfigSet || captureConfigChanged(r.activeConfig, cfg)
 	r.State.Set(core.StateStopping, "")
 	if err := r.SingBox.Stop(); err != nil {
 		return r.fail(ErrSingBoxReload, fmt.Errorf("停止旧 sing-box 失败: %w", err))
 	}
-	if r.Capture != nil {
+	if captureRestart && r.Capture != nil {
 		if err := r.Capture.Stop(); err != nil {
 			return r.fail(ErrSingBoxReload, fmt.Errorf("停止流量分析器失败: %w", err))
 		}
@@ -179,7 +191,45 @@ func (r *RuntimeCoordinator) startConfigLocked(ctx context.Context, cfg config.C
 	}
 	r.TUN.MarkRunning()
 	r.State.Set(core.StateRunning, "")
+	r.activeConfig = cfg
+	r.activeConfigSet = true
 	return nil
+}
+
+func captureConfigChanged(before, after config.Config) bool {
+	if before.CaptureEnabled != after.CaptureEnabled {
+		return true
+	}
+	left := append([]string(nil), before.CaptureDomains...)
+	right := append([]string(nil), after.CaptureDomains...)
+	normalize := func(values []string) []string {
+		seen := make(map[string]struct{}, len(values))
+		result := make([]string, 0, len(values))
+		for _, value := range values {
+			value = strings.TrimPrefix(strings.ToLower(strings.TrimSpace(value)), ".")
+			if value == "" {
+				continue
+			}
+			if _, ok := seen[value]; ok {
+				continue
+			}
+			seen[value] = struct{}{}
+			result = append(result, value)
+		}
+		sort.Strings(result)
+		return result
+	}
+	left = normalize(left)
+	right = normalize(right)
+	if len(left) != len(right) {
+		return true
+	}
+	for i := range left {
+		if left[i] != right[i] {
+			return true
+		}
+	}
+	return false
 }
 
 func (r *RuntimeCoordinator) SyncConfig(cfg config.Config) (string, error) {
@@ -254,6 +304,8 @@ func (r *RuntimeCoordinator) Stop() error {
 		return cleanupErr
 	}
 	r.State.Set(core.StateStopped, "")
+	r.activeConfig = config.Config{}
+	r.activeConfigSet = false
 	return nil
 }
 

@@ -89,7 +89,7 @@ func waitForInterface(name string, timeout time.Duration) bool {
 		if interfaceExists(name) {
 			return true
 		}
-		time.Sleep(200 * time.Millisecond)
+		time.Sleep(50 * time.Millisecond)
 	}
 	return false
 }
