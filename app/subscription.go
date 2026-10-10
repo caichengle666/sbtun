@@ -555,6 +555,10 @@ func setLinkTransport(settings map[string]string, value string) {
 	}
 }
 
+// maxSubscriptionBytes caps a subscription download so a broken or hostile
+// server cannot exhaust memory. Real subscriptions are far below this.
+const maxSubscriptionBytes = 8 << 20
+
 func fetchURL(link string) (string, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest(http.MethodGet, link, nil)
@@ -570,10 +574,16 @@ func fetchURL(link string) (string, error) {
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 		return "", fmt.Errorf("订阅 HTTP %d", resp.StatusCode)
 	}
+	if resp.ContentLength > maxSubscriptionBytes {
+		return "", fmt.Errorf("订阅内容过大: %d 字节，上限 %d 字节", resp.ContentLength, maxSubscriptionBytes)
+	}
 	buf := new(strings.Builder)
-	_, err = io.Copy(buf, resp.Body)
+	n, err := io.Copy(buf, io.LimitReader(resp.Body, maxSubscriptionBytes+1))
 	if err != nil {
 		return "", err
+	}
+	if n > maxSubscriptionBytes {
+		return "", fmt.Errorf("订阅内容超过 %d 字节上限", maxSubscriptionBytes)
 	}
 	return buf.String(), nil
 }

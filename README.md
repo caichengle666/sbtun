@@ -163,6 +163,8 @@ sbtun 不把 Ping 结果直接当作节点可用：
 
 流量分析器按域名或关键词记录经过 TUN 的 HTTP/HTTPS 请求。输入单独一行 `*` 可以分析全部 HTTP/HTTPS 流量。
 
+响应边转发边记录，SSE 和大文件下载不会因为分析而延迟；记录先保存在内存中，大约每秒批量写入一次 `capture.json`，停止 TUN 时会写入剩余记录。
+
 ```bash
 # 分析指定域名或关键词，并前台启动 TUN
 ./sbtun-cli capture run example.com
@@ -266,6 +268,7 @@ sbtun/
 │   └── *.srs                   规则集文件
 └── runtime-data/
     ├── config.json             用户配置
+    ├── local-auth.json         本地 clash API 与分析代理的随机凭据
     ├── runtime/                sing-box 运行配置
     └── capture/
         ├── capture.json        HTTP/HTTPS 分析记录

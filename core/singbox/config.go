@@ -29,6 +29,12 @@ const (
 // BuildConfig 将用户配置转换为 sing-box 运行配置。
 // 四种模式在这里形成明确、可验证的路由闭环：智能分流、全局代理、全局直连、自定义规则。
 func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
+	return BuildConfigWithAuth(cfg, exeDir, LocalAuth{})
+}
+
+// BuildConfigWithAuth builds the runtime config and protects the clash API and
+// capture proxy ports with the given local credentials.
+func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth) ([]byte, error) {
 	if err := config.Validate(cfg); err != nil {
 		return nil, err
 	}
@@ -45,9 +51,14 @@ func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 
 	outbounds := append(proxy, map[string]any{"type": "direct", "tag": "direct", "domain_resolver": "dns-local"}, map[string]any{"type": "block", "tag": "block"})
 	if cfg.CaptureEnabled && len(normalizeCaptureDomains(cfg.CaptureDomains)) > 0 {
-		outbounds = append(outbounds, map[string]any{
+		captureOutbound := map[string]any{
 			"type": "http", "tag": "capture", "server": "127.0.0.1", "server_port": captureProxyPort,
-		})
+		}
+		if auth.proxyEnabled() {
+			captureOutbound["username"] = auth.ProxyUsername
+			captureOutbound["password"] = auth.ProxyPassword
+		}
+		outbounds = append(outbounds, captureOutbound)
 	}
 	inbounds := []map[string]any{{
 		"type": "tun", "tag": "tun-in",
@@ -55,10 +66,18 @@ func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 		"auto_route": true, "strict_route": cfg.WebRTCProtectionEnabled, "stack": "system",
 	}}
 	if cfg.CaptureEnabled && len(normalizeCaptureDomains(cfg.CaptureDomains)) > 0 {
-		inbounds = append(inbounds, map[string]any{
+		upstream := map[string]any{
 			"type": "mixed", "tag": "capture-upstream",
 			"listen": "127.0.0.1", "listen_port": captureUpstreamPort,
-		})
+		}
+		if auth.proxyEnabled() {
+			upstream["users"] = []map[string]any{{"username": auth.ProxyUsername, "password": auth.ProxyPassword}}
+		}
+		inbounds = append(inbounds, upstream)
+	}
+	clashAPI := map[string]any{"external_controller": "127.0.0.1:9090"}
+	if auth.ClashSecret != "" {
+		clashAPI["secret"] = auth.ClashSecret
 	}
 	result := RuntimeConfig{
 		Schema:    "https://sing-box.sagernet.org/schema.json",
@@ -69,7 +88,7 @@ func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 		Route:     routeForMode(cfg.RoutingMode, cfg.CustomRules, cfg.DNSFilterRules, cfg.CaptureEnabled, cfg.CaptureDomains, exeDir),
 		Experimental: map[string]any{
 			"cache_file": map[string]any{"enabled": true},
-			"clash_api":  map[string]any{"external_controller": "127.0.0.1:9090"},
+			"clash_api":  clashAPI,
 		},
 	}
 	data, err := json.MarshalIndent(result, "", "  ")

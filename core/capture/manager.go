@@ -1,13 +1,14 @@
 package capture
 
 import (
-	"bytes"
 	"context"
 	"crypto/rand"
 	"crypto/rsa"
+	"crypto/subtle"
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/pem"
 	"errors"
 	"fmt"
@@ -58,25 +59,25 @@ type Flow struct {
 }
 
 type Status struct {
-	Enabled              bool   `json:"enabled"`
-	Running              bool   `json:"running"`
-	Address              string `json:"address"`
-	CertificatePath      string `json:"certificate_path"`
-	CertificateInstalled bool   `json:"certificate_installed"`
-	UserCertificate      bool   `json:"user_certificate_installed"`
-	SystemCertificate    bool   `json:"system_certificate_installed"`
-	UserCertificateSupported bool `json:"user_certificate_supported"`
-	CertificateLevel     string `json:"certificate_level,omitempty"`
-	StoragePath          string `json:"storage_path"`
-	FlowCount            int    `json:"flow_count"`
-	MaxFlows             int    `json:"max_flows"`
-	Unsaved              bool   `json:"unsaved"`
-	Message              string `json:"message"`
+	Enabled                  bool   `json:"enabled"`
+	Running                  bool   `json:"running"`
+	Address                  string `json:"address"`
+	CertificatePath          string `json:"certificate_path"`
+	CertificateInstalled     bool   `json:"certificate_installed"`
+	UserCertificate          bool   `json:"user_certificate_installed"`
+	SystemCertificate        bool   `json:"system_certificate_installed"`
+	UserCertificateSupported bool   `json:"user_certificate_supported"`
+	CertificateLevel         string `json:"certificate_level,omitempty"`
+	StoragePath              string `json:"storage_path"`
+	FlowCount                int    `json:"flow_count"`
+	MaxFlows                 int    `json:"max_flows"`
+	Unsaved                  bool   `json:"unsaved"`
+	Message                  string `json:"message"`
 }
 
 type pendingFlow struct {
-	flow        Flow
-	requestBody []byte
+	flow    Flow
+	request *bodyRecorder
 }
 
 type captureConnect struct {
@@ -98,6 +99,55 @@ type Manager struct {
 	dirty     bool
 	lastError string
 	tlsBypass map[string]time.Time
+
+	// auth protects both the local analysis proxy and the sing-box
+	// capture-upstream inbound, so other local programs cannot use them as an
+	// open proxy. Nil disables authentication (tests only).
+	auth *ProxyAuth
+
+	stamp        fileStamp
+	flushedMaxID uint64
+	flushSignal  chan struct{}
+	flushStop    chan struct{}
+	flushDone    chan struct{}
+}
+
+// ProxyAuth is the Basic credential shared by sing-box and the analysis proxy.
+type ProxyAuth struct {
+	Username string
+	Password string
+}
+
+func (a *ProxyAuth) headerValue() string {
+	return "Basic " + base64.StdEncoding.EncodeToString([]byte(a.Username+":"+a.Password))
+}
+
+// SetAuth sets the credential used by the analysis proxy. It takes effect on
+// the next Start.
+func (m *Manager) SetAuth(auth *ProxyAuth) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if auth == nil {
+		m.auth = nil
+		return
+	}
+	copied := *auth
+	m.auth = &copied
+}
+
+func authorized(auth *ProxyAuth, header http.Header) bool {
+	if auth == nil {
+		return true
+	}
+	got := header.Get("Proxy-Authorization")
+	want := auth.headerValue()
+	return subtle.ConstantTimeCompare([]byte(got), []byte(want)) == 1
+}
+
+func proxyAuthRequired(req *http.Request) *http.Response {
+	resp := goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusProxyAuthRequired, "Proxy Authentication Required")
+	resp.Header.Set("Proxy-Authenticate", `Basic realm="sbtun"`)
+	return resp
 }
 
 const tlsBypassTTL = 10 * time.Minute
@@ -128,6 +178,7 @@ func (m *Manager) Start(ctx context.Context, domains []string) error {
 		return fmt.Errorf("启动分析代理失败: %w", err)
 	}
 	m.domains = domains
+	auth := m.auth
 	proxy := goproxy.NewProxyHttpServer()
 	proxy.AllowHTTP2 = true
 	proxy.Verbose = false
@@ -138,23 +189,41 @@ func (m *Manager) Start(ctx context.Context, domains []string) error {
 			m.markTLSBypass(connect.host)
 		}
 	}
+	var upstreamURL *url.URL
+	if m.upstream != "" {
+		upstreamURL, err = url.Parse("http://" + m.upstream)
+		if err != nil {
+			listener.Close()
+			return fmt.Errorf("解析分析上游地址失败: %w", err)
+		}
+		if auth != nil {
+			upstreamURL.User = url.UserPassword(auth.Username, auth.Password)
+		}
+	}
 	if proxy.Tr == nil {
 		transport := &http.Transport{ForceAttemptHTTP2: true}
-		if m.upstream != "" {
-			upstreamURL, err := url.Parse("http://" + m.upstream)
-			if err != nil {
-				listener.Close()
-				return fmt.Errorf("解析分析上游地址失败: %w", err)
-			}
+		if upstreamURL != nil {
 			transport.Proxy = http.ProxyURL(upstreamURL)
 		}
 		proxy.Tr = transport
 	}
-	if m.upstream != "" {
-		proxy.ConnectDial = proxy.NewConnectDialToProxy("http://" + m.upstream)
+	if upstreamURL != nil {
+		connectURL := "http://" + m.upstream
+		if auth != nil {
+			value := auth.headerValue()
+			proxy.ConnectDial = proxy.NewConnectDialToProxyWithHandler(connectURL, func(req *http.Request) {
+				req.Header.Set("Proxy-Authorization", value)
+			})
+		} else {
+			proxy.ConnectDial = proxy.NewConnectDialToProxy(connectURL)
+		}
 	}
 	mitm := &goproxy.ConnectAction{Action: goproxy.ConnectMitm, TLSConfig: tlsConfigFromClientSNI(&ca)}
 	proxy.OnRequest().HandleConnectFunc(func(host string, proxyCtx *goproxy.ProxyCtx) (*goproxy.ConnectAction, string) {
+		if !authorized(auth, proxyCtx.Req.Header) {
+			proxyCtx.Resp = proxyAuthRequired(proxyCtx.Req)
+			return goproxy.RejectConnect, host
+		}
 		hostname := hostname(host)
 		if m.isTLSBypassed(hostname) {
 			return goproxy.OkConnect, host
@@ -169,25 +238,30 @@ func (m *Manager) Start(ctx context.Context, domains []string) error {
 		return goproxy.OkConnect, host
 	})
 	proxy.OnRequest().DoFunc(func(req *http.Request, proxyCtx *goproxy.ProxyCtx) (*http.Request, *http.Response) {
+		// Requests inside an authenticated CONNECT tunnel inherit its UserData;
+		// plain proxied HTTP requests must authenticate themselves.
+		if _, tunneled := proxyCtx.UserData.(*captureConnect); !tunneled && !authorized(auth, req.Header) {
+			return req, proxyAuthRequired(req)
+		}
+		req.Header.Del("Proxy-Authorization")
 		if !matchesDomain(req.Host, domains) {
 			return req, nil
 		}
-		body, replacement, truncated, err := captureBody(req.Body, maxBodyBytes)
-		req.Body = replacement
-		if err != nil {
-			return req, goproxy.NewResponse(req, goproxy.ContentTypeText, http.StatusBadGateway, err.Error())
-		}
-		proxyCtx.UserData = &pendingFlow{requestBody: body, flow: Flow{
-			ID:               m.nextID.Add(1),
-			StartedAt:        time.Now(),
-			Method:           req.Method,
-			URL:              req.URL.String(),
-			Host:             hostname(req.Host),
-			Protocol:         req.Proto,
-			RequestBytes:     req.ContentLength,
-			RequestHeaders:   clonedHeaders(req.Header),
-			RequestTruncated: truncated,
+		pending := &pendingFlow{flow: Flow{
+			ID:             m.nextID.Add(1),
+			StartedAt:      time.Now(),
+			Method:         req.Method,
+			URL:            req.URL.String(),
+			Host:           hostname(req.Host),
+			Protocol:       req.Proto,
+			RequestBytes:   req.ContentLength,
+			RequestHeaders: clonedHeaders(req.Header),
 		}}
+		if req.Body != nil && req.Body != http.NoBody {
+			pending.request = newBodyRecorder(req.Body, maxBodyBytes, nil)
+			req.Body = pending.request
+		}
+		proxyCtx.UserData = pending
 		return req, nil
 	})
 	proxy.OnResponse().DoFunc(func(resp *http.Response, proxyCtx *goproxy.ProxyCtx) *http.Response {
@@ -195,31 +269,22 @@ func (m *Manager) Start(ctx context.Context, domains []string) error {
 		if !ok || pending == nil {
 			return resp
 		}
-		flow := pending.flow
-		flow.DurationMS = time.Since(flow.StartedAt).Milliseconds()
-		if resp != nil {
-			body, replacement, truncated, err := captureBody(resp.Body, maxBodyBytes)
-			resp.Body = replacement
-			if err == nil {
-				flow.ResponseTruncated = truncated
-				flow.ResponseBody, flow.ResponseEncoding = bodyForDisplay(body, resp.Header.Get("Content-Type"))
-			}
-			flow.StatusCode = resp.StatusCode
-			flow.ResponseBytes = resp.ContentLength
-			flow.ResponseHeaders = clonedHeaders(resp.Header)
-		}
+		var proxyErr error
 		if proxyCtx.Error != nil {
-			flow.Error = proxyCtx.Error.Error()
-			if flow.StatusCode == 0 {
-				flow.StatusCode = http.StatusBadGateway
-			}
+			proxyErr = proxyCtx.Error
 		}
-		flow.RequestBody, flow.RequestEncoding = bodyForDisplay(pending.requestBody, http.Header(flow.RequestHeaders).Get("Content-Type"))
-		if err := m.appendFlow(flow); err != nil {
-			m.mu.Lock()
-			m.lastError = err.Error()
-			m.mu.Unlock()
+		// WebSocket upgrades hand the body to goproxy as a raw connection, and
+		// empty bodies have nothing to stream: record those immediately.
+		if resp == nil || resp.Body == nil || resp.Body == http.NoBody || resp.StatusCode == http.StatusSwitchingProtocols {
+			m.finishFlow(pending, resp, nil, proxyErr)
+			return resp
 		}
+		// Copy the response while it streams to the client, so server-sent
+		// events and long downloads are not held back until the capture limit
+		// is reached.
+		resp.Body = newBodyRecorder(resp.Body, maxBodyBytes, func(recorder *bodyRecorder) {
+			m.finishFlow(pending, resp, recorder, proxyErr)
+		})
 		return resp
 	})
 	server := &http.Server{Handler: proxy, ReadHeaderTimeout: 10 * time.Second}
@@ -231,10 +296,56 @@ func (m *Manager) Start(ctx context.Context, domains []string) error {
 		_ = listener.Close()
 		return fmt.Errorf("写入分析器运行标记失败: %w", err)
 	}
+	m.flushSignal = make(chan struct{}, 1)
+	m.flushStop = make(chan struct{})
+	m.flushDone = make(chan struct{})
+	go m.flushLoop(m.flushSignal, m.flushStop, m.flushDone)
 	go func() {
 		_ = server.Serve(listener)
 	}()
 	return nil
+}
+
+// finishFlow completes a captured flow once its response body has been fully
+// relayed or closed, and records it in memory.
+func (m *Manager) finishFlow(pending *pendingFlow, resp *http.Response, response *bodyRecorder, proxyErr error) {
+	flow := pending.flow
+	flow.DurationMS = time.Since(flow.StartedAt).Milliseconds()
+	if resp != nil {
+		flow.StatusCode = resp.StatusCode
+		flow.ResponseBytes = resp.ContentLength
+		flow.ResponseHeaders = clonedHeaders(resp.Header)
+		if response != nil {
+			body, total, truncated, readErr := response.snapshot()
+			flow.ResponseTruncated = truncated
+			flow.ResponseBody, flow.ResponseEncoding = bodyForDisplay(body, resp.Header.Get("Content-Type"))
+			if flow.ResponseBytes < 0 {
+				flow.ResponseBytes = total
+			}
+			if proxyErr == nil && readErr != nil {
+				proxyErr = readErr
+			}
+		}
+	}
+	if proxyErr != nil {
+		flow.Error = proxyErr.Error()
+		if flow.StatusCode == 0 {
+			flow.StatusCode = http.StatusBadGateway
+		}
+	}
+	if pending.request != nil {
+		body, total, truncated, _ := pending.request.snapshot()
+		flow.RequestTruncated = truncated
+		flow.RequestBody, flow.RequestEncoding = bodyForDisplay(body, http.Header(flow.RequestHeaders).Get("Content-Type"))
+		if flow.RequestBytes < 0 {
+			flow.RequestBytes = total
+		}
+	}
+	if err := m.appendFlow(flow); err != nil {
+		m.mu.Lock()
+		m.lastError = err.Error()
+		m.mu.Unlock()
+	}
 }
 
 func tlsConfigFromClientSNI(ca *tls.Certificate) func(string, *goproxy.ProxyCtx) (*tls.Config, error) {
@@ -259,6 +370,10 @@ func (m *Manager) Stop() error {
 	server := m.server
 	m.server = nil
 	m.listener = nil
+	flushStop, flushDone := m.flushStop, m.flushDone
+	m.flushSignal = nil
+	m.flushStop = nil
+	m.flushDone = nil
 	m.mu.Unlock()
 	if server == nil {
 		_ = os.Remove(m.runningMarkerPath())
@@ -266,11 +381,23 @@ func (m *Manager) Stop() error {
 	}
 	ctx, cancel := context.WithTimeout(context.Background(), 3*time.Second)
 	defer cancel()
-	if err := server.Shutdown(ctx); err != nil && !errors.Is(err, http.ErrServerClosed) {
-		return err
+	shutdownErr := server.Shutdown(ctx)
+	if errors.Is(shutdownErr, context.DeadlineExceeded) {
+		// Long-lived streams no longer block on capture; close them instead of
+		// failing the stop.
+		_ = server.Close()
+		shutdownErr = nil
 	}
+	if flushStop != nil {
+		close(flushStop)
+		<-flushDone
+	}
+	flushErr := m.flush(false)
 	_ = os.Remove(m.runningMarkerPath())
-	return nil
+	if shutdownErr != nil && !errors.Is(shutdownErr, http.ErrServerClosed) {
+		return shutdownErr
+	}
+	return flushErr
 }
 
 func (m *Manager) Status(enabled bool) Status {
@@ -297,8 +424,8 @@ func (m *Manager) Status(enabled bool) Status {
 		CertificatePath: m.certPath(), CertificateInstalled: systemMarkerErr == nil || userMarkerErr == nil,
 		UserCertificate: userMarkerErr == nil, SystemCertificate: systemMarkerErr == nil,
 		UserCertificateSupported: userCertificateSupported(),
-		CertificateLevel: certificateLevel(systemMarkerErr == nil, userMarkerErr == nil),
-		StoragePath: m.storagePath(), FlowCount: m.flowCount(), MaxFlows: maxVisibleFlows, Unsaved: m.isDirty(), Message: m.errorMessage(),
+		CertificateLevel:         certificateLevel(systemMarkerErr == nil, userMarkerErr == nil),
+		StoragePath:              m.storagePath(), FlowCount: m.flowCount(), MaxFlows: maxVisibleFlows, Unsaved: m.isDirty(), Message: m.errorMessage(),
 	}
 }
 
@@ -414,8 +541,8 @@ func loadCA(certPath, keyPath string) (tls.Certificate, error) {
 	return cert, err
 }
 
-func (m *Manager) certPath() string          { return filepath.Join(m.workDir, "sbtun-capture-ca.crt") }
-func (m *Manager) keyPath() string           { return filepath.Join(m.workDir, "sbtun-capture-ca.key") }
+func (m *Manager) certPath() string { return filepath.Join(m.workDir, "sbtun-capture-ca.crt") }
+func (m *Manager) keyPath() string  { return filepath.Join(m.workDir, "sbtun-capture-ca.key") }
 func (m *Manager) installMarkerPath(level string) string {
 	if normalizeCertificateLevel(level) == "user" {
 		return filepath.Join(m.workDir, ".installed-user")
@@ -443,28 +570,6 @@ func certificateLevel(system, user bool) string {
 		return "system"
 	}
 	return ""
-}
-
-func captureBody(body io.ReadCloser, limit int64) ([]byte, io.ReadCloser, bool, error) {
-	if body == nil {
-		return nil, nil, false, nil
-	}
-	read, err := io.ReadAll(io.LimitReader(body, limit+1))
-	replacement := &combinedReadCloser{Reader: io.MultiReader(bytes.NewReader(read), body), Closer: body}
-	if err != nil {
-		return append([]byte(nil), read...), replacement, false, err
-	}
-	truncated := int64(len(read)) > limit
-	captured := read
-	if truncated {
-		captured = read[:limit]
-	}
-	return append([]byte(nil), captured...), replacement, truncated, nil
-}
-
-type combinedReadCloser struct {
-	io.Reader
-	io.Closer
 }
 
 func normalizeDomains(domains []string) []string {

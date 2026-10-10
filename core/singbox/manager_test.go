@@ -16,7 +16,7 @@ func TestStopWaitsForProcessExit(t *testing.T) {
 	m := NewManager()
 	m.cmd = cmd
 	m.done = make(chan struct{})
-	go m.wait(cmd)
+	go m.wait(cmd, 1)
 
 	if err := m.Stop(); err != nil {
 		t.Fatalf("Stop failed: %v", err)

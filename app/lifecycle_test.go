@@ -101,3 +101,26 @@ func TestAtomicWriteRoundTrip(t *testing.T) {
 		t.Fatalf("内容不一致: got=%q want=%q", got, want)
 	}
 }
+
+func TestWatchSingBoxExitIgnoresReplacedProcess(t *testing.T) {
+	r := &RuntimeCoordinator{
+		State:   core.NewStateStore(),
+		SingBox: singbox.NewManager(),
+		TUN:     tun.NewManager(),
+	}
+	r.State.Set(core.StateRunning, "")
+	r.TUN.MarkRunning()
+	// Generation 2 is the process started by a reload; generation 1 crashed
+	// while the reload held the coordinator lock.
+	r.SingBox.SetGenerationForTest(2)
+	go r.watchSingBoxExit()
+	r.SingBox.InjectExitEvent(singbox.ExitEvent{Err: os.ErrProcessDone, Generation: 1})
+
+	time.Sleep(200 * time.Millisecond)
+	if state, message := r.State.Get(); state != core.StateRunning {
+		t.Fatalf("stale exit changed state to %s: %s", state, message)
+	}
+	if !r.TUN.Running() {
+		t.Fatal("stale exit must not mark the TUN stopped")
+	}
+}

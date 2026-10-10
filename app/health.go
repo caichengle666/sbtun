@@ -203,7 +203,7 @@ func probeURLViaClash(ctx context.Context, node config.Node) HealthCheckDTO {
 		return HealthCheckDTO{Message: fmt.Sprintf("URL 请求创建失败: %v", err)}
 	}
 	client := &http.Client{Timeout: 8 * time.Second}
-	response, err := client.Do(request)
+	response, err := client.Do(authorizeClash(request))
 	if err != nil {
 		return HealthCheckDTO{Message: fmt.Sprintf("URL 测试失败: %v", err)}
 	}

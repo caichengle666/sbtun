@@ -429,3 +429,46 @@ func TestBuildConfigSkipsInvalidBackupNode(t *testing.T) {
 		t.Fatalf("selector must interrupt existing connections: %+v", selector)
 	}
 }
+
+func TestBuildConfigWithAuthProtectsLocalPorts(t *testing.T) {
+	cfg := testConfig(config.RoutingSmart)
+	cfg.CaptureEnabled = true
+	cfg.CaptureDomains = []string{"example.com"}
+	auth := LocalAuth{ClashSecret: "clash", ProxyUsername: "sbtun", ProxyPassword: "pw"}
+	data, err := BuildConfigWithAuth(cfg, t.TempDir(), auth)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed struct {
+		Inbounds     []map[string]any `json:"inbounds"`
+		Outbounds    []map[string]any `json:"outbounds"`
+		Experimental struct {
+			ClashAPI map[string]any `json:"clash_api"`
+		} `json:"experimental"`
+	}
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if parsed.Experimental.ClashAPI["secret"] != "clash" {
+		t.Fatalf("clash_api=%v", parsed.Experimental.ClashAPI)
+	}
+	var sawInbound, sawOutbound bool
+	for _, inbound := range parsed.Inbounds {
+		if inbound["tag"] == "capture-upstream" {
+			users, _ := inbound["users"].([]any)
+			if len(users) != 1 {
+				t.Fatalf("capture-upstream users=%v", inbound["users"])
+			}
+			user := users[0].(map[string]any)
+			sawInbound = user["username"] == "sbtun" && user["password"] == "pw"
+		}
+	}
+	for _, outbound := range parsed.Outbounds {
+		if outbound["tag"] == "capture" {
+			sawOutbound = outbound["username"] == "sbtun" && outbound["password"] == "pw"
+		}
+	}
+	if !sawInbound || !sawOutbound {
+		t.Fatalf("capture ports not authenticated: inbound=%v outbound=%v", sawInbound, sawOutbound)
+	}
+}

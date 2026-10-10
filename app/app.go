@@ -332,7 +332,11 @@ func trafficStats() (uint64, uint64, uint64, uint64) {
 }
 
 func trafficRates(client http.Client) (uint64, uint64) {
-	resp, err := client.Get(clashAPIBaseURL + "/traffic?interval=1000")
+	req, err := http.NewRequest(http.MethodGet, clashAPIBaseURL+"/traffic?interval=1000", nil)
+	if err != nil {
+		return 0, 0
+	}
+	resp, err := client.Do(authorizeClash(req))
 	if err != nil {
 		return 0, 0
 	}
@@ -360,7 +364,11 @@ func trafficRates(client http.Client) (uint64, uint64) {
 }
 
 func trafficTotals(client http.Client) (uint64, uint64) {
-	resp, err := client.Get(clashAPIBaseURL + "/connections")
+	req, err := http.NewRequest(http.MethodGet, clashAPIBaseURL+"/connections", nil)
+	if err != nil {
+		return 0, 0
+	}
+	resp, err := client.Do(authorizeClash(req))
 	if err != nil {
 		return 0, 0
 	}
@@ -818,7 +826,7 @@ func switchSelectorContext(ctx context.Context, id string) error {
 	}
 	req.Header.Set("Content-Type", "application/json")
 	client := &http.Client{Timeout: 5 * time.Second}
-	resp, err := client.Do(req)
+	resp, err := client.Do(authorizeClash(req))
 	if err != nil {
 		return fmt.Errorf("无缝切换节点失败: %w", err)
 	}
@@ -945,7 +953,7 @@ func currentSelectorContext(ctx context.Context) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	resp, err := client.Do(req)
+	resp, err := client.Do(authorizeClash(req))
 	if err != nil {
 		return "", err
 	}

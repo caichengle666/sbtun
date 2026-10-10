@@ -38,6 +38,8 @@ type RuntimeCoordinator struct {
 	ReadyCheck      func(context.Context) error
 	activeConfig    config.Config
 	activeConfigSet bool
+	// LocalAuth protects the clash API and capture proxy ports.
+	LocalAuth singbox.LocalAuth
 }
 
 func NewRuntimeCoordinator(workDir, binary string) *RuntimeCoordinator {
@@ -46,6 +48,16 @@ func NewRuntimeCoordinator(workDir, binary string) *RuntimeCoordinator {
 		Capture: capture.NewManager(filepath.Join(workDir, "capture"), "127.0.0.1:9081", "127.0.0.1:9082"),
 		WorkDir: workDir, Binary: binary,
 	}
+	if auth, err := loadOrCreateLocalAuth(workDir); err == nil {
+		r.LocalAuth = auth
+	} else if auth, genErr := newLocalAuth(); genErr == nil {
+		// Still protect the ports for this process even if the shared file
+		// cannot be written; the CLI then cannot reach this instance's API.
+		fmt.Printf("本地认证信息无法保存，仅本进程有效: %v\n", err)
+		r.LocalAuth = auth
+	}
+	setClashAPISecret(r.LocalAuth.ClashSecret)
+	r.Capture.SetAuth(&capture.ProxyAuth{Username: r.LocalAuth.ProxyUsername, Password: r.LocalAuth.ProxyPassword})
 	go r.watchSingBoxExit()
 	return r
 }
@@ -59,8 +71,15 @@ func (r *RuntimeCoordinator) watchSingBoxExit() {
 			continue
 		}
 		r.mu.Lock()
+		// A crash can be queued while Start/Reload holds the lock and has
+		// already launched a replacement process. That stale event must not
+		// mark the new process as failed or tear down its routes.
+		if current := r.SingBox.Generation(); current != 0 && current != event.Generation {
+			r.mu.Unlock()
+			continue
+		}
 		state, _ := r.State.Get()
-		if state == core.StateStopping || state == core.StateStopped {
+		if state == core.StateStopping || state == core.StateStopped || state == core.StateError {
 			r.mu.Unlock()
 			continue
 		}
@@ -237,7 +256,7 @@ func (r *RuntimeCoordinator) SyncConfig(cfg config.Config) (string, error) {
 	if exeDir == "." || exeDir == "" {
 		exeDir, _ = os.Getwd()
 	}
-	data, err := singbox.BuildConfig(cfg, exeDir)
+	data, err := singbox.BuildConfigWithAuth(cfg, exeDir, r.LocalAuth)
 	if err != nil {
 		return "", err
 	}
