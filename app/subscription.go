@@ -62,19 +62,28 @@ func parseSubscription(link string) ([]config.Node, error) {
 		return []config.Node{node}, nil
 	}
 	if hasScheme(link, "http", "https") {
-		parsed, err := url.Parse(link)
-		isSubscription := err == nil && (parsed.Port() == "" || parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "")
-		if !isSubscription {
+		if !isSubscriptionURL(link) {
 			node, err := parseHTTPStyle(link)
 			if err != nil {
 				return nil, err
 			}
 			return []config.Node{node}, nil
 		}
-		// 普通 HTTP/HTTPS 地址没有代理端口时，按订阅地址下载并拆分节点。
 		return parseSubscriptionBody(link)
 	}
 	return nil, fmt.Errorf("无效节点链接: 支持 vmess、vless、trojan、ss、hysteria2、socks、http 或 https")
+}
+
+// isSubscriptionURL reports whether an http(s) link is a remote subscription
+// rather than an HTTP proxy node: proxy nodes carry an explicit port and no
+// path or query.
+func isSubscriptionURL(link string) bool {
+	link = normalizeNodeLink(link)
+	if !hasScheme(link, "http", "https") {
+		return false
+	}
+	parsed, err := url.Parse(link)
+	return err == nil && (parsed.Port() == "" || parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "")
 }
 
 // ValidateNodeSource checks whether input can be parsed without performing network access.

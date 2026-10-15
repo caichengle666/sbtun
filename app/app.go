@@ -583,6 +583,7 @@ func (a *App) AddNode(node config.Node) error {
 	return a.mutateConfigAndSyncLocked(func(_ config.Config, next *config.Config) error {
 		for i := range next.Nodes {
 			if next.Nodes[i].ID == node.ID {
+				node.Subscription = next.Nodes[i].Subscription
 				next.Nodes[i] = node
 				return nil
 			}
@@ -672,6 +673,7 @@ func (a *App) UpdateNode(id string, node config.Node) error {
 				continue
 			}
 			node.ID = id
+			node.Subscription = next.Nodes[i].Subscription
 			next.Nodes[i] = node
 			return nil
 		}
@@ -1099,42 +1101,6 @@ func (a *App) SetRoutingMode(mode config.RoutingMode) error {
 		next.RoutingMode = mode
 		return nil
 	}, true)
-}
-
-func (a *App) ImportSubscription(link string) (int, error) {
-	a.operationMu.Lock()
-	defer a.operationMu.Unlock()
-	nodes, err := parseSubscription(link)
-	if err != nil {
-		return 0, err
-	}
-	if len(nodes) == 0 {
-		return 0, errors.New("订阅中未识别到任何节点")
-	}
-	added := 0
-	err = a.mutateConfigAndSyncLocked(func(_ config.Config, next *config.Config) error {
-		existing := make(map[string]struct{}, len(next.Nodes))
-		for _, n := range next.Nodes {
-			existing[n.ID] = struct{}{}
-		}
-		added = 0
-		for _, n := range nodes {
-			if _, ok := existing[n.ID]; ok {
-				continue
-			}
-			next.Nodes = append(next.Nodes, n)
-			existing[n.ID] = struct{}{}
-			added++
-		}
-		if next.CurrentNodeID == "" && len(next.Nodes) > 0 {
-			next.CurrentNodeID = next.Nodes[0].ID
-		}
-		return nil
-	}, true)
-	if err != nil {
-		return 0, err
-	}
-	return added, nil
 }
 
 func (a *App) checkReady(ctx context.Context) error {

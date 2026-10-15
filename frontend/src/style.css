@@ -108,6 +108,7 @@ textarea.input { resize: vertical; }
 .node-name { flex: 0 1 auto; max-width: 45%; overflow: hidden; color: #e2e8f0; font-size: 13px; font-weight: 600; text-overflow: ellipsis; white-space: nowrap; }
 .node-server { flex: 0 1 auto; max-width: 40%; overflow: hidden; color: #64748b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .node-health-row { display: flex; flex-wrap: wrap; gap: 4px 10px; font-size: 10px; }
+.subscription-item .node-server { max-width: none; }
 .health-check { color: #64748b; }
 .health-check.ok { color: #86efac; }
 .health-check.bad { color: #fda4af; }

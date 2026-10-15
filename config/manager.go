@@ -160,6 +160,16 @@ func Validate(cfg Config) error {
 	default:
 		return fmt.Errorf("未知 DNS 模式: %q", cfg.DNSMode)
 	}
+	subs := make(map[string]struct{}, len(cfg.Subscriptions))
+	for i, sub := range cfg.Subscriptions {
+		if sub.ID == "" || strings.TrimSpace(sub.URL) == "" {
+			return fmt.Errorf("第 %d 个订阅缺少 ID 或地址", i+1)
+		}
+		if _, ok := subs[sub.ID]; ok {
+			return fmt.Errorf("订阅 ID 重复: %s", sub.ID)
+		}
+		subs[sub.ID] = struct{}{}
+	}
 	seen := make(map[string]struct{}, len(cfg.Nodes))
 	for i, n := range cfg.Nodes {
 		if n.ID == "" {
@@ -177,6 +187,11 @@ func Validate(cfg Config) error {
 		}
 		if n.Protocol == "" {
 			return fmt.Errorf("节点 %q 缺少协议", n.Name)
+		}
+		if n.Subscription != "" {
+			if _, ok := subs[n.Subscription]; !ok {
+				return fmt.Errorf("节点 %q 所属订阅不存在: %s", n.Name, n.Subscription)
+			}
 		}
 	}
 	if cfg.CurrentNodeID != "" {

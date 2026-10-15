@@ -14,6 +14,7 @@ import (
 	"sort"
 	"strconv"
 	"strings"
+	"time"
 
 	"github.com/caichengle666/sbtun/app"
 	"github.com/caichengle666/sbtun/config"
@@ -221,6 +222,8 @@ func main() {
 		}
 	case "rules":
 		err = runRulesCommand(application, commandArgs)
+	case "subs":
+		err = runSubsCommand(application, commandArgs)
 	case "capture":
 		err = runCaptureCommand(application, commandArgs)
 	case "kernel":
@@ -267,6 +270,8 @@ func printCommandHelp(command string, args []string) bool {
 		usage = "sbtun add-rule <链接|文件|文本>"
 	case "rules":
 		usage = "sbtun rules [list|add|edit|delete|update|update-all]"
+	case "subs":
+		usage = "sbtun subs [list|update [编号]|delete <编号>]"
 	case "capture":
 		if len(args) > 0 && args[0] == "cert" {
 			usage = certificateCLIUsage()
@@ -367,6 +372,18 @@ func validateCLIArgs(command string, args []string) error {
 			return nil
 		default:
 			return usageError("sbtun rules [list|add <名称> <SRS_URL>|edit <ID> <名称> <SRS_URL>|delete <ID>|update <ID>|update-all]")
+		}
+	case "subs":
+		switch {
+		case len(args) == 0, len(args) == 1 && (args[0] == "list" || args[0] == "update"):
+			return nil
+		case len(args) == 2 && (args[0] == "update" || args[0] == "delete"):
+			if index, err := strconv.Atoi(args[1]); err != nil || index < 1 {
+				return fmt.Errorf("订阅编号无效: %s", args[1])
+			}
+			return nil
+		default:
+			return usageError("sbtun subs [list|update [编号]|delete <编号>]")
 		}
 	case "capture":
 		return validateCaptureArgs(args)
@@ -469,6 +486,9 @@ func printHelp() {
 		{"edit [编号]", "进入交互式编辑，可直接指定节点"},
 		{"edit <编号> <节点链接>", "用完整链接覆盖全部参数"},
 		{"edit <编号> <名称> <服务器> <端口>", "仅修改基本信息"},
+		{"subs", "列出订阅编号"},
+		{"subs update [编号]", "更新指定订阅，省略编号则更新全部"},
+		{"subs delete <编号>", "删除订阅及其全部节点"},
 	})
 	printHelpGroup("路由与规则", []helpEntry{
 		{"route <模式>", "设置路由: smart/global/direct/custom"},
@@ -543,6 +563,86 @@ func terminalTextWidth(value string) int {
 		}
 	}
 	return width
+}
+
+func runSubsCommand(application *app.App, args []string) error {
+	cfg, err := application.LoadConfig()
+	if err != nil {
+		return err
+	}
+	subs := cfg.Subscriptions
+	pick := func(arg string) (config.Subscription, error) {
+		index, _ := strconv.Atoi(arg)
+		if index < 1 || index > len(subs) {
+			return config.Subscription{}, fmt.Errorf("订阅编号超出范围: %s", arg)
+		}
+		return subs[index-1], nil
+	}
+	printResult := func(r app.SubscriptionUpdateDTO) {
+		fmt.Printf("%s: 共 %d 个节点，新增 %d，移除 %d\n", r.Name, r.Total, r.Added, r.Removed)
+	}
+	if len(args) == 0 || args[0] == "list" {
+		if len(subs) == 0 {
+			fmt.Println("暂无订阅，使用 sbtun add-node <订阅地址> 导入")
+			return nil
+		}
+		for i, sub := range subs {
+			count := 0
+			for _, n := range cfg.Nodes {
+				if n.Subscription == sub.ID {
+					count++
+				}
+			}
+			updated := "尚未更新"
+			if t, err := time.Parse(time.RFC3339, sub.UpdatedAt); err == nil {
+				updated = "更新于 " + t.Local().Format("2006-01-02 15:04")
+			}
+			fmt.Printf("%d\t%s\t%d 个节点\t%s\n", i+1, sub.Name, count, updated)
+		}
+		return nil
+	}
+	switch args[0] {
+	case "update":
+		if len(args) == 2 {
+			sub, err := pick(args[1])
+			if err != nil {
+				return err
+			}
+			result, err := application.UpdateSubscription(sub.ID)
+			if err != nil {
+				return err
+			}
+			printResult(result)
+			return nil
+		}
+		if len(subs) == 0 {
+			return errors.New("暂无订阅")
+		}
+		failed := 0
+		for _, result := range application.UpdateAllSubscriptions() {
+			if result.Error != "" {
+				failed++
+				fmt.Fprintf(os.Stderr, "%s: %s\n", result.Name, result.Error)
+				continue
+			}
+			printResult(result)
+		}
+		if failed > 0 {
+			return fmt.Errorf("%d 个订阅更新失败", failed)
+		}
+		return nil
+	case "delete":
+		sub, err := pick(args[1])
+		if err != nil {
+			return err
+		}
+		if err := application.RemoveSubscription(sub.ID); err != nil {
+			return err
+		}
+		fmt.Println("订阅已删除")
+		return nil
+	}
+	return errors.New("用法: sbtun subs [list|update [编号]|delete <编号>]")
 }
 
 func runRulesCommand(application *app.App, args []string) error {

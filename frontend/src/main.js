@@ -37,6 +37,7 @@ const state = {
   ruleMenuDocumentBound: false,
   dnsFilterFormOpen: false,
   nodeSwitching: false,
+  subUpdating: '',
   nodeHealth: {},
   selectedNodes: new Set(),
   batchTesting: false,
@@ -295,6 +296,7 @@ function renderNodesPage() {
   const allSelected = visibleIDs.length > 0 && visibleIDs.every(id => state.selectedNodes.has(id))
   return `<section class="page-stack">
       <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">${nodes.length} 个节点 · 选择节点后可批量测试、导出或删除。</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="toggleSelectNodes" ${visibleIDs.length ? '' : 'disabled'}>${allSelected ? '反选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes" ${state.batchTesting ? 'disabled' : ''}>${state.batchTesting ? '测试中' : '批量测试'}</button><button class="btn btn-ghost" id="batchExportNodes">批量导出</button><button class="btn btn-danger" id="batchDeleteNodes">批量删除</button><button class="btn btn-primary" id="toggleNodeForm">${state.editingNodeId ? '取消编辑' : state.nodeFormOpen ? '收起添加' : '导入 / 添加'}</button></span></div>
+      ${renderSubscriptions()}
       <div id="nodePanel">${renderNodes()}</div>
     ${state.nodeFormOpen || state.editingNodeId ? `<div class="card node-import" id="node-import"><h2>${state.editingNodeId ? '编辑节点全部参数' : '添加节点'}</h2>
       ${state.editingNodeId ? '' : `<div class="row"><input id="nodeUrl" class="input" value="${escapeHtml(state.manualForm.url)}" placeholder="节点链接 vmess:// vless:// ss:// hy2:// 或订阅" /><button id="importBtn" class="btn btn-primary">导入</button></div>`}
@@ -306,6 +308,28 @@ function renderNodesPage() {
       ${state.editingNodeId ? '<button id="cancelEditNode" class="btn btn-ghost">取消编辑</button>' : ''}
     </div>` : ''}
   </section>`
+}
+
+function renderSubscriptions() {
+  const subs = state.config?.subscriptions || []
+  if (!subs.length) return ''
+  const nodes = state.config?.nodes || []
+  const busy = Boolean(state.subUpdating)
+  const items = subs.map(s => {
+    const count = nodes.filter(n => n.subscription === s.id).length
+    const updated = s.updated_at ? '更新于 ' + new Date(s.updated_at).toLocaleString('zh-CN') : '尚未更新'
+    const updating = state.subUpdating === s.id || state.subUpdating === '*'
+    return `<li class="node-item subscription-item">
+        <span class="badge proxy">订阅</span>
+        <div class="node-info"><div class="node-row"><span class="node-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</span><span class="node-server">${count} 个节点 · ${escapeHtml(updated)}</span></div></div>
+        <div class="node-actions"><button class="btn btn-ghost update-sub" data-id="${s.id}" ${busy ? 'disabled' : ''}>${updating ? '更新中...' : '更新'}</button><button class="btn btn-danger rm-sub" data-id="${s.id}" ${busy ? 'disabled' : ''}>删除</button></div>
+      </li>`
+  }).join('')
+  return `<section class="card subscription-card"><div class="section-heading"><div><h2>订阅</h2><p class="muted">更新时用订阅里的最新节点替换旧节点，下载失败会保留原节点。</p></div>${subs.length > 1 ? `<button class="btn btn-primary" id="updateAllSubs" ${busy ? 'disabled' : ''}>${state.subUpdating === '*' ? '更新中...' : '全部更新'}</button>` : ''}</div><ul class="node-list">${items}</ul></section>`
+}
+
+function subscriptionResultText(r) {
+  return `${r.name}：共 ${r.total} 个节点，新增 ${r.added}，移除 ${r.removed}`
 }
 
 function renderManualAdvancedFields() {
@@ -1342,6 +1366,57 @@ function bindEvents() {
     })
   })
 
+  document.querySelectorAll('.update-sub').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      state.subUpdating = btn.dataset.id
+      renderApp()
+      try {
+        const result = await window.go.app.App.UpdateSubscription(btn.dataset.id)
+        showToast('订阅已更新 · ' + subscriptionResultText(result), 'success')
+      } catch (e) {
+        showToast('订阅更新失败: ' + (e.message || String(e)), 'error')
+      } finally {
+        state.subUpdating = ''
+        await refreshConfig()
+        renderApp()
+      }
+    })
+  })
+
+  const updateAllSubs = document.querySelector('#updateAllSubs')
+  if (updateAllSubs) {
+    updateAllSubs.addEventListener('click', async () => {
+      state.subUpdating = '*'
+      renderApp()
+      try {
+        const results = await window.go.app.App.UpdateAllSubscriptions()
+        const failed = results.filter(r => r.error)
+        if (failed.length) showToast('部分订阅更新失败: ' + failed.map(r => `${r.name || r.id}: ${r.error}`).join('; '), 'error')
+        else showToast('全部订阅已更新', 'success')
+      } catch (e) {
+        showToast(e.message || String(e), 'error')
+      } finally {
+        state.subUpdating = ''
+        await refreshConfig()
+        renderApp()
+      }
+    })
+  }
+
+  document.querySelectorAll('.rm-sub').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const sub = state.config?.subscriptions?.find(item => item.id === btn.dataset.id)
+      if (!window.confirm(`确定删除订阅“${sub?.name || '此订阅'}”及其全部节点吗？`)) return
+      try {
+        await window.go.app.App.RemoveSubscription(btn.dataset.id)
+        await refreshConfig()
+        showToast('订阅已删除', 'success')
+      } catch (e) {
+        showToast(e.message || String(e), 'error')
+      }
+    })
+  })
+
   document.querySelectorAll('.rm-node').forEach(btn => {
     btn.addEventListener('click', async () => {
       const node = state.config?.nodes?.find(item => item.id === btn.dataset.id)
@@ -1674,7 +1749,7 @@ function bindEvents() {
       try {
         const added = await window.go.app.App.ImportSubscription(url)
         await refreshConfig()
-    await refreshRules()
+        await refreshRules()
         showToast('导入成功，新增 ' + added + ' 个节点', 'success')
         state.manualForm.url = ''
         const urlInput = document.querySelector('#nodeUrl')
