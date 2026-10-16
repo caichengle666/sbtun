@@ -19,59 +19,14 @@ func parseSubscription(link string) ([]config.Node, error) {
 	if err := ValidateNodeSource(link); err != nil {
 		return nil, err
 	}
-	if strings.HasPrefix(link, "vmess://") {
-		node, err := parseVMess(link)
-		if err != nil {
-			return nil, err
-		}
-		return []config.Node{node}, nil
-	}
-	if strings.HasPrefix(link, "vless://") {
-		node, err := parseVLess(link)
-		if err != nil {
-			return nil, err
-		}
-		return []config.Node{node}, nil
-	}
-	if strings.HasPrefix(link, "trojan://") {
-		node, err := parseTrojan(link)
-		if err != nil {
-			return nil, err
-		}
-		return []config.Node{node}, nil
-	}
-	if strings.HasPrefix(link, "ss://") {
-		node, err := parseShadowsocks(link)
-		if err != nil {
-			return nil, err
-		}
-		return []config.Node{node}, nil
-	}
-	if strings.HasPrefix(link, "hysteria2://") {
-		node, err := parseHysteria2(link)
-		if err != nil {
-			return nil, err
-		}
-		return []config.Node{node}, nil
-	}
-	if hasScheme(link, "socks", "socks4", "socks4a", "socks5", "socks5h") {
-		node, err := parseHTTPStyle(link)
-		if err != nil {
-			return nil, err
-		}
-		return []config.Node{node}, nil
-	}
-	if hasScheme(link, "http", "https") {
-		if !isSubscriptionURL(link) {
-			node, err := parseHTTPStyle(link)
-			if err != nil {
-				return nil, err
-			}
-			return []config.Node{node}, nil
-		}
+	if isSubscriptionURL(link) {
 		return parseSubscriptionBody(link)
 	}
-	return nil, fmt.Errorf("无效节点链接: 支持 vmess、vless、trojan、ss、hysteria2、socks、http 或 https")
+	node, err := parseSubscriptionLine(link)
+	if err != nil {
+		return nil, err
+	}
+	return []config.Node{node}, nil
 }
 
 // isSubscriptionURL reports whether an http(s) link is a remote subscription
@@ -92,10 +47,10 @@ func ValidateNodeSource(link string) error {
 	if link == "" {
 		return fmt.Errorf("节点链接不能为空")
 	}
-	if hasScheme(link, "vmess", "vless", "trojan", "ss", "hysteria2", "socks", "socks4", "socks4a", "socks5", "socks5h", "http", "https") {
+	if hasScheme(link, "vmess", "vless", "trojan", "ss", "hysteria2", "tuic", "anytls", "wireguard", "socks", "socks4", "socks4a", "socks5", "socks5h", "http", "https") {
 		return nil
 	}
-	return fmt.Errorf("无效节点链接: 支持 vmess、vless、trojan、ss、hy2/hysteria2、socks、http 或 https")
+	return fmt.Errorf("无效节点链接: 支持 vmess、vless、trojan、ss、hy2/hysteria2、tuic、anytls、wireguard/wg、socks、http 或 https")
 }
 
 func parseSubscriptionBody(link string) ([]config.Node, error) {
@@ -103,12 +58,17 @@ func parseSubscriptionBody(link string) ([]config.Node, error) {
 	if err != nil {
 		return nil, fmt.Errorf("下载订阅失败: %w", err)
 	}
-	text := strings.TrimSpace(body)
+	text := strings.TrimSpace(strings.TrimPrefix(body, "\ufeff"))
 	if text == "" {
 		return nil, fmt.Errorf("订阅内容为空")
 	}
-	decoded, err := tryBase64Decode(text)
-	if err == nil && decoded != "" {
+	switch {
+	case strings.HasPrefix(text, "{"):
+		return parseSingBoxSubscription(text)
+	case looksLikeClashYAML(text):
+		return parseClashSubscription(text)
+	}
+	if decoded, err := tryBase64Decode(text); err == nil && decoded != "" {
 		text = decoded
 	}
 	var nodes []config.Node
@@ -139,6 +99,12 @@ func parseSubscriptionLine(line string) (config.Node, error) {
 		return parseShadowsocks(line)
 	case strings.HasPrefix(line, "hysteria2://"):
 		return parseHysteria2(line)
+	case strings.HasPrefix(line, "tuic://"):
+		return parseTUIC(line)
+	case strings.HasPrefix(line, "anytls://"):
+		return parseAnyTLS(line)
+	case strings.HasPrefix(line, "wireguard://"):
+		return parseWireGuard(line)
 	case hasScheme(line, "socks", "socks4", "socks4a", "socks5", "socks5h", "http", "https"):
 		return parseHTTPStyle(line)
 	default:
@@ -156,8 +122,11 @@ func normalizeNodeLink(link string) string {
 		return link
 	}
 	scheme := strings.ToLower(link[:separator])
-	if scheme == "hy2" {
+	switch scheme {
+	case "hy2":
 		scheme = "hysteria2"
+	case "wg":
+		scheme = "wireguard"
 	}
 	return scheme + link[separator:]
 }

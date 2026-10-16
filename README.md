@@ -7,7 +7,7 @@ sbtun 负责节点、订阅、路由、规则集、健康检查和运行状态�
 ## 主要特性
 
 - **桌面与命令行双入口**：GUI 和 CLI 共用配置与运行状态。
-- **常用协议支持**：VLESS、VMess、Trojan、Shadowsocks、Hysteria2、SOCKS 和 HTTP。
+- **常用协议支持**：VLESS、VMess、Trojan、Shadowsocks、Hysteria2、TUIC、AnyTLS、WireGuard、SOCKS 和 HTTP。
 - **节点管理**：导入节点链接或订阅、一键更新订阅、手动编辑、批量测试、批量导出与删除。
 - **四种路由模式**：智能分流、全局代理、全局直连和自定义规则。
 - **规则集管理**：更新、启停和管理 sing-box SRS 规则集，并支持手动 DNS 过滤规则。
@@ -98,10 +98,15 @@ chmod +x sbtun-cli
 | Trojan | 支持 | 支持 |
 | Shadowsocks | 支持 | 支持 |
 | Hysteria2 | 支持 | 支持 |
+| TUIC | 支持 | 支持 |
+| AnyTLS | 支持 | 支持 |
+| WireGuard | 支持（`wireguard://` / `wg://`） | 支持 |
 | SOCKS | 支持 | 支持 |
 | HTTP/HTTPS | 支持 | 支持 |
 
-VLESS、VMess 和 Trojan 可配置 TLS、SNI、ALPN、uTLS 及 WebSocket、HTTP、gRPC、HTTPUpgrade 等传输参数；Hysteria2 支持端口跳跃与 Salamander 混淆等参数。
+VLESS、VMess 和 Trojan 可配置 TLS、SNI、ALPN、uTLS 及 WebSocket、HTTP、gRPC、HTTPUpgrade 等传输参数；Hysteria2 支持端口跳跃与 Salamander 混淆等参数；TUIC 支持拥塞控制与 UDP 转发模式；WireGuard 按 sing-box 1.11+ 的 endpoint 方式生成。
+
+订阅地址除了常见的 base64 分享链接列表，也能直接识别 Clash / Mihomo YAML（`proxies:`）和 sing-box JSON（`outbounds` / `endpoints`），自动挑出其中支持的节点，分组、规则等内容会被忽略。
 
 ---
 
@@ -152,7 +157,7 @@ sbtun 不把 Ping 结果直接当作节点可用：
 
 - **Ping**：检查目标主机基础连通性。
 - **TCPing**：检查 TCP 协议节点的服务端口。
-- **UDP**：检查 Hysteria2 等 UDP 节点是否可发送数据。
+- **UDP**：检查 Hysteria2、TUIC、WireGuard 等 UDP 节点是否可发送数据。
 - **URL**：通过 sing-box 临时出站或运行中的 selector 发起实际代理请求。
 
 节点最终健康状态以 URL 测试为主。URL 失败也可能来自 DNS、测试目标或当前网络环境，建议结合各项结果判断。

@@ -6,7 +6,8 @@ const initialTheme = localStorage.getItem('sbtun-theme') === 'light' ? 'light' :
 const savedView = localStorage.getItem('sbtun-ui-view')
 const initialView = ['overview', 'nodes', 'routing', 'rules', 'capture'].includes(savedView) ? savedView : 'overview'
 const savedNodeFilter = localStorage.getItem('sbtun-ui-node-filter') || 'all'
-const validNodeFilters = ['all', 'hysteria2', 'vless', 'vmess', 'trojan', 'shadowsocks', 'socks', 'http']
+const NODE_PROTOCOLS = [['hysteria2', 'Hysteria2'], ['vless', 'VLESS'], ['vmess', 'VMess'], ['trojan', 'Trojan'], ['shadowsocks', 'Shadowsocks'], ['tuic', 'TUIC'], ['anytls', 'AnyTLS'], ['wireguard', 'WireGuard'], ['socks', 'SOCKS'], ['http', 'HTTP']]
+const validNodeFilters = ['all', ...NODE_PROTOCOLS.map(([id]) => id)]
 
 const state = {
   theme: initialTheme,
@@ -25,7 +26,7 @@ const state = {
   selectedNode: '',
   manualProtocol: 'vless',
   editingNodeId: '',
-  manualForm: { url: '', name: '', server: '', port: '', password: '', username: '', method: '', network: '', server_name: '', alpn: '', flow: '', alter_id: '', security: '', packet_encoding: '', reality_public_key: '', reality_short_id: '', utls_fingerprint: '', transport_type: '', transport_path: '', transport_host: '', transport_service_name: '', plugin: '', plugin_opts: '', version: '5', up_mbps: '', down_mbps: '', server_ports: '', hop_interval: '', path: '', obfs_type: '', obfs_password: '', disable_path_mtu_discovery: false, udp_over_tcp: false, multiplex: false, insecure: false, tls: false },
+  manualForm: { url: '', name: '', server: '', port: '', password: '', username: '', method: '', network: '', server_name: '', alpn: '', flow: '', alter_id: '', security: '', packet_encoding: '', reality_public_key: '', reality_short_id: '', utls_fingerprint: '', transport_type: '', transport_path: '', transport_host: '', transport_service_name: '', plugin: '', plugin_opts: '', version: '5', up_mbps: '', down_mbps: '', server_ports: '', hop_interval: '', path: '', obfs_type: '', obfs_password: '', uuid: '', congestion_control: '', udp_relay_mode: '', private_key: '', public_key: '', pre_shared_key: '', local_address: '', reserved: '', mtu: '', allowed_ips: '', disable_path_mtu_discovery: false, udp_over_tcp: false, multiplex: false, insecure: false, tls: false },
   customRuleForm: { match_type: 'domain_suffix', value: '', action: 'proxy' },
   customRuleImport: '',
   rules: null,
@@ -170,6 +171,31 @@ const NODE_FIELDS = {
     { key: 'disable_path_mtu_discovery', label: '禁用 Path MTU Discovery', type: 'checkbox' },
     { key: 'insecure', label: '跳过证书校验', type: 'checkbox' },
   ],
+  tuic: [
+    { key: 'uuid', label: 'UUID', placeholder: 'TUIC 用户 UUID', required: true },
+    { key: 'password', label: '密码', type: 'password', placeholder: 'TUIC 密码' },
+    { key: 'congestion_control', label: '拥塞控制', type: 'select', options: [['', '默认 cubic'], ['bbr', 'bbr'], ['new_reno', 'new_reno']] },
+    { key: 'udp_relay_mode', label: 'UDP 转发', type: 'select', options: [['', '默认 native'], ['quic', 'quic']] },
+    { key: 'server_name', label: 'TLS SNI', placeholder: '可选，默认服务器地址' },
+    { key: 'alpn', label: 'TLS ALPN', placeholder: '可选，默认 h3' },
+    { key: 'insecure', label: '跳过证书校验', type: 'checkbox' },
+  ],
+  anytls: [
+    { key: 'password', label: '密码', type: 'password', placeholder: 'AnyTLS 密码', required: true },
+    { key: 'server_name', label: 'TLS SNI', placeholder: '可选，默认服务器地址' },
+    { key: 'alpn', label: 'TLS ALPN', placeholder: '逗号分隔，可选' },
+    { key: 'utls_fingerprint', label: 'uTLS 指纹', placeholder: '可选，例如 chrome' },
+    { key: 'insecure', label: '跳过证书校验', type: 'checkbox' },
+  ],
+  wireguard: [
+    { key: 'private_key', label: '私钥', type: 'password', placeholder: '本机 PrivateKey', required: true },
+    { key: 'public_key', label: '对端公钥', placeholder: '服务器 PublicKey', required: true },
+    { key: 'local_address', label: '本机地址', placeholder: '例如 172.16.0.2/32,fd01::2/128', required: true },
+    { key: 'pre_shared_key', label: '预共享密钥', type: 'password', placeholder: '可选' },
+    { key: 'reserved', label: 'Reserved', placeholder: '可选，例如 1,2,3' },
+    { key: 'mtu', label: 'MTU', type: 'number', placeholder: '默认 1408' },
+    { key: 'allowed_ips', label: 'Allowed IPs', placeholder: '默认 0.0.0.0/0,::/0' },
+  ],
 }
 
 document.documentElement.dataset.theme = state.theme
@@ -299,8 +325,8 @@ function renderNodesPage() {
       ${renderSubscriptions()}
       <div id="nodePanel">${renderNodes()}</div>
     ${state.nodeFormOpen || state.editingNodeId ? `<div class="card node-import" id="node-import"><h2>${state.editingNodeId ? '编辑节点全部参数' : '添加节点'}</h2>
-      ${state.editingNodeId ? '' : `<div class="row"><input id="nodeUrl" class="input" value="${escapeHtml(state.manualForm.url)}" placeholder="节点链接 vmess:// vless:// ss:// hy2:// 或订阅" /><button id="importBtn" class="btn btn-primary">导入</button></div>`}
-      <div class="row"><select id="nodeProtocol" class="select"><option value="vless" ${state.manualProtocol === 'vless' ? 'selected' : ''}>VLESS</option><option value="vmess" ${state.manualProtocol === 'vmess' ? 'selected' : ''}>VMess</option><option value="trojan" ${state.manualProtocol === 'trojan' ? 'selected' : ''}>Trojan</option><option value="shadowsocks" ${state.manualProtocol === 'shadowsocks' ? 'selected' : ''}>Shadowsocks</option><option value="socks" ${state.manualProtocol === 'socks' ? 'selected' : ''}>SOCKS</option><option value="http" ${state.manualProtocol === 'http' ? 'selected' : ''}>HTTP</option><option value="hysteria2" ${state.manualProtocol === 'hysteria2' ? 'selected' : ''}>Hysteria2</option></select></div>
+      ${state.editingNodeId ? '' : `<div class="row"><input id="nodeUrl" class="input" value="${escapeHtml(state.manualForm.url)}" placeholder="节点链接 vless:// ss:// hy2:// tuic:// anytls:// wg:// 或订阅地址" /><button id="importBtn" class="btn btn-primary">导入</button></div>`}
+      <div class="row"><select id="nodeProtocol" class="select">${NODE_PROTOCOLS.map(([id, label]) => `<option value="${id}" ${state.manualProtocol === id ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
       <div class="row"><input id="nodeName" class="input" value="${escapeHtml(state.manualForm.name)}" placeholder="节点名称" /></div>
       <div class="row"><input id="nodeServer" class="input" value="${escapeHtml(state.manualForm.server)}" placeholder="服务器地址" /><input id="nodePort" class="input port-input" value="${escapeHtml(state.manualForm.port)}" placeholder="端口" /></div>
       ${renderManualAdvancedFields()}
@@ -339,7 +365,7 @@ function renderManualAdvancedFields() {
 
 function renderTransportFields() {
   const type = state.manualForm.transport_type
-  if (!type || state.manualProtocol === 'hysteria2') return ''
+  if (!type || !(NODE_FIELDS[state.manualProtocol] || []).some(field => field.key === 'transport_type')) return ''
   if (type === 'grpc') return `<div class="transport-fields"><div class="field-hint">gRPC 参数</div>${renderSettingInput('transport_service_name', 'Service Name', '可选')}</div>`
   if (type === 'ws' || type === 'http' || type === 'httpupgrade') return `<div class="transport-fields"><div class="field-hint">${type === 'ws' ? 'WebSocket' : type === 'httpupgrade' ? 'HTTPUpgrade' : 'HTTP'} 参数</div>${renderSettingInput('transport_host', 'Host', '可选')}${renderSettingInput('transport_path', 'Path', '例如 /ws')}</div>`
   return ''
@@ -641,9 +667,10 @@ function formatRuleInfo(rule) {
 function renderNodes() {
   const allNodes = state.config?.nodes || []
   const currentNodeID = activeNodeID()
-  const filterBtns = [['all', '全部'], ['hysteria2', 'Hysteria2'], ['vless', 'VLESS'], ['vmess', 'VMess'], ['trojan', 'Trojan'], ['shadowsocks', 'SS'], ['socks', 'SOCKS'], ['http', 'HTTP']]
+  const filterBtns = [['all', '全部'], ...NODE_PROTOCOLS.map(([id, label]) => [id, id === 'shadowsocks' ? 'SS' : label])]
   const filterHtml = `<div class="node-tools"><input id="nodeSearch" class="input" value="${escapeHtml(state.nodeSearch)}" placeholder="搜索名称、服务器或协议" aria-label="搜索节点"><div class="node-filters">${filterBtns.map(([id, label]) => {
     const count = id === 'all' ? allNodes.length : allNodes.filter(n => n.protocol === id).length
+    if (!count && id !== 'all' && state.nodeFilter !== id) return ''
     return `<button class="filter-btn ${state.nodeFilter === id ? 'active' : ''}" data-filter="${id}">${label} (${count})</button>`
   }).join('')}</div></div>`
   const query = state.nodeSearch.trim().toLowerCase()
@@ -655,7 +682,7 @@ function renderNodes() {
     if (!groups[key]) groups[key] = []
     groups[key].push(n)
   }
-  const protocolOrder = ['hysteria2', 'vless', 'vmess', 'trojan', 'shadowsocks', 'socks', 'http', 'unknown']
+  const protocolOrder = [...NODE_PROTOCOLS.map(([id]) => id), 'unknown']
   const sortedKeys = Object.keys(groups).sort((a, b) => {
     const ai = protocolOrder.indexOf(a)
     const bi = protocolOrder.indexOf(b)

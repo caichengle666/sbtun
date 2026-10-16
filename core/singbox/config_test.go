@@ -11,10 +11,7 @@ import (
 )
 
 func TestGeneratedProtocolConfigsPassSingBoxCheck(t *testing.T) {
-	binary := filepath.Join("..", "..", "dist", "downloads", "sing-box", "sing-box-1.14.0-windows-amd64", "sing-box.exe")
-	if _, err := os.Stat(binary); err != nil {
-		t.Skip("local sing-box 1.14.0 binary not available")
-	}
+	binary := singBoxTestBinary(t)
 	cases := []config.Node{
 		{ID: "vless", Protocol: "vless", Server: "example.com", Port: 443, Settings: map[string]string{"uuid": "00000000-0000-0000-0000-000000000001", "tls": "true", "server_name": "example.com", "alpn": "h2,http/1.1", "transport_type": "ws", "transport_path": "/ws", "transport_host": "example.com"}},
 		{ID: "vmess", Protocol: "vmess", Server: "example.com", Port: 443, Settings: map[string]string{"uuid": "00000000-0000-0000-0000-000000000001", "security": "auto", "tls": "true", "transport_type": "ws", "transport_path": "/ws", "transport_host": "example.com"}},
@@ -23,6 +20,9 @@ func TestGeneratedProtocolConfigsPassSingBoxCheck(t *testing.T) {
 		{ID: "socks", Protocol: "socks", Server: "example.com", Port: 1080, Settings: map[string]string{"version": "5", "username": "user", "password": "secret"}},
 		{ID: "http", Protocol: "http", Server: "example.com", Port: 8080, Settings: map[string]string{"username": "user", "password": "secret", "tls": "true", "server_name": "example.com", "path": "/proxy"}},
 		{ID: "hysteria2", Protocol: "hysteria2", Server: "example.com", Port: 443, Settings: map[string]string{"password": "secret", "sni": "example.com", "alpn": "h3", "server_ports": "2000-3000", "hop_interval": "30s", "obfs_type": "salamander", "obfs_password": "secret"}},
+		{ID: "tuic", Protocol: "tuic", Server: "example.com", Port: 443, Settings: map[string]string{"uuid": "00000000-0000-0000-0000-000000000001", "password": "secret", "congestion_control": "bbr", "udp_relay_mode": "native", "server_name": "sni.example.com"}},
+		{ID: "anytls", Protocol: "anytls", Server: "example.com", Port: 443, Settings: map[string]string{"password": "secret", "insecure": "true", "utls_fingerprint": "chrome"}},
+		{ID: "wireguard", Protocol: "wireguard", Server: "example.com", Port: 51820, Settings: map[string]string{"private_key": "GBI17Q5In1YIWiw67IH5PS18N+FuH/xIren5DUH11WY=", "public_key": "fvrhwBf3ofI/oWcIZPIySYyB1SqHv/dOM8kTVGxYlS0=", "local_address": "172.16.0.2,fd01::2", "reserved": "1,2,3", "mtu": "1280"}},
 	}
 	for _, node := range cases {
 		t.Run(node.Protocol, func(t *testing.T) {
@@ -39,6 +39,67 @@ func TestGeneratedProtocolConfigsPassSingBoxCheck(t *testing.T) {
 				t.Fatalf("sing-box check failed: %v\n%s\nconfig:\n%s", err, output, data)
 			}
 		})
+	}
+}
+
+// singBoxTestBinary 优先使用 SING_BOX_BINARY，否则使用仓库下载目录中的 Windows 内核。
+func singBoxTestBinary(t *testing.T) string {
+	t.Helper()
+	binary := os.Getenv("SING_BOX_BINARY")
+	if binary == "" {
+		binary = filepath.Join("..", "..", "dist", "downloads", "sing-box", "sing-box-1.14.0-windows-amd64", "sing-box.exe")
+	}
+	if _, err := os.Stat(binary); err != nil {
+		t.Skip("local sing-box binary not available")
+	}
+	return binary
+}
+
+func TestWireGuardNodeBuildsEndpointUsableBySelector(t *testing.T) {
+	cfg := testConfig(config.RoutingGlobal)
+	cfg.Nodes = append(cfg.Nodes, config.Node{ID: "wg", Name: "wg", Protocol: "wireguard", Server: "wg.example.com", Port: 51820, Settings: map[string]string{
+		"private_key": "GBI17Q5In1YIWiw67IH5PS18N+FuH/xIren5DUH11WY=", "public_key": "fvrhwBf3ofI/oWcIZPIySYyB1SqHv/dOM8kTVGxYlS0=", "local_address": "172.16.0.2",
+	}})
+	cfg.CurrentNodeID = "wg"
+	data, err := BuildConfig(cfg, t.TempDir())
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed RuntimeConfig
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	if len(parsed.Endpoints) != 1 || parsed.Endpoints[0]["tag"] != "node-wg" {
+		t.Fatalf("wireguard endpoint missing: %s", data)
+	}
+	for _, out := range parsed.Outbounds {
+		if out["type"] == "wireguard" {
+			t.Fatalf("wireguard must not be an outbound: %s", data)
+		}
+		if out["tag"] == "proxy" && out["default"] != "node-wg" {
+			t.Fatalf("selector does not default to wireguard endpoint: %v", out)
+		}
+	}
+	if binary := os.Getenv("SING_BOX_BINARY"); binary != "" {
+		path := filepath.Join(t.TempDir(), "wg.json")
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if output, err := exec.Command(binary, "check", "-c", path).CombinedOutput(); err != nil {
+			t.Fatalf("sing-box check failed: %v\n%s\n%s", err, output, data)
+		}
+	}
+}
+
+func TestParseWireGuardReserved(t *testing.T) {
+	for _, value := range []string{"1,2,3", "AQID"} {
+		got, err := parseWireGuardReserved(value)
+		if err != nil || len(got) != 3 || got[0] != 1 || got[1] != 2 || got[2] != 3 {
+			t.Fatalf("%q => %v, %v", value, got, err)
+		}
+	}
+	if _, err := parseWireGuardReserved("1,2"); err == nil {
+		t.Fatal("two bytes must be rejected")
 	}
 }
 
@@ -275,10 +336,7 @@ func TestCaptureAllRoutesHTTPOnlyFromTun(t *testing.T) {
 }
 
 func TestCaptureConfigPassesSingBoxCheck(t *testing.T) {
-	binary := filepath.Join("..", "..", "dist", "downloads", "sing-box", "sing-box-1.14.0-windows-amd64", "sing-box.exe")
-	if _, err := os.Stat(binary); err != nil {
-		t.Skip("local sing-box binary not available")
-	}
+	binary := singBoxTestBinary(t)
 	cfg := testConfig(config.RoutingGlobal)
 	cfg.CaptureEnabled = true
 	cfg.CaptureDomains = []string{"example.com"}

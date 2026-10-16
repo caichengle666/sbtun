@@ -47,17 +47,9 @@ func testNodeWithBinary(ctx context.Context, node config.Node, binary string) No
 		ctx = context.Background()
 	}
 	address := net.JoinHostPort(node.Server, strconv.Itoa(int(node.Port)))
-	transport := "tcp"
-	if node.Protocol == "hysteria2" {
-		transport = "udp"
-	}
-	result := NodeHealthDTO{
-		NodeID:    node.ID,
-		Protocol:  node.Protocol,
-		Transport: transport,
-	}
+	result := newNodeHealth(node)
 	result.Ping = pingNode(ctx, node.Server)
-	result.Port = probePort(ctx, address, transport)
+	result.Port = probePort(ctx, address, result.Transport)
 	if binary == "" {
 		result.Healthy = result.Port.OK
 		result.Message = result.Port.Message
@@ -92,7 +84,8 @@ func testNodeOnRunningInstance(ctx context.Context, node config.Node) NodeHealth
 
 func newNodeHealth(node config.Node) NodeHealthDTO {
 	transport := "tcp"
-	if node.Protocol == "hysteria2" {
+	switch node.Protocol {
+	case "hysteria2", "tuic", "wireguard":
 		transport = "udp"
 	}
 	return NodeHealthDTO{NodeID: node.ID, Protocol: node.Protocol, Transport: transport}

@@ -63,6 +63,12 @@ func nodeShareLink(node config.Node) (string, error) {
 		return "ss://" + credentials + "@" + nodeAddress(node) + "#" + url.PathEscape(node.Name), nil
 	case "hysteria2":
 		return hysteria2ShareLink(node), nil
+	case "tuic":
+		return tuicShareLink(node), nil
+	case "anytls":
+		return anyTLSShareLink(node), nil
+	case "wireguard":
+		return wireGuardShareLink(node), nil
 	case "socks", "http":
 		return httpStyleShareLink(node)
 	default:
@@ -151,6 +157,45 @@ func hysteria2ShareLink(node config.Node) string {
 	}
 	u.RawQuery = q.Encode()
 	return u.String()
+}
+
+func tuicShareLink(node config.Node) string {
+	u := &url.URL{Scheme: "tuic", User: url.UserPassword(node.Settings["uuid"], node.Settings["password"]), Host: nodeAddress(node), Fragment: node.Name}
+	q := tlsShareQuery(node.Settings)
+	setQuery(q, "congestion_control", node.Settings["congestion_control"])
+	setQuery(q, "udp_relay_mode", node.Settings["udp_relay_mode"])
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func anyTLSShareLink(node config.Node) string {
+	u := &url.URL{Scheme: "anytls", User: url.User(node.Settings["password"]), Host: nodeAddress(node), Fragment: node.Name}
+	u.RawQuery = tlsShareQuery(node.Settings).Encode()
+	return u.String()
+}
+
+func wireGuardShareLink(node config.Node) string {
+	u := &url.URL{Scheme: "wireguard", User: url.User(node.Settings["private_key"]), Host: nodeAddress(node), Fragment: node.Name}
+	q := url.Values{}
+	for key, target := range map[string]string{
+		"public_key": "publickey", "pre_shared_key": "presharedkey", "local_address": "address",
+		"reserved": "reserved", "mtu": "mtu", "allowed_ips": "allowed_ips",
+	} {
+		setQuery(q, target, node.Settings[key])
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func tlsShareQuery(settings map[string]string) url.Values {
+	q := url.Values{}
+	setQuery(q, "sni", settings["server_name"])
+	setQuery(q, "alpn", settings["alpn"])
+	setQuery(q, "fp", settings["utls_fingerprint"])
+	if settingEnabled(settings, "insecure") {
+		q.Set("insecure", "1")
+	}
+	return q
 }
 
 func httpStyleShareLink(node config.Node) (string, error) {

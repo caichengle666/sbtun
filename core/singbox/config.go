@@ -1,6 +1,7 @@
 package singbox
 
 import (
+	"encoding/base64"
 	"encoding/json"
 	"fmt"
 	"os"
@@ -17,6 +18,7 @@ type RuntimeConfig struct {
 	DNS          map[string]any   `json:"dns,omitempty"`
 	Inbounds     []map[string]any `json:"inbounds,omitempty"`
 	Outbounds    []map[string]any `json:"outbounds,omitempty"`
+	Endpoints    []map[string]any `json:"endpoints,omitempty"`
 	Route        map[string]any   `json:"route,omitempty"`
 	Experimental map[string]any   `json:"experimental,omitempty"`
 }
@@ -49,7 +51,8 @@ func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth) ([]by
 		return nil, err
 	}
 
-	outbounds := append(proxy, map[string]any{"type": "direct", "tag": "direct", "domain_resolver": "dns-local"}, map[string]any{"type": "block", "tag": "block"})
+	outbounds, endpoints := splitEndpoints(proxy)
+	outbounds = append(outbounds, map[string]any{"type": "direct", "tag": "direct", "domain_resolver": "dns-local"}, map[string]any{"type": "block", "tag": "block"})
 	if cfg.CaptureEnabled && len(normalizeCaptureDomains(cfg.CaptureDomains)) > 0 {
 		captureOutbound := map[string]any{
 			"type": "http", "tag": "capture", "server": "127.0.0.1", "server_port": captureProxyPort,
@@ -85,6 +88,7 @@ func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth) ([]by
 		DNS:       buildDNS(cfg.DNSMode, cfg.RoutingMode),
 		Inbounds:  inbounds,
 		Outbounds: outbounds,
+		Endpoints: endpoints,
 		Route:     routeForMode(cfg.RoutingMode, cfg.CustomRules, cfg.DNSFilterRules, cfg.CaptureEnabled, cfg.CaptureDomains, exeDir),
 		Experimental: map[string]any{
 			"cache_file": map[string]any{"enabled": true},
@@ -376,8 +380,14 @@ func parsePort(s string) int {
 
 func buildOutbound(n config.Node) (map[string]any, error) {
 	protocol := strings.ToLower(strings.TrimSpace(n.Protocol))
-	if protocol == "hysteria2" {
+	switch protocol {
+	case "hysteria2":
 		return buildHysteria2(map[string]any{"tag": "proxy"}, n), nil
+	case "wireguard":
+		return buildWireGuard(n)
+	case "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "tuic", "anytls":
+	default:
+		return nil, fmt.Errorf("暂不支持的节点协议: %s", n.Protocol)
 	}
 	out := map[string]any{"type": protocol, "tag": "proxy", "server": n.Server, "server_port": n.Port, "domain_resolver": "dns-local"}
 	for k, v := range n.Settings {
@@ -386,13 +396,106 @@ func buildOutbound(n config.Node) (map[string]any, error) {
 		}
 		addSetting(out, k, v)
 	}
-	addTransport(out, n.Settings)
-	switch protocol {
-	case "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "hysteria2":
+	if protocol == "tuic" || protocol == "anytls" {
+		// 这两个协议的 TLS 是必填项，分享链接通常不单独写 tls=1。
+		tls, _ := out["tls"].(map[string]any)
+		if tls == nil {
+			tls = map[string]any{}
+			out["tls"] = tls
+		}
+		tls["enabled"] = true
+		if tls["server_name"] == nil {
+			tls["server_name"] = n.Server
+		}
+		if protocol == "tuic" && tls["alpn"] == nil {
+			tls["alpn"] = []string{"h3"}
+		}
 		return out, nil
-	default:
-		return nil, fmt.Errorf("暂不支持的节点协议: %s", n.Protocol)
 	}
+	addTransport(out, n.Settings)
+	return out, nil
+}
+
+// buildWireGuard 生成 sing-box 1.11+ 的 WireGuard endpoint（旧的 wireguard 出站已废弃）。
+func buildWireGuard(n config.Node) (map[string]any, error) {
+	settings := n.Settings
+	addresses := splitList(settings["local_address"])
+	if settings["private_key"] == "" || settings["public_key"] == "" || len(addresses) == 0 {
+		return nil, fmt.Errorf("WireGuard 节点缺少私钥、对端公钥或本机地址")
+	}
+	for i, address := range addresses {
+		if !strings.Contains(address, "/") {
+			if strings.Contains(address, ":") {
+				addresses[i] = address + "/128"
+			} else {
+				addresses[i] = address + "/32"
+			}
+		}
+	}
+	allowed := splitList(settings["allowed_ips"])
+	if len(allowed) == 0 {
+		allowed = []string{"0.0.0.0/0", "::/0"}
+	}
+	peer := map[string]any{
+		"address": n.Server, "port": n.Port,
+		"public_key": settings["public_key"], "allowed_ips": allowed,
+	}
+	if v := settings["pre_shared_key"]; v != "" {
+		peer["pre_shared_key"] = v
+	}
+	if v := settings["reserved"]; v != "" {
+		reserved, err := parseWireGuardReserved(v)
+		if err != nil {
+			return nil, err
+		}
+		peer["reserved"] = reserved
+	}
+	out := map[string]any{
+		"type": "wireguard", "tag": "proxy",
+		"address": addresses, "private_key": settings["private_key"],
+		"peers": []map[string]any{peer}, "domain_resolver": "dns-local",
+	}
+	if v, err := strconv.Atoi(settings["mtu"]); err == nil && v > 0 {
+		out["mtu"] = v
+	}
+	return out, nil
+}
+
+// parseWireGuardReserved 接受 "1,2,3" 或 Clash 常见的 base64 写法（如 "AQID"）。
+func parseWireGuardReserved(value string) ([]int, error) {
+	parts := splitList(value)
+	reserved := make([]int, 0, 3)
+	if len(parts) == 1 {
+		if raw, err := base64.StdEncoding.DecodeString(parts[0]); err == nil && len(raw) == 3 {
+			for _, b := range raw {
+				reserved = append(reserved, int(b))
+			}
+			return reserved, nil
+		}
+	}
+	for _, part := range parts {
+		b, err := strconv.Atoi(part)
+		if err != nil || b < 0 || b > 255 {
+			return nil, fmt.Errorf("WireGuard reserved 无效: %s", value)
+		}
+		reserved = append(reserved, b)
+	}
+	if len(reserved) != 3 {
+		return nil, fmt.Errorf("WireGuard reserved 必须是 3 个字节: %s", value)
+	}
+	return reserved, nil
+}
+
+// splitEndpoints 把 WireGuard 这类 endpoint 从出站列表中拆出来，selector 仍可按 tag 引用它们。
+func splitEndpoints(items []map[string]any) (outbounds, endpoints []map[string]any) {
+	for _, item := range items {
+		if item["type"] == "wireguard" {
+			endpoints = append(endpoints, item)
+		} else {
+			outbounds = append(outbounds, item)
+		}
+	}
+	return outbounds, endpoints
 }
 
 func buildHysteria2(out map[string]any, n config.Node) map[string]any {
@@ -452,7 +555,7 @@ func parseBandwidth(s string) int {
 
 func addSetting(out map[string]any, key, value string) {
 	switch key {
-	case "uuid", "password", "method", "flow", "security", "network", "username", "version", "packet_encoding", "plugin", "plugin_opts", "path":
+	case "uuid", "password", "method", "flow", "security", "network", "username", "version", "packet_encoding", "plugin", "plugin_opts", "path", "congestion_control", "udp_relay_mode":
 		out[key] = value
 	case "alter_id":
 		if v, err := strconv.Atoi(value); err == nil {

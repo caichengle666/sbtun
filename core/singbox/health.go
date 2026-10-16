@@ -12,6 +12,7 @@ func BuildHealthConfig(node config.Node, listenPort int) ([]byte, error) {
 	if err != nil {
 		return nil, err
 	}
+	outbounds, endpoints := splitEndpoints([]map[string]any{proxy})
 	result := map[string]any{
 		"log": map[string]any{"level": "error", "timestamp": true},
 		"dns": healthDNSConfig(),
@@ -19,8 +20,11 @@ func BuildHealthConfig(node config.Node, listenPort int) ([]byte, error) {
 			"type": "mixed", "tag": "health-in",
 			"listen": "127.0.0.1", "listen_port": listenPort,
 		}},
-		"outbounds": []map[string]any{proxy, {"type": "direct", "tag": "direct"}, {"type": "block", "tag": "block"}},
+		"outbounds": append(outbounds, map[string]any{"type": "direct", "tag": "direct"}, map[string]any{"type": "block", "tag": "block"}),
 		"route":     map[string]any{"final": "proxy"},
+	}
+	if len(endpoints) > 0 {
+		result["endpoints"] = endpoints
 	}
 	return json.MarshalIndent(result, "", "  ")
 }
