@@ -199,6 +199,8 @@ jobs:
           gh release view $tag *> $null
           if ($LASTEXITCODE -ne 0) {
             gh release create $tag "dist\sbtun-windows-$env:TARGET_ARCH.zip" --title "sbtun $tag" --generate-notes
+            # Builds run in parallel; if another workflow created the release first, upload instead.
+            if ($LASTEXITCODE -ne 0) { gh release upload $tag "dist\sbtun-windows-$env:TARGET_ARCH.zip" --clobber }
           } else {
             gh release upload $tag "dist\sbtun-windows-$env:TARGET_ARCH.zip" --clobber
           }

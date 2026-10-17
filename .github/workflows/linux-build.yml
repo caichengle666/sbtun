@@ -178,5 +178,6 @@ jobs:
           if gh release view "$tag" >/dev/null 2>&1; then
             gh release upload "$tag" dist/sbtun-linux-amd64.tar.gz --clobber
           else
-            gh release create "$tag" dist/sbtun-linux-amd64.tar.gz --title "sbtun $tag" --generate-notes
+            # Builds run in parallel; if another workflow created the release first, upload instead.
+            gh release create "$tag" dist/sbtun-linux-amd64.tar.gz --title "sbtun $tag" --generate-notes || gh release upload "$tag" dist/sbtun-linux-amd64.tar.gz --clobber
           fi
