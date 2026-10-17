@@ -1,4 +1,4 @@
-﻿
+
 import './style.css'
 
 const app = document.querySelector('#app')
@@ -7,6 +7,8 @@ const savedView = localStorage.getItem('sbtun-ui-view')
 const initialView = ['overview', 'nodes', 'routing', 'rules', 'capture'].includes(savedView) ? savedView : 'overview'
 const savedNodeFilter = localStorage.getItem('sbtun-ui-node-filter') || 'all'
 const NODE_PROTOCOLS = [['hysteria2', 'Hysteria2'], ['vless', 'VLESS'], ['vmess', 'VMess'], ['trojan', 'Trojan'], ['shadowsocks', 'Shadowsocks'], ['tuic', 'TUIC'], ['anytls', 'AnyTLS'], ['wireguard', 'WireGuard'], ['socks', 'SOCKS'], ['http', 'HTTP']]
+const TRAFFIC_SLOTS = 30
+const NODE_TEST_CONCURRENCY = 4
 const validNodeFilters = ['all', ...NODE_PROTOCOLS.map(([id]) => id)]
 
 const state = {
@@ -39,12 +41,16 @@ const state = {
   dnsFilterFormOpen: false,
   nodeSwitching: false,
   subUpdating: '',
-  nodeHealth: {},
+  nodeHealth: loadNodeHealth(),
   selectedNodes: new Set(),
   batchTesting: false,
   nodeFilter: validNodeFilters.includes(savedNodeFilter) ? savedNodeFilter : 'all',
   nodeSearch: localStorage.getItem('sbtun-ui-node-search') || '',
-  nodeFormOpen: localStorage.getItem('sbtun-ui-node-form-open') === 'true',
+  nodeFormOpen: false,
+  nodeFormTab: 'link',
+  nodeGroupBy: localStorage.getItem('sbtun-ui-node-group') === 'subscription' ? 'subscription' : 'protocol',
+  nodeSort: localStorage.getItem('sbtun-ui-node-sort') === 'latency' ? 'latency' : 'default',
+  nodeTesting: new Set(),
   rulesTab: localStorage.getItem('sbtun-ui-rules-tab') === 'manual' ? 'manual' : 'sets',
   traffic: { up: 0, down: 0 },
   trafficHistory: [],
@@ -69,6 +75,15 @@ const state = {
   view: initialView,
   statusRefreshing: false,
   configRefreshing: false,
+}
+
+const svgIcon = body => `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`
+const NAV_ICONS = {
+  overview: svgIcon('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
+  nodes: svgIcon('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'),
+  routing: svgIcon('<circle cx="6" cy="6" r="2.5"/><circle cx="6" cy="18" r="2.5"/><circle cx="18" cy="12" r="2.5"/><path d="M6 8.5v7M8.3 7.2 15.7 11M8.3 16.8l7.4-3.8"/>'),
+  rules: svgIcon('<path d="M4 6h16M7 12h10M10 18h4"/>'),
+  capture: svgIcon('<path d="M3 12h4l3-8 4 16 3-8h4"/>'),
 }
 
 const MODES = [
@@ -205,7 +220,7 @@ function render() {
   return `
     <main class="shell">
       <aside class="sidebar">
-        <div class="brand"><span class="brand-mark">s</span><span>sbtun</span></div>
+        <div class="brand"><span class="brand-mark">s</span><span class="brand-name">sbtun</span></div>
         <div class="nav-caption">工作区</div>
         <nav class="nav-list">
           ${[
@@ -214,10 +229,10 @@ function render() {
             ['routing', '路由模式'],
             ['rules', '分流规则'],
             ['capture', '流量分析'],
-          ].map(([id, label], index) => `<button class="nav-item ${state.view === id ? 'active' : ''}" data-view="${id}"><span class="nav-code">${String(index + 1).padStart(2, '0')}</span><span>${label}</span></button>`).join('')}
+          ].map(([id, label]) => `<button class="nav-item ${state.view === id ? 'active' : ''}" data-view="${id}" title="${label}"><span class="nav-icon" aria-hidden="true">${NAV_ICONS[id]}</span><span class="nav-label">${label}</span></button>`).join('')}
         </nav>
         <div class="sidebar-status">
-          <div class="sidebar-status-line"><span class="dot ${dotClass(state.statusState)}"></span><span>${statusLabel(state.statusState, state.statusMessage)}</span></div>
+          <div class="sidebar-status-line" title="${escapeHtml(statusLabel(state.statusState, state.statusMessage))}"><span class="dot ${dotClass(state.statusState)}"></span><span>${statusLabel(state.statusState, state.statusMessage)}</span></div>
           <div class="sidebar-versions">
             ${state.version ? `<span class="app-version" title="管理器版本 v${escapeHtml(state.version)}">程序 v${escapeHtml(state.version)}</span>` : ''}
             <span class="app-version" title="sing-box 内核版本 ${state.singBoxVersion ? 'v' + escapeHtml(state.singBoxVersion) : '读取中'}">内核 ${state.singBoxVersion ? 'v' + escapeHtml(state.singBoxVersion) : '--'}</span>
@@ -247,6 +262,7 @@ function render() {
         ${renderView()}
       </section>
     </main>
+    ${renderNodeModal()}
     ${renderCaptureBodyModal()}
     <div id="toast" class="toast" style="display:none"></div>
   `
@@ -273,6 +289,10 @@ function resetManualForm() {
   state.manualProtocol = 'vless'
 }
 
+function selectedNodeIDs() {
+  return [...state.selectedNodes].filter(id => state.config?.nodes?.some(n => n.id === id))
+}
+
 function visibleNodeIDs() {
   const query = state.nodeSearch.trim().toLowerCase()
   return (state.config?.nodes || [])
@@ -289,51 +309,77 @@ function renderView() {
 }
 
 function renderOverview() {
-  const current = state.config?.nodes?.find(n => n.id === activeNodeID())
+  const nodes = state.config?.nodes || []
+  const current = nodes.find(n => n.id === activeNodeID())
   const mode = MODES.find(item => item.id === state.config?.routing_mode)
   const rules = state.rules || []
   const enabledRules = rules.filter(rule => rule.enabled).length
-  return `<div class="overview-heading"><div><h2>网络运行概览</h2><p class="muted">当前连接与流量状态</p></div><span class="badge ${state.running ? 'direct' : ''}">${state.running ? '服务运行中' : '服务已停止'}</span></div>
-    <div class="overview-grid">
+  const testing = current && state.nodeTesting.has(current.id)
+  return `<div class="overview-grid">
       <section class="card focus-card overview-node-panel">
         <div class="focus-card-main">
           <div class="section-kicker"><i class="dot ${state.running ? 'running' : ''}"></i>${state.running ? '当前代理节点' : '当前节点'}</div>
-          <h2>${escapeHtml(current?.name || '未选择节点')}</h2>
-          <p class="muted">${current ? escapeHtml(current.server) + ':' + current.port : '请先在节点页导入或添加节点'}</p>
-          ${current ? `<div class="overview-tags"><span class="badge proxy">${escapeHtml(current.protocol || '节点')}</span>${renderNodeHealth(current.id)}</div>` : '<div class="empty">暂无健康检测结果</div>'}
+          <h2 class="overview-node-name" title="${escapeHtml(current?.name || '')}">${escapeHtml(current?.name || '未选择节点')}</h2>
+          <p class="muted overview-node-server">${current ? escapeHtml(current.server) + ':' + current.port : '请先在节点页导入或添加节点'}</p>
+          ${current ? `<div class="overview-tags"><span class="badge proxy">${escapeHtml(protocolLabel(current.protocol))}</span>${renderLatency(current.id)}</div>` : ''}
+        </div>
+        <div class="overview-node-side">
+          <label class="overview-switch-label" for="quickNodeSelect">快速切换</label>
+          <select id="quickNodeSelect" class="select" ${nodes.length && !state.nodeSwitching ? '' : 'disabled'}>${current ? '' : '<option value="">选择节点</option>'}${renderNodeOptions(nodes, current?.id)}</select>
+          <button class="btn btn-ghost" id="testCurrentNode" ${current && !testing ? '' : 'disabled'}>${testing ? '测试中…' : '测试延迟'}</button>
         </div>
       </section>
-      <section class="card overview-route-panel"><span class="section-kicker">当前路由</span><strong>${escapeHtml(mode?.name || '未设置')}</strong><div class="route-line"><span>路由策略</span><b>${escapeHtml(mode?.desc || '请先选择路由模式')}</b></div><div class="route-line"><span>IPv6</span><b class="${state.config?.ipv6_enabled ? 'good' : ''}">${state.config?.ipv6_enabled ? '已启用' : '未启用'}</b></div></section>
+      <section class="card overview-route-panel"><span class="section-kicker">当前路由</span><strong>${escapeHtml(mode?.name || '未设置')}</strong><div class="route-line"><span>路由策略</span><b>${escapeHtml(mode?.desc || '请先选择路由模式')}</b></div><div class="route-line"><span>IPv6</span><b class="${state.config?.ipv6_enabled ? 'good' : ''}">${state.config?.ipv6_enabled ? '已启用' : '未启用'}</b></div><button class="btn btn-ghost overview-route-btn" data-view="routing">更改路由模式</button></section>
       <section class="card traffic-panel"><div class="section-heading"><h2>实时流量</h2><span class="muted">最近 60 秒</span></div><div class="traffic-numbers"><span>上行<strong id="trafficUp">${formatBytes(state.traffic.up)}/s</strong></span><span>下行<strong id="trafficDown">${formatBytes(state.traffic.down)}/s</strong></span></div><div class="traffic-chart" id="trafficChart" role="img" aria-label="最近 60 秒实时流量">${renderTrafficChart()}</div><div class="traffic-chart-label"><span>60 秒前</span><span>现在</span></div></section>
     </div>
-    <div class="overview-quick"><button data-view="nodes"><span>可用节点</span><strong>${(state.config?.nodes || []).length} 个　›</strong></button><button data-view="rules"><span>规则集</span><strong>已启用 ${enabledRules} / ${rules.length}　›</strong></button><button data-view="capture"><span>流量分析</span><strong>${state.captureStatus?.running ? '分析器运行中' : '分析器已停止'}　›</strong></button></div>`
+    <div class="overview-quick"><button data-view="nodes"><span>可用节点</span><strong>${nodes.length} 个　›</strong></button><button data-view="rules"><span>规则集</span><strong>已启用 ${enabledRules} / ${rules.length}　›</strong></button><button data-view="capture"><span>流量分析</span><strong>${state.captureStatus?.running ? '分析器运行中' : '分析器已停止'}　›</strong></button></div>`
+}
+
+function renderNodeOptions(nodes, selectedID) {
+  const groups = nodeGroups(nodes, 'subscription')
+  return groups.map(group => `<optgroup label="${escapeHtml(group.label)}">${group.nodes.map(n => `<option value="${n.id}" ${n.id === selectedID ? 'selected' : ''}>${escapeHtml(n.name)}</option>`).join('')}</optgroup>`).join('')
 }
 
 function renderTrafficChart() {
-  const samples = state.trafficHistory.slice(-30)
+  const samples = state.trafficHistory.slice(-TRAFFIC_SLOTS)
   if (!samples.length) return '<span class="traffic-chart-empty">等待状态数据</span>'
   const max = Math.max(1, ...samples.flatMap(sample => [sample.up, sample.down]))
-  return samples.map(sample => `<span class="traffic-bar-pair" title="↑ ${formatBytes(sample.up)}/s · ↓ ${formatBytes(sample.down)}/s"><i style="height:${Math.max(2, sample.up / max * 100)}%"></i><i style="height:${Math.max(2, sample.down / max * 100)}%"></i></span>`).join('')
+  const empty = '<span class="traffic-bar-pair empty"></span>'.repeat(TRAFFIC_SLOTS - samples.length)
+  return empty + samples.map(sample => `<span class="traffic-bar-pair" title="↑ ${formatBytes(sample.up)}/s · ↓ ${formatBytes(sample.down)}/s"><i style="height:${Math.max(2, sample.up / max * 100)}%"></i><i style="height:${Math.max(2, sample.down / max * 100)}%"></i></span>`).join('')
 }
 
 function renderNodesPage() {
   const nodes = state.config?.nodes || []
   const visibleIDs = visibleNodeIDs()
   const allSelected = visibleIDs.length > 0 && visibleIDs.every(id => state.selectedNodes.has(id))
+  const selected = selectedNodeIDs().length
+  const subtitle = selected ? `已选 ${selected} 个 · 共 ${nodes.length} 个节点` : `${nodes.length} 个节点 · 点击节点即可切换`
   return `<section class="page-stack">
-      <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">${nodes.length} 个节点 · 选择节点后可批量测试、导出或删除。</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="toggleSelectNodes" ${visibleIDs.length ? '' : 'disabled'}>${allSelected ? '反选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes" ${state.batchTesting ? 'disabled' : ''}>${state.batchTesting ? '测试中' : '批量测试'}</button><button class="btn btn-ghost" id="batchExportNodes">批量导出</button><button class="btn btn-danger" id="batchDeleteNodes">批量删除</button><button class="btn btn-primary" id="toggleNodeForm">${state.editingNodeId ? '取消编辑' : state.nodeFormOpen ? '收起添加' : '导入 / 添加'}</button></span></div>
+      <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">${subtitle}</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="toggleSelectNodes" ${visibleIDs.length ? '' : 'disabled'}>${allSelected ? '取消全选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes" ${state.batchTesting || !visibleIDs.length ? 'disabled' : ''}>${state.batchTesting ? '测试中…' : selected ? '测试选中' : '测试全部'}</button><button class="btn btn-ghost" id="batchExportNodes" ${selected ? '' : 'disabled'}>导出选中</button><button class="btn btn-danger" id="batchDeleteNodes" ${selected ? '' : 'disabled'}>删除选中</button><button class="btn btn-primary" id="toggleNodeForm">导入 / 添加</button></span></div>
       ${renderSubscriptions()}
       <div id="nodePanel">${renderNodes()}</div>
-    ${state.nodeFormOpen || state.editingNodeId ? `<div class="card node-import" id="node-import"><h2>${state.editingNodeId ? '编辑节点全部参数' : '添加节点'}</h2>
-      ${state.editingNodeId ? '' : `<div class="row"><input id="nodeUrl" class="input" value="${escapeHtml(state.manualForm.url)}" placeholder="节点链接 vless:// ss:// hy2:// tuic:// anytls:// wg:// 或订阅地址" /><button id="importBtn" class="btn btn-primary">导入</button></div>`}
-      <div class="row"><select id="nodeProtocol" class="select">${NODE_PROTOCOLS.map(([id, label]) => `<option value="${id}" ${state.manualProtocol === id ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
+  </section>`
+}
+
+function renderNodeModal() {
+  if (!state.nodeFormOpen && !state.editingNodeId) return ''
+  const editing = Boolean(state.editingNodeId)
+  const tab = editing ? 'manual' : state.nodeFormTab
+  const body = tab === 'link'
+    ? `<p class="muted modal-hint">粘贴节点分享链接（vless:// vmess:// trojan:// ss:// hy2:// tuic:// anytls:// wg:// 等，可多行，一行一个），或订阅地址（支持 Base64、Clash YAML、sing-box JSON）。</p>
+      <textarea id="nodeUrl" class="input node-url-input" rows="6" placeholder="每行一个链接或订阅地址">${escapeHtml(state.manualForm.url)}</textarea>`
+    : `<div class="row"><select id="nodeProtocol" class="select">${NODE_PROTOCOLS.map(([id, label]) => `<option value="${id}" ${state.manualProtocol === id ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
       <div class="row"><input id="nodeName" class="input" value="${escapeHtml(state.manualForm.name)}" placeholder="节点名称" /></div>
       <div class="row"><input id="nodeServer" class="input" value="${escapeHtml(state.manualForm.server)}" placeholder="服务器地址" /><input id="nodePort" class="input port-input" value="${escapeHtml(state.manualForm.port)}" placeholder="端口" /></div>
-      ${renderManualAdvancedFields()}
-      <button id="addNodeBtn" class="btn btn-ghost">${state.editingNodeId ? '保存节点修改' : '手动添加节点'}</button>
-      ${state.editingNodeId ? '<button id="cancelEditNode" class="btn btn-ghost">取消编辑</button>' : ''}
-    </div>` : ''}
-  </section>`
+      ${renderManualAdvancedFields()}`
+  return `<div class="modal" id="nodeModal" role="dialog" aria-modal="true" aria-labelledby="nodeModalTitle"><div class="modal-backdrop" data-close-node-modal></div>
+    <section class="modal-panel node-modal" id="node-import">
+      <header class="modal-header"><h2 id="nodeModalTitle">${editing ? '编辑节点' : '添加节点'}</h2><button class="icon-btn" data-close-node-modal aria-label="关闭" title="关闭">×</button></header>
+      ${editing ? '' : `<div class="modal-tabs" role="tablist"><button class="modal-tab ${tab === 'link' ? 'active' : ''}" data-node-form-tab="link" role="tab">粘贴链接导入</button><button class="modal-tab ${tab === 'manual' ? 'active' : ''}" data-node-form-tab="manual" role="tab">手动填写</button></div>`}
+      <div class="modal-body">${body}</div>
+      <footer class="modal-footer"><button class="btn btn-ghost" data-close-node-modal>取消</button>${tab === 'link' ? '<button id="importBtn" class="btn btn-primary">导入</button>' : `<button id="addNodeBtn" class="btn btn-primary">${editing ? '保存修改' : '添加节点'}</button>`}</footer>
+    </section>
+  </div>`
 }
 
 function renderSubscriptions() {
@@ -668,64 +714,164 @@ function renderNodes() {
   const allNodes = state.config?.nodes || []
   const currentNodeID = activeNodeID()
   const filterBtns = [['all', '全部'], ...NODE_PROTOCOLS.map(([id, label]) => [id, id === 'shadowsocks' ? 'SS' : label])]
-  const filterHtml = `<div class="node-tools"><input id="nodeSearch" class="input" value="${escapeHtml(state.nodeSearch)}" placeholder="搜索名称、服务器或协议" aria-label="搜索节点"><div class="node-filters">${filterBtns.map(([id, label]) => {
+  const toolsHtml = `<div class="node-tools">
+      <div class="node-tools-row"><input id="nodeSearch" class="input" value="${escapeHtml(state.nodeSearch)}" placeholder="搜索名称、服务器或协议" aria-label="搜索节点">
+        <select id="nodeGroupBy" class="select node-tool-select" aria-label="分组方式"><option value="protocol" ${state.nodeGroupBy === 'protocol' ? 'selected' : ''}>按协议分组</option><option value="subscription" ${state.nodeGroupBy === 'subscription' ? 'selected' : ''}>按订阅分组</option></select>
+        <select id="nodeSort" class="select node-tool-select" aria-label="排序方式"><option value="default" ${state.nodeSort === 'default' ? 'selected' : ''}>默认顺序</option><option value="latency" ${state.nodeSort === 'latency' ? 'selected' : ''}>延迟从低到高</option></select></div>
+      <div class="node-filters">${filterBtns.map(([id, label]) => {
     const count = id === 'all' ? allNodes.length : allNodes.filter(n => n.protocol === id).length
     if (!count && id !== 'all' && state.nodeFilter !== id) return ''
     return `<button class="filter-btn ${state.nodeFilter === id ? 'active' : ''}" data-filter="${id}">${label} (${count})</button>`
   }).join('')}</div></div>`
-  const query = state.nodeSearch.trim().toLowerCase()
-  const filtered = allNodes.filter(n => (state.nodeFilter === 'all' || n.protocol === state.nodeFilter) && (!query || `${n.name} ${n.server} ${n.port} ${n.protocol}`.toLowerCase().includes(query)))
-  if (!filtered.length) return filterHtml + '<div class="empty">没有匹配的节点</div>'
-  const groups = {}
-  for (const n of filtered) {
-    const key = n.protocol || 'unknown'
-    if (!groups[key]) groups[key] = []
-    groups[key].push(n)
-  }
-  const protocolOrder = [...NODE_PROTOCOLS.map(([id]) => id), 'unknown']
-  const sortedKeys = Object.keys(groups).sort((a, b) => {
-    const ai = protocolOrder.indexOf(a)
-    const bi = protocolOrder.indexOf(b)
-    return (ai === -1 ? 99 : ai) - (bi === -1 ? 99 : bi)
-  })
-  const groupsHtml = sortedKeys.map(protocol => {
-    const nodes = groups[protocol]
-    const items = nodes.map(n => `
-      <li class="node-item ${currentNodeID === n.id ? 'active' : ''}">
+  const visible = new Set(visibleNodeIDs())
+  const filtered = allNodes.filter(n => visible.has(n.id))
+  if (!allNodes.length) return toolsHtml + '<div class="empty">还没有节点，点右上角“导入 / 添加”</div>'
+  if (!filtered.length) return toolsHtml + '<div class="empty">没有匹配的节点</div>'
+  const bySubscription = state.nodeGroupBy === 'subscription'
+  const row = n => {
+    const current = currentNodeID === n.id
+    const testing = state.nodeTesting.has(n.id)
+    return `<li class="node-item ${current ? 'active' : ''} ${state.nodeSwitching ? 'busy' : ''}" data-node-id="${n.id}" tabindex="0" title="${current ? '当前节点' : '点击切换到此节点'}">
         <input class="node-select" type="checkbox" data-id="${n.id}" ${state.selectedNodes.has(n.id) ? 'checked' : ''} aria-label="选择 ${escapeHtml(n.name)}" />
         <div class="node-info">
-          <div class="node-row">
-            <span class="node-name" title="${escapeHtml(n.name)}">${escapeHtml(n.name)}</span>
-            <span class="node-server" title="${escapeHtml(n.server)}:${n.port}">${escapeHtml(n.server)}:${n.port}</span>
-          </div>
-          <div class="node-health-row">${renderNodeHealth(n.id)}</div>
+          <div class="node-row"><span class="node-name">${escapeHtml(n.name)}</span>${current ? '<span class="node-current-tag">当前</span>' : ''}</div>
+          <div class="node-meta">${bySubscription ? `<span class="node-proto">${escapeHtml(protocolLabel(n.protocol))}</span>` : ''}<span class="node-server">${escapeHtml(n.server)}:${n.port}</span></div>
         </div>
+        ${renderLatency(n.id)}
         <div class="node-actions">
-          <button class="btn btn-ghost select-node" data-id="${n.id}" ${state.nodeSwitching ? 'disabled' : ''}>${currentNodeID === n.id ? '当前' : '选择'}</button>
-          <button class="btn btn-ghost test-node" data-id="${n.id}">测试</button>
-          <button class="btn btn-ghost export-node" data-id="${n.id}">导出</button>
-          <button class="btn btn-danger rm-node" data-id="${n.id}">删除</button>
-          <button class="btn btn-ghost edit-node" data-id="${n.id}">编辑</button>
+          <button class="btn btn-ghost test-node" data-id="${n.id}" ${testing ? 'disabled' : ''}>测试</button>
+          <details class="rule-menu node-menu" data-rule-menu-id="node-${n.id}"><summary aria-label="节点操作" title="更多操作">⋯</summary><div class="rule-menu-list"><button class="rule-menu-action edit-node" data-id="${n.id}">编辑</button><button class="rule-menu-action export-node" data-id="${n.id}">复制分享链接</button><button class="rule-menu-action danger rm-node" data-id="${n.id}">删除</button></div></details>
         </div>
-      </li>`).join('')
-    return `<div class="node-group"><div class="node-group-header"><span class="badge ${protocol === 'direct' ? 'direct' : 'proxy'}">${protocol.toUpperCase()}</span><span class="node-group-count">${nodes.length} 个</span></div><ul class="node-list">${items}</ul></div>`
+      </li>`
+  }
+  const groupsHtml = nodeGroups(filtered, state.nodeGroupBy).map(group => {
+    const nodes = state.nodeSort === 'latency' ? [...group.nodes].sort((a, b) => latencySortValue(a.id) - latencySortValue(b.id)) : group.nodes
+    return `<div class="node-group"><div class="node-group-header"><span class="badge proxy" title="${escapeHtml(group.label)}">${escapeHtml(group.label)}</span><span class="node-group-count">${nodes.length} 个</span></div><ul class="node-list">${nodes.map(row).join('')}</ul></div>`
   }).join('')
-  return filterHtml + groupsHtml
+  return toolsHtml + groupsHtml
 }
 
-function renderNodeHealth(id) {
+function protocolLabel(protocol) {
+  return NODE_PROTOCOLS.find(([id]) => id === protocol)?.[1] || String(protocol || '未知').toUpperCase()
+}
+
+// nodeGroups keeps protocol groups in NODE_PROTOCOLS order and subscription
+// groups in subscription order, with manually added nodes last.
+function nodeGroups(nodes, groupBy) {
+  const subs = state.config?.subscriptions || []
+  const keyOf = n => groupBy === 'subscription' ? (n.subscription || '') : (n.protocol || 'unknown')
+  const order = groupBy === 'subscription' ? [...subs.map(s => s.id), ''] : NODE_PROTOCOLS.map(([id]) => id)
+  const labelOf = key => groupBy === 'subscription'
+    ? (key ? subs.find(s => s.id === key)?.name || '已删除的订阅' : '手动添加')
+    : protocolLabel(key)
+  const groups = new Map()
+  for (const n of nodes) {
+    const key = keyOf(n)
+    if (!groups.has(key)) groups.set(key, [])
+    groups.get(key).push(n)
+  }
+  const rank = key => { const i = order.indexOf(key); return i === -1 ? order.length : i }
+  return [...groups.entries()].sort((a, b) => rank(a[0]) - rank(b[0])).map(([key, list]) => ({ key, label: labelOf(key), nodes: list }))
+}
+
+function loadNodeHealth() {
+  try {
+    const saved = JSON.parse(localStorage.getItem('sbtun-ui-node-health') || '{}')
+    return saved && typeof saved === 'object' ? saved : {}
+  } catch {
+    return {}
+  }
+}
+
+function saveNodeHealth() {
+  const ids = new Set((state.config?.nodes || []).map(n => n.id))
+  if (state.config) {
+    for (const id of Object.keys(state.nodeHealth)) if (!ids.has(id)) delete state.nodeHealth[id]
+  }
+  localStorage.setItem('sbtun-ui-node-health', JSON.stringify(state.nodeHealth))
+}
+
+// nodeLatency prefers the proxied URL delay; without one (no kernel to run a
+// URL test) it falls back to the TCP handshake time.
+function nodeLatency(id) {
+  const health = state.nodeHealth[id]
+  if (!health) return null
+  if (health.url?.ok) return { ok: true, ms: health.url.latency_ms || 0, label: 'URL 延迟' }
+  if (!health.url?.message && health.port?.ok) return { ok: true, ms: health.transport === 'udp' ? 0 : health.port.latency_ms || 0, label: health.transport === 'udp' ? 'UDP 可发送' : 'TCPing' }
+  return { ok: false, ms: 0, label: health.message || '不可用' }
+}
+
+function healthDetail(id) {
   const health = state.nodeHealth[id]
   if (!health) return ''
-  const check = (label, result) => {
-    const suffix = result?.latency_ms ? ` · ${result.latency_ms} ms` : ''
-    return `<span class="health-check ${result?.ok ? 'ok' : 'bad'}">${label}: ${escapeHtml(result?.message || '未测试')}${suffix}</span>`
-  }
-  return `<span class="node-health">
-    ${check('Ping', health.ping)}
-    ${check(health.transport === 'udp' ? 'UDP' : 'TCPing', health.port)}
-    ${check('URL', health.url)}
-  </span>`
+  const line = (label, result) => result?.message ? `${label}：${result.message}${result.latency_ms ? ` (${result.latency_ms} ms)` : ''}` : ''
+  return [line('Ping', health.ping), line(health.transport === 'udp' ? 'UDP' : 'TCPing', health.port), line('URL', health.url)].filter(Boolean).join('\n') || health.message || ''
 }
+
+function renderLatency(id) {
+  if (state.nodeTesting.has(id)) return '<span class="latency testing">测试中</span>'
+  const latency = nodeLatency(id)
+  if (!latency) return '<span class="latency none">未测试</span>'
+  const title = escapeHtml(healthDetail(id))
+  if (!latency.ok) return `<span class="latency bad" title="${title}">不可用</span>`
+  if (!latency.ms) return `<span class="latency good" title="${title}">可用</span>`
+  const level = latency.ms < 300 ? 'good' : latency.ms < 800 ? 'mid' : 'bad'
+  return `<span class="latency ${level}" title="${title}">${latency.ms} ms</span>`
+}
+
+function latencySortValue(id) {
+  const latency = nodeLatency(id)
+  if (!latency) return Number.MAX_SAFE_INTEGER
+  if (!latency.ok) return Number.MAX_SAFE_INTEGER - 1
+  return latency.ms || 1
+}
+
+async function testNodes(ids) {
+  const queue = ids.filter(id => !state.nodeTesting.has(id))
+  if (!queue.length) return
+  queue.forEach(id => state.nodeTesting.add(id))
+  renderApp()
+  const worker = async () => {
+    while (queue.length) {
+      const id = queue.shift()
+      try {
+        state.nodeHealth[id] = await window.go.app.App.TestNode(id)
+      } catch (e) {
+        state.nodeHealth[id] = { node_id: id, healthy: false, message: e.message || String(e) }
+      }
+      state.nodeTesting.delete(id)
+      saveNodeHealth()
+      renderApp()
+    }
+  }
+  await Promise.all(Array.from({ length: Math.min(NODE_TEST_CONCURRENCY, queue.length) }, worker))
+}
+
+async function selectNode(id) {
+  if (!id || state.nodeSwitching || id === activeNodeID()) return
+  state.nodeSwitching = true
+  renderApp()
+  try {
+    await window.go.app.App.SelectNode(id)
+    await refreshConfig()
+    await refreshStatus()
+    await refreshRules()
+    showToast('已切换节点', 'success')
+  } catch (e) {
+    showToast(e.message || String(e), 'error')
+  } finally {
+    state.nodeSwitching = false
+    renderApp()
+  }
+}
+
+function closeNodeModal() {
+  if (state.editingNodeId) resetManualForm()
+  state.editingNodeId = ''
+  state.nodeFormOpen = false
+  renderApp()
+}
+
 
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
@@ -753,7 +899,7 @@ async function refreshStatus() {
     state.statusMessage = s.message
     state.traffic = { up: s.upload_bytes || 0, down: s.download_bytes || 0, upTotal: s.upload_total_bytes || 0, downTotal: s.download_total_bytes || 0 }
     state.trafficHistory.push({ up: state.traffic.up, down: state.traffic.down })
-    if (state.trafficHistory.length > 30) state.trafficHistory.shift()
+    if (state.trafficHistory.length > TRAFFIC_SLOTS) state.trafficHistory.shift()
     state.runtimeNodeID = s.running ? (s.current_node_id || '') : ''
     state.selectorSyncState = s.selector_sync_state || 'idle'
     state.selectorSyncMessage = s.selector_sync_message || ''
@@ -955,6 +1101,9 @@ function bindEvents() {
         if (!clickedMenu || menu !== clickedMenu) menu.open = false
       })
     })
+    document.addEventListener('keydown', event => {
+      if (event.key === 'Escape' && (state.nodeFormOpen || state.editingNodeId) && !state.captureBodyViewer) closeNodeModal()
+    })
     state.ruleMenuDocumentBound = true
   }
   const themeToggle = document.querySelector('#themeToggle')
@@ -982,19 +1131,34 @@ function bindEvents() {
   })
   const toggleNodeForm = document.querySelector('#toggleNodeForm')
   if (toggleNodeForm) toggleNodeForm.addEventListener('click', () => {
-    if (state.editingNodeId) {
-      resetManualForm()
-      state.editingNodeId = ''
-      state.nodeFormOpen = false
-      localStorage.setItem('sbtun-ui-node-form-open', 'false')
-      renderApp()
-      return
-    }
-    state.nodeFormOpen = !state.nodeFormOpen
-    localStorage.setItem('sbtun-ui-node-form-open', String(state.nodeFormOpen))
+    resetManualForm()
+    state.editingNodeId = ''
+    state.nodeFormTab = 'link'
+    state.nodeFormOpen = true
     renderApp()
-    if (state.nodeFormOpen) document.querySelector('#node-import')?.scrollIntoView({ behavior: 'smooth', block: 'start' })
+    document.querySelector('#nodeUrl')?.focus()
   })
+  document.querySelectorAll('[data-close-node-modal]').forEach(element => element.addEventListener('click', closeNodeModal))
+  document.querySelectorAll('[data-node-form-tab]').forEach(button => button.addEventListener('click', () => {
+    state.nodeFormTab = button.dataset.nodeFormTab
+    renderApp()
+  }))
+  const nodeGroupBy = document.querySelector('#nodeGroupBy')
+  if (nodeGroupBy) nodeGroupBy.addEventListener('change', () => {
+    state.nodeGroupBy = nodeGroupBy.value
+    localStorage.setItem('sbtun-ui-node-group', state.nodeGroupBy)
+    renderApp()
+  })
+  const nodeSort = document.querySelector('#nodeSort')
+  if (nodeSort) nodeSort.addEventListener('change', () => {
+    state.nodeSort = nodeSort.value
+    localStorage.setItem('sbtun-ui-node-sort', state.nodeSort)
+    renderApp()
+  })
+  const quickNodeSelect = document.querySelector('#quickNodeSelect')
+  if (quickNodeSelect) quickNodeSelect.addEventListener('change', () => selectNode(quickNodeSelect.value))
+  const testCurrentNode = document.querySelector('#testCurrentNode')
+  if (testCurrentNode) testCurrentNode.addEventListener('click', () => testNodes([activeNodeID()].filter(Boolean)))
   document.querySelectorAll('[data-rules-tab]').forEach(button => button.addEventListener('click', () => {
     state.rulesTab = button.dataset.rulesTab
     localStorage.setItem('sbtun-ui-rules-tab', state.rulesTab)
@@ -1374,22 +1538,15 @@ function bindEvents() {
     }, { once: true })
   }
 
-  document.querySelectorAll('.select-node').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      if (state.nodeSwitching) return
-      state.nodeSwitching = true
-      document.querySelectorAll('.select-node').forEach(item => { item.disabled = true })
-      try {
-        await window.go.app.App.SelectNode(btn.dataset.id)
-        await refreshConfig()
-        await refreshRules()
-        showToast('节点已选择', 'success')
-      } catch (e) {
-        showToast(e.message, 'error')
-      } finally {
-        state.nodeSwitching = false
-        document.querySelectorAll('.select-node').forEach(item => { item.disabled = false })
-      }
+  document.querySelectorAll('.node-item[data-node-id]').forEach(row => {
+    row.addEventListener('click', event => {
+      if (event.target.closest('button, input, details, a')) return
+      selectNode(row.dataset.nodeId)
+    })
+    row.addEventListener('keydown', event => {
+      if (event.target !== row || (event.key !== 'Enter' && event.key !== ' ')) return
+      event.preventDefault()
+      selectNode(row.dataset.nodeId)
     })
   })
 
@@ -1450,13 +1607,11 @@ function bindEvents() {
       if (!window.confirm(`确定删除节点“${node?.name || '此节点'}”吗？`)) return
       try {
         await window.go.app.App.RemoveNode(btn.dataset.id)
+        state.selectedNodes.delete(btn.dataset.id)
         await refreshConfig()
-    await refreshRules()
-        if (state.editingNodeId === btn.dataset.id) {
-          resetManualForm()
-          state.editingNodeId = ''
-          state.nodeFormOpen = false
-        }
+        await refreshRules()
+        saveNodeHealth()
+        renderApp()
         showToast('节点已删除', 'success')
       } catch (e) {
         showToast(e.message, 'error')
@@ -1465,16 +1620,11 @@ function bindEvents() {
   })
 
   const toggleSelectNodes = document.querySelector('#toggleSelectNodes')
-  const syncToggleSelectLabel = () => {
-    if (!toggleSelectNodes) return
-    const ids = visibleNodeIDs()
-    toggleSelectNodes.textContent = ids.length > 0 && ids.every(id => state.selectedNodes.has(id)) ? '反选' : '全选'
-  }
   document.querySelectorAll('.node-select').forEach(input => {
     input.addEventListener('change', () => {
       if (input.checked) state.selectedNodes.add(input.dataset.id)
       else state.selectedNodes.delete(input.dataset.id)
-      syncToggleSelectLabel()
+      renderApp()
     })
   })
   if (toggleSelectNodes) toggleSelectNodes.addEventListener('click', () => {
@@ -1486,7 +1636,7 @@ function bindEvents() {
     })
     renderApp()
   })
-  const selectedIDs = () => [...state.selectedNodes].filter(id => state.config?.nodes?.some(n => n.id === id))
+  const selectedIDs = selectedNodeIDs
   const copyNodeLinks = async ids => {
     const links = await window.go.app.App.ExportNodes(ids)
     if (!links?.length) throw new Error('没有可导出的节点')
@@ -1517,25 +1667,22 @@ function bindEvents() {
       await window.go.app.App.RemoveNodes(ids)
       ids.forEach(id => state.selectedNodes.delete(id))
       await refreshConfig()
+      saveNodeHealth()
+      renderApp()
       showToast('批量删除成功', 'success')
     } catch (e) { showToast(e.message || String(e), 'error') }
     finally { batchDelete.disabled = false }
   })
   const batchTest = document.querySelector('#batchTestNodes')
   if (batchTest) batchTest.addEventListener('click', async () => {
-    const ids = selectedIDs()
-    if (!ids.length) return showToast('请先选择节点', 'error')
-    batchTest.disabled = true
+    const selected = selectedIDs()
+    const ids = selected.length ? selected : visibleNodeIDs()
+    if (!ids.length) return
     state.batchTesting = true
     try {
-      for (const id of ids) {
-        const result = await window.go.app.App.TestNode(id)
-        state.nodeHealth[id] = result
-        renderApp()
-      }
-      showToast('批量健康测试完成', 'success')
-    } catch (e) {
-      showToast(e.message || String(e), 'error')
+      await testNodes(ids)
+      const ok = ids.filter(id => nodeLatency(id)?.ok).length
+      showToast(`测试完成：${ok} / ${ids.length} 个可用`, ok ? 'success' : 'error')
     } finally {
       state.batchTesting = false
       renderApp()
@@ -1568,28 +1715,11 @@ function bindEvents() {
       }
     })
   })
-  const cancelEdit = document.querySelector('#cancelEditNode')
-  if (cancelEdit) cancelEdit.addEventListener('click', () => {
-    resetManualForm()
-    state.editingNodeId = ''
-    state.nodeFormOpen = false
-    localStorage.setItem('sbtun-ui-node-form-open', 'false')
-    renderApp()
-  })
-
   document.querySelectorAll('.test-node').forEach(btn => {
     btn.addEventListener('click', async () => {
-      btn.disabled = true
-      try {
-        const result = await window.go.app.App.TestNode(btn.dataset.id)
-        state.nodeHealth[btn.dataset.id] = result
-        renderApp()
-        showToast(result.message, (result.healthy ?? result.ok) ? 'success' : 'error')
-      } catch (e) {
-        showToast(e.message || String(e), 'error')
-      } finally {
-        btn.disabled = false
-      }
+      await testNodes([btn.dataset.id])
+      const latency = nodeLatency(btn.dataset.id)
+      if (latency && !latency.ok) showToast(latency.label, 'error')
     })
   })
 
@@ -1770,22 +1900,28 @@ function bindEvents() {
   const importBtn = document.querySelector('#importBtn')
   if (importBtn) {
     importBtn.addEventListener('click', async () => {
-      const url = state.manualForm.url.trim()
-      if (!url) { showToast('请输入节点或订阅链接', 'error'); return }
+      const links = state.manualForm.url.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+      if (!links.length) { showToast('请输入节点或订阅链接', 'error'); return }
       importBtn.disabled = true
-      try {
-        const added = await window.go.app.App.ImportSubscription(url)
-        await refreshConfig()
-        await refreshRules()
-        showToast('导入成功，新增 ' + added + ' 个节点', 'success')
-        state.manualForm.url = ''
-        const urlInput = document.querySelector('#nodeUrl')
-        if (urlInput) urlInput.value = ''
-      } catch (e) {
-        showToast(e.message, 'error')
-      } finally {
-        importBtn.disabled = false
+      importBtn.textContent = '导入中…'
+      let added = 0
+      const failed = []
+      for (const link of links) {
+        try {
+          added += await window.go.app.App.ImportSubscription(link)
+        } catch (e) {
+          failed.push({ link, error: e.message || String(e) })
+        }
       }
+      await refreshConfig()
+      await refreshRules()
+      // 失败的链接留在输入框里，方便修改后重试。
+      state.manualForm.url = failed.map(item => item.link).join('\n')
+      state.nodeFormOpen = failed.length > 0
+      renderApp()
+      if (!failed.length) showToast(`导入成功，新增 ${added} 个节点`, 'success')
+      else if (failed.length === links.length) showToast('导入失败：' + failed[0].error, 'error')
+      else showToast(`新增 ${added} 个节点，${failed.length} 条失败：${failed[0].error}`, 'error')
     })
   }
 
@@ -1822,13 +1958,10 @@ function bindEvents() {
           await window.go.app.App.AddNode(node)
         }
         await refreshConfig()
-    await refreshRules()
+        await refreshRules()
         showToast(editing ? '节点已修改' : '节点已添加', 'success')
         resetManualForm()
-        if (editing) {
-          state.nodeFormOpen = false
-          localStorage.setItem('sbtun-ui-node-form-open', 'false')
-        }
+        state.nodeFormOpen = false
         renderApp()
       } catch (e) {
         showToast(e.message, 'error')
@@ -1860,10 +1993,8 @@ function beginEditNode(node) {
   state.manualForm = form
   state.editingNodeId = node.id
   state.nodeFormOpen = true
-  localStorage.setItem('sbtun-ui-node-form-open', 'true')
-  state.view = 'nodes'
   renderApp()
-  document.querySelector('#node-import')?.scrollIntoView({ behavior: 'smooth' })
+  document.querySelector('#nodeName')?.focus()
 }
 
 // Wails runtime ready
