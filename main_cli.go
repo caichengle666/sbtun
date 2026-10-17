@@ -127,7 +127,7 @@ func main() {
 		if cfg.AutoSwitchDisabled {
 			autoSwitch = "关闭"
 		}
-		fmt.Printf("自动切换: %s\n", autoSwitch)
+		fmt.Printf("自动切换: %s\nIPv6: %s\nWebRTC 防泄漏: %s\n诊断信息: %s\n", autoSwitch, onOff(cfg.IPv6Enabled), onOff(cfg.WebRTCProtectionEnabled), onOff(cfg.DiagnosticsEnabled))
 	case "auto-switch":
 		enabled := commandArgs[0] == "on"
 		err = application.SetAutoSwitch(enabled)
@@ -164,15 +164,17 @@ func main() {
 			fmt.Printf("已删除 %d 个节点\n", len(ids))
 		}
 	case "test":
-		ids, parseErr := nodeIDsFromArgs(application, commandArgs)
-		if parseErr != nil {
-			err = parseErr
-			break
-		}
-		for _, id := range ids {
-			result := application.TestNode(id)
-			fmt.Printf("%s\t健康=%t\t%s\n", result.NodeID, result.Healthy, result.Message)
-		}
+		err = runTestCommand(application, commandArgs)
+	case "export":
+		err = runExportCommand(application, commandArgs)
+	case "custom":
+		err = runRuleListCommand(application, commandArgs, false)
+	case "filter":
+		err = runRuleListCommand(application, commandArgs, true)
+	case "set":
+		err = runSetCommand(application, commandArgs)
+	case "diag":
+		err = runDiagCommand(application)
 	case "info":
 		err = showNodeInfo(application, commandArgs[0])
 	case "edit":
@@ -278,14 +280,24 @@ func printCommandHelp(command string, args []string) bool {
 		usage = "sbtun add-node <节点链接或订阅链接>"
 	case "switch", "info":
 		usage = "sbtun " + command + " <编号>"
-	case "test", "del", "delete":
+	case "del", "delete":
 		usage = "sbtun " + command + " <编号...>"
+	case "test", "export":
+		usage = "sbtun " + command + " [编号...]"
+	case "custom":
+		usage = customUsage
+	case "filter":
+		usage = filterUsage
+	case "set":
+		usage = setUsage
+	case "diag":
+		usage = "sbtun diag"
 	case "edit":
 		usage = "sbtun edit [编号]\n  sbtun edit <编号> <节点链接>\n  sbtun edit <编号> <名称> <服务器> <端口>"
 	case "add-rule":
 		usage = "sbtun add-rule <链接|文件|文本>"
 	case "rules":
-		usage = "sbtun rules [list|add|edit|delete|update|update-all]"
+		usage = "sbtun rules [list|add|edit|delete|enable|disable|restore|update|update-all]"
 	case "subs":
 		usage = "sbtun subs [list|update [编号]|delete <编号>]"
 	case "capture":
@@ -325,7 +337,7 @@ func validateCLIArgs(command string, args []string) error {
 	}
 
 	switch command {
-	case "run", "start", "stop", "status", "nodes":
+	case "run", "start", "stop", "status", "nodes", "diag":
 		return requireNoArgs()
 	case "auto-switch":
 		if len(args) != 1 || (args[0] != "on" && args[0] != "off") {
@@ -352,8 +364,19 @@ func validateCLIArgs(command string, args []string) error {
 			return usageError("sbtun " + command + " <编号>")
 		}
 		return requireNodeIndices("sbtun " + command + " <编号>")
-	case "test", "del", "delete":
+	case "del", "delete":
 		return requireNodeIndices("sbtun " + command + " <编号...>")
+	case "test", "export":
+		if len(args) == 0 {
+			return nil
+		}
+		return requireNodeIndices("sbtun " + command + " [编号...]")
+	case "custom":
+		return validateRuleListArgs(args, customUsage, true)
+	case "filter":
+		return validateRuleListArgs(args, filterUsage, false)
+	case "set":
+		return validateSetArgs(args)
 	case "edit":
 		if len(args) != 0 && len(args) != 1 && len(args) != 2 && len(args) != 4 {
 			return usageError("sbtun edit [编号] 或 sbtun edit <编号> <节点链接> 或 sbtun edit <编号> <名称> <服务器> <端口>")
@@ -383,7 +406,9 @@ func validateCLIArgs(command string, args []string) error {
 		switch {
 		case len(args) == 0, len(args) == 1 && (args[0] == "list" || args[0] == "update-all"):
 			return nil
-		case len(args) == 2 && args[0] == "update" && strings.TrimSpace(args[1]) != "":
+		case len(args) == 1 && args[0] == "restore":
+			return nil
+		case len(args) == 2 && (args[0] == "update" || args[0] == "enable" || args[0] == "disable") && strings.TrimSpace(args[1]) != "":
 			return nil
 		case len(args) == 3 && args[0] == "add" && strings.TrimSpace(args[1]) != "" && strings.TrimSpace(args[2]) != "":
 			return nil
@@ -392,7 +417,7 @@ func validateCLIArgs(command string, args []string) error {
 		case len(args) == 2 && args[0] == "delete" && strings.TrimSpace(args[1]) != "":
 			return nil
 		default:
-			return usageError("sbtun rules [list|add <名称> <SRS_URL>|edit <ID> <名称> <SRS_URL>|delete <ID>|update <ID>|update-all]")
+			return usageError("sbtun rules [list|add <名称> <SRS_URL>|edit <ID> <名称> <SRS_URL>|delete <ID>|enable <ID>|disable <ID>|restore|update <ID>|update-all]")
 		}
 	case "subs":
 		switch {
@@ -473,8 +498,10 @@ func validateCaptureArgs(args []string) error {
 
 func requiresElevation(command string, args []string) bool {
 	switch command {
-	case "run", "start", "stop", "route", "auto-switch", "add-node", "add-rule", "switch", "del", "delete", "edit":
+	case "run", "start", "stop", "route", "auto-switch", "add-node", "add-rule", "switch", "del", "delete", "edit", "set":
 		return true
+	case "custom", "filter":
+		return len(args) > 0 && (args[0] == "add" || args[0] == "delete")
 	case "capture":
 		if len(args) == 0 {
 			return false
@@ -502,7 +529,8 @@ func printHelp() {
 		{"info <编号>", "查看节点协议和完整参数"},
 		{"add-node <链接>", "添加单节点链接或订阅链接"},
 		{"switch <编号>", "按编号切换节点"},
-		{"test <编号...>", "按编号顺序测试节点健康"},
+		{"test [编号...]", "测试节点 Ping、端口和 URL 延迟，省略编号则测试全部，最多 4 个并行"},
+		{"export [编号...]", "导出节点分享链接，省略编号则导出全部"},
 		{"del <编号...>", "批量删除节点，例如 del 1 2 3"},
 		{"edit [编号]", "进入交互式编辑，可直接指定节点"},
 		{"edit <编号> <节点链接>", "用完整链接覆盖全部参数"},
@@ -514,11 +542,23 @@ func printHelp() {
 	printHelpGroup("路由与规则", []helpEntry{
 		{"route <模式>", "设置路由: smart/global/direct/custom"},
 		{"auto-switch <on|off>", "开启或关闭节点失效自动切换"},
-		{"add-rule <链接|文件|文本>", "添加自定义规则"},
+		{"set ipv6 <on|off>", "开启或关闭 IPv6"},
+		{"set webrtc <on|off>", "开启或关闭 WebRTC 防泄漏"},
+		{"set diagnostics <on|off>", "开启或关闭诊断信息"},
+		{"diag", "查看运行诊断（需先开启诊断信息）"},
+		{"add-rule <链接|文件|文本>", "批量导入自定义规则"},
+		{"custom", "列出自定义分流规则"},
+		{"custom add <类型> <内容> <动作>", "添加分流规则，类型 domain_suffix/domain_keyword/domain/ip_cidr/port，动作 proxy/direct/block"},
+		{"custom delete <编号>", "删除分流规则"},
+		{"filter", "列出 DNS 过滤规则"},
+		{"filter add <类型> <内容>", "添加 DNS 过滤（阻断）规则"},
+		{"filter delete <编号>", "删除 DNS 过滤规则"},
 		{"rules list", "列出规则集"},
 		{"rules add <名称> <SRS_URL>", "添加广告或其他 SRS 规则集"},
 		{"rules edit <ID> <名称> <SRS_URL>", "编辑规则集"},
 		{"rules delete <ID>", "删除规则集"},
+		{"rules enable|disable <ID>", "启用或停用规则集"},
+		{"rules restore", "恢复默认规则集"},
 		{"rules update <id>", "更新指定规则集"},
 		{"rules update-all", "更新全部规则集"},
 	})
@@ -543,14 +583,15 @@ func printHelp() {
   sbtun nodes
   sbtun switch 2
   sbtun del 1 2 3
-  sbtun test 1 2 3
+  sbtun test
+  sbtun custom add domain_suffix example.com direct
   sbtun edit 2
   sbtun edit 2 "vless://UUID@1.2.3.4:443?..."
 
 说明:
   交互编辑中直接按回车保留当前值，输入 - 清空当前参数。
   名称包含空格时请使用引号，例如: sbtun edit 2 "韩国 高速" 1.2.3.4 443
-  批量测试按顺序执行，不会同时启动大量检测进程。
+  批量测试最多 4 个并行，不会同时启动大量检测进程。
   删除当前节点后会自动选择剩余节点。
   运行中修改 route 或 rules 会自动重载 sing-box。
   停止前台运行请按 Ctrl+C。`)
@@ -670,7 +711,14 @@ func runSubsCommand(application *app.App, args []string) error {
 func runRulesCommand(application *app.App, args []string) error {
 	if len(args) == 0 || args[0] == "list" {
 		for _, rule := range application.ListRules() {
-			fmt.Printf("%s\t%s\t存在=%t\n", rule.ID, rule.Name, rule.Exists)
+			state := "已启用"
+			if !rule.Enabled {
+				state = "已停用"
+			}
+			if !rule.Exists {
+				state += "，文件缺失"
+			}
+			fmt.Printf("%s\t%s\t%s\n", rule.ID, rule.Name, state)
 		}
 		return nil
 	}
@@ -699,6 +747,18 @@ func runRulesCommand(application *app.App, args []string) error {
 		}
 		fmt.Println("规则集更新成功")
 		return nil
+	case "enable", "disable":
+		if err := application.SetRuleEnabled(args[1], args[0] == "enable"); err != nil {
+			return err
+		}
+		fmt.Printf("规则集已%s\n", map[string]string{"enable": "启用", "disable": "停用"}[args[0]])
+		return nil
+	case "restore":
+		if err := application.RestoreDefaultRuleSets(); err != nil {
+			return err
+		}
+		fmt.Println("已恢复默认规则集")
+		return nil
 	case "update-all":
 		errs := application.UpdateAllRules()
 		if len(errs) > 0 {
@@ -707,7 +767,7 @@ func runRulesCommand(application *app.App, args []string) error {
 		fmt.Println("全部规则集更新成功")
 		return nil
 	default:
-		return fmt.Errorf("用法: sbtun rules [list|add <名称> <SRS_URL>|edit <ID> <名称> <SRS_URL>|delete <ID>|update <ID>|update-all]")
+		return fmt.Errorf("用法: sbtun rules [list|add <名称> <SRS_URL>|edit <ID> <名称> <SRS_URL>|delete <ID>|enable <ID>|disable <ID>|restore|update <ID>|update-all]")
 	}
 }
 
@@ -903,12 +963,20 @@ func listNodes(application *app.App) error {
 	if status := application.GetStatus(); status.CurrentNodeID != "" {
 		currentID = status.CurrentNodeID
 	}
+	subNames := make(map[string]string, len(cfg.Subscriptions))
+	for _, sub := range cfg.Subscriptions {
+		subNames[sub.ID] = sub.Name
+	}
 	for i, node := range cfg.Nodes {
 		marker := " "
 		if node.ID == currentID {
 			marker = "*"
 		}
-		fmt.Printf("%s %d\t%s\t%s:%d\n", marker, i+1, node.Name, node.Server, node.Port)
+		source := "手动添加"
+		if name, ok := subNames[node.Subscription]; ok {
+			source = name
+		}
+		fmt.Printf("%s %d\t%s\t%s\t%s:%d\t%s\n", marker, i+1, node.Name, node.Protocol, node.Server, node.Port, source)
 	}
 	fmt.Printf("当前节点: %s\n", currentID)
 	return nil

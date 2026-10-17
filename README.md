@@ -234,7 +234,8 @@ nodes                           列出节点
 info <编号>                     查看节点详情
 add-node <节点链接或订阅地址>   导入节点
 switch <编号>                   切换节点
-test <编号...>                  测试一个或多个节点
+test [编号...]                  测试 Ping、端口和 URL 延迟，省略编号则测试全部（最多 4 个并行）
+export [编号...]                导出分享链接，省略编号则导出全部
 del <编号...>                   删除一个或多个节点
 edit [编号]                     交互式编辑节点
 edit <编号> <节点链接>          用链接覆盖节点参数
@@ -251,9 +252,27 @@ auto-switch <on|off>
 rules list
 rules add <名称> <SRS_URL>
 rules edit <ID> <名称> <SRS_URL>
+rules delete <ID>
+rules enable|disable <ID>       启用或停用规则集
+rules restore                   恢复默认规则集
 rules update <ID>
 rules update-all
-add-rule <链接|文件|文本>
+add-rule <链接|文件|文本>       批量导入自定义规则
+custom                          列出自定义分流规则
+custom add <类型> <内容> <动作> 类型 domain_suffix/domain_keyword/domain/ip_cidr/port，动作 proxy/direct/block
+custom delete <编号>
+filter                          列出 DNS 过滤规则
+filter add <类型> <内容>        添加 DNS 过滤（阻断）规则
+filter delete <编号>
+```
+
+### 网络选项
+
+```text
+set ipv6 <on|off>               IPv6
+set webrtc <on|off>             WebRTC 防泄漏
+set diagnostics <on|off>        诊断信息
+diag                            查看运行诊断
 ```
 
 ### 内核管理

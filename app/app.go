@@ -691,11 +691,21 @@ func (a *App) UpdateNodeFromLink(id, link string) error {
 }
 
 // TestNodes checks nodes sequentially to keep resource usage bounded.
+// TestNodes tests up to four nodes at a time and keeps the order of ids.
 func (a *App) TestNodes(ids []string) []NodeHealthDTO {
-	results := make([]NodeHealthDTO, 0, len(ids))
-	for _, id := range ids {
-		results = append(results, a.TestNode(id))
+	results := make([]NodeHealthDTO, len(ids))
+	slots := make(chan struct{}, 4)
+	var wg sync.WaitGroup
+	for i, id := range ids {
+		wg.Add(1)
+		slots <- struct{}{}
+		go func() {
+			defer wg.Done()
+			defer func() { <-slots }()
+			results[i] = a.TestNode(id)
+		}()
 	}
+	wg.Wait()
 	return results
 }
 
