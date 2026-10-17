@@ -192,3 +192,13 @@ func makeSingBoxTarGz(t *testing.T, content []byte) []byte {
 	}
 	return buffer.Bytes()
 }
+
+func downloadSingBox(ctx context.Context, client *http.Client, releaseURL, goos, goarch string) ([]byte, string, error) {
+	release, err := latestSingBoxRelease(ctx, client, releaseURL)
+	if err != nil {
+		return nil, "", err
+	}
+	version := strings.TrimPrefix(strings.TrimSpace(release.TagName), "v")
+	binary, err := downloadSingBoxAsset(ctx, client, release, goos, goarch)
+	return binary, version, err
+}

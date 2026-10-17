@@ -267,48 +267,65 @@ func hasHelpArg(args []string) bool {
 	return false
 }
 
-func printCommandHelp(command string, args []string) bool {
-	usage := ""
+// cliUsage is the single source of every command's usage line, shared by
+// `<command> -h` and argument validation errors.
+func cliUsage(command string, args []string) string {
 	switch command {
-	case "run", "start", "stop", "status", "nodes":
-		usage = "sbtun " + command
+	case "run", "start", "stop", "status", "nodes", "diag":
+		return "sbtun " + command
 	case "route":
-		usage = "sbtun route <smart|global|direct|custom>"
+		return "sbtun route <smart|global|direct|custom>"
 	case "auto-switch":
-		usage = "sbtun auto-switch <on|off>"
+		return "sbtun auto-switch <on|off>"
 	case "add-node":
-		usage = "sbtun add-node <节点链接或订阅链接>"
+		return "sbtun add-node <节点链接或订阅链接>"
 	case "switch", "info":
-		usage = "sbtun " + command + " <编号>"
+		return "sbtun " + command + " <编号>"
 	case "del", "delete":
-		usage = "sbtun " + command + " <编号...>"
+		return "sbtun " + command + " <编号...>"
 	case "test", "export":
-		usage = "sbtun " + command + " [编号...]"
+		return "sbtun " + command + " [编号...]"
 	case "custom":
-		usage = customUsage
+		return "sbtun custom [list|add <类型> <内容> <proxy|direct|block>|delete <编号>]"
 	case "filter":
-		usage = filterUsage
+		return "sbtun filter [list|add <类型> <内容>|delete <编号>]"
 	case "set":
-		usage = setUsage
-	case "diag":
-		usage = "sbtun diag"
+		return "sbtun set <ipv6|webrtc|diagnostics> <on|off>"
 	case "edit":
-		usage = "sbtun edit [编号]\n  sbtun edit <编号> <节点链接>\n  sbtun edit <编号> <名称> <服务器> <端口>"
+		return "sbtun edit [编号]\n  sbtun edit <编号> <节点链接>\n  sbtun edit <编号> <名称> <服务器> <端口>"
 	case "add-rule":
-		usage = "sbtun add-rule <链接|文件|文本>"
+		return "sbtun add-rule <链接|文件|文本>"
 	case "rules":
-		usage = "sbtun rules [list|add|edit|delete|enable|disable|restore|update|update-all]"
+		return "sbtun rules [list|add <名称> <SRS_URL>|edit <ID> <名称> <SRS_URL>|delete <ID>|enable <ID>|disable <ID>|restore|update <ID>|update-all]"
 	case "subs":
-		usage = "sbtun subs [list|update [编号]|delete <编号>]"
+		return "sbtun subs [list|update [编号]|delete <编号>]"
 	case "capture":
-		if len(args) > 0 && args[0] == "cert" {
-			usage = certificateCLIUsage()
-		} else {
-			usage = "sbtun capture <run|enable|disable|status|list|show|clear|cert>"
+		if len(args) > 0 {
+			switch args[0] {
+			case "cert":
+				return certificateCLIUsage()
+			case "enable":
+				return "sbtun capture enable <域名、关键词或 *>"
+			case "show":
+				return "sbtun capture show <ID>"
+			case "disable", "status", "list", "clear":
+				return "sbtun capture " + args[0]
+			}
 		}
+		return "sbtun capture <run|enable|disable|status|list|show|clear|cert>"
 	case "kernel":
-		usage = "sbtun kernel <version|update>"
-	default:
+		return "sbtun kernel <version|update>"
+	}
+	return ""
+}
+
+func usageError(command string, args []string) error {
+	return fmt.Errorf("用法: %s", cliUsage(command, args))
+}
+
+func printCommandHelp(command string, args []string) bool {
+	usage := cliUsage(command, args)
+	if usage == "" {
 		return false
 	}
 	fmt.Println("用法:", usage)
@@ -316,16 +333,15 @@ func printCommandHelp(command string, args []string) bool {
 }
 
 func validateCLIArgs(command string, args []string) error {
-	usageError := func(usage string) error { return fmt.Errorf("用法: %s", usage) }
 	requireNoArgs := func() error {
 		if len(args) != 0 {
-			return usageError("sbtun " + command)
+			return usageError(command, args)
 		}
 		return nil
 	}
-	requireNodeIndices := func(usage string) error {
+	requireNodeIndices := func() error {
 		if len(args) == 0 {
-			return usageError(usage)
+			return usageError(command, args)
 		}
 		for _, arg := range args {
 			index, err := strconv.Atoi(arg)
@@ -341,12 +357,12 @@ func validateCLIArgs(command string, args []string) error {
 		return requireNoArgs()
 	case "auto-switch":
 		if len(args) != 1 || (args[0] != "on" && args[0] != "off") {
-			return usageError("sbtun auto-switch <on|off>")
+			return usageError(command, args)
 		}
 		return nil
 	case "route":
 		if len(args) != 1 {
-			return usageError("sbtun route <smart|global|direct|custom>")
+			return usageError(command, args)
 		}
 		switch config.RoutingMode(args[0]) {
 		case config.RoutingSmart, config.RoutingGlobal, config.RoutingDirect, config.RoutingCustom:
@@ -356,30 +372,30 @@ func validateCLIArgs(command string, args []string) error {
 		}
 	case "add-node":
 		if len(args) != 1 {
-			return usageError("sbtun add-node <节点链接或订阅链接>")
+			return usageError(command, args)
 		}
 		return app.ValidateNodeSource(args[0])
 	case "switch", "info":
 		if len(args) != 1 {
-			return usageError("sbtun " + command + " <编号>")
+			return usageError(command, args)
 		}
-		return requireNodeIndices("sbtun " + command + " <编号>")
+		return requireNodeIndices()
 	case "del", "delete":
-		return requireNodeIndices("sbtun " + command + " <编号...>")
+		return requireNodeIndices()
 	case "test", "export":
 		if len(args) == 0 {
 			return nil
 		}
-		return requireNodeIndices("sbtun " + command + " [编号...]")
+		return requireNodeIndices()
 	case "custom":
-		return validateRuleListArgs(args, customUsage, true)
+		return validateRuleListArgs(command, args, true)
 	case "filter":
-		return validateRuleListArgs(args, filterUsage, false)
+		return validateRuleListArgs(command, args, false)
 	case "set":
 		return validateSetArgs(args)
 	case "edit":
 		if len(args) != 0 && len(args) != 1 && len(args) != 2 && len(args) != 4 {
-			return usageError("sbtun edit [编号] 或 sbtun edit <编号> <节点链接> 或 sbtun edit <编号> <名称> <服务器> <端口>")
+			return usageError(command, args)
 		}
 		if len(args) > 0 {
 			index, err := strconv.Atoi(args[0])
@@ -399,7 +415,7 @@ func validateCLIArgs(command string, args []string) error {
 		return nil
 	case "add-rule":
 		if len(args) != 1 {
-			return usageError("sbtun add-rule <链接|文件|文本>")
+			return usageError(command, args)
 		}
 		return nil
 	case "rules":
@@ -417,7 +433,7 @@ func validateCLIArgs(command string, args []string) error {
 		case len(args) == 2 && args[0] == "delete" && strings.TrimSpace(args[1]) != "":
 			return nil
 		default:
-			return usageError("sbtun rules [list|add <名称> <SRS_URL>|edit <ID> <名称> <SRS_URL>|delete <ID>|enable <ID>|disable <ID>|restore|update <ID>|update-all]")
+			return usageError(command, args)
 		}
 	case "subs":
 		switch {
@@ -429,7 +445,7 @@ func validateCLIArgs(command string, args []string) error {
 			}
 			return nil
 		default:
-			return usageError("sbtun subs [list|update [编号]|delete <编号>]")
+			return usageError(command, args)
 		}
 	case "capture":
 		return validateCaptureArgs(args)
@@ -442,7 +458,7 @@ func validateCLIArgs(command string, args []string) error {
 
 func validateKernelArgs(args []string) error {
 	if len(args) != 1 {
-		return errors.New("用法: sbtun kernel <version|update>")
+		return usageError("kernel", args)
 	}
 	switch args[0] {
 	case "version", "update":
@@ -454,24 +470,24 @@ func validateKernelArgs(args []string) error {
 
 func validateCaptureArgs(args []string) error {
 	if len(args) == 0 {
-		return errors.New("用法: sbtun capture <run|enable|disable|status|list|show|clear|cert>")
+		return usageError("capture", args)
 	}
 	switch args[0] {
 	case "run":
 		return nil
 	case "enable":
 		if len(args) < 2 {
-			return errors.New("用法: sbtun capture enable <域名、关键词或 *>")
+			return usageError("capture", args)
 		}
 		return nil
 	case "disable", "status", "list", "clear":
 		if len(args) != 1 {
-			return fmt.Errorf("用法: sbtun capture %s", args[0])
+			return usageError("capture", args)
 		}
 		return nil
 	case "show":
 		if len(args) != 2 {
-			return errors.New("用法: sbtun capture show <ID>")
+			return usageError("capture", args)
 		}
 		id, err := strconv.ParseUint(args[1], 10, 64)
 		if err != nil || id == 0 {
@@ -480,7 +496,7 @@ func validateCaptureArgs(args []string) error {
 		return nil
 	case "cert":
 		if len(args) < 2 || len(args) > 3 || args[1] != "install" && args[1] != "uninstall" {
-			return errors.New("用法: " + certificateCLIUsage())
+			return usageError("capture", args)
 		}
 		if len(args) == 3 {
 			if runtime.GOOS != "windows" {
@@ -705,7 +721,7 @@ func runSubsCommand(application *app.App, args []string) error {
 		fmt.Println("订阅已删除")
 		return nil
 	}
-	return errors.New("用法: sbtun subs [list|update [编号]|delete <编号>]")
+	return usageError("subs", args)
 }
 
 func runRulesCommand(application *app.App, args []string) error {
@@ -767,14 +783,11 @@ func runRulesCommand(application *app.App, args []string) error {
 		fmt.Println("全部规则集更新成功")
 		return nil
 	default:
-		return fmt.Errorf("用法: sbtun rules [list|add <名称> <SRS_URL>|edit <ID> <名称> <SRS_URL>|delete <ID>|enable <ID>|disable <ID>|restore|update <ID>|update-all]")
+		return usageError("rules", args)
 	}
 }
 
 func runKernelCommand(application *app.App, args []string) error {
-	if len(args) == 0 {
-		return errors.New("用法: sbtun kernel <version|update>")
-	}
 	switch args[0] {
 	case "version":
 		version, err := application.SingBoxVersion()
@@ -794,21 +807,15 @@ func runKernelCommand(application *app.App, args []string) error {
 		fmt.Println(result.Message)
 		return nil
 	default:
-		return errors.New("用法: sbtun kernel <version|update>")
+		return usageError("kernel", args)
 	}
 }
 
 func runCaptureCommand(application *app.App, args []string) error {
-	if len(args) == 0 {
-		return fmt.Errorf("用法: sbtun capture <run|enable|disable|status|list|show|clear|cert>")
-	}
 	switch args[0] {
 	case "run":
 		return nil
 	case "enable":
-		if len(args) < 2 {
-			return fmt.Errorf("用法: sbtun capture enable <域名或关键词...>")
-		}
 		if err := enableCapture(application, args[1:]); err != nil {
 			return err
 		}
@@ -863,13 +870,7 @@ func runCaptureCommand(application *app.App, args []string) error {
 		}
 		return nil
 	case "show":
-		if len(args) < 2 {
-			return fmt.Errorf("用法: sbtun capture show <ID>")
-		}
-		id, err := strconv.ParseUint(args[1], 10, 64)
-		if err != nil || id == 0 {
-			return fmt.Errorf("请求 ID 无效: %s", args[1])
-		}
+		id, _ := strconv.ParseUint(args[1], 10, 64)
 		flow, err := application.GetCaptureFlow(id)
 		if err != nil {
 			return err
@@ -887,9 +888,6 @@ func runCaptureCommand(application *app.App, args []string) error {
 		fmt.Println("已删除保存的抓包记录")
 		return nil
 	case "cert":
-		if len(args) < 2 {
-			return fmt.Errorf("用法: %s", certificateCLIUsage())
-		}
 		level := "system"
 		if len(args) >= 3 {
 			level = args[2]
@@ -908,7 +906,7 @@ func runCaptureCommand(application *app.App, args []string) error {
 			fmt.Printf("抓包根证书已卸载（%s）\n", level)
 			return nil
 		default:
-			return fmt.Errorf("用法: %s", certificateCLIUsage())
+			return usageError("capture", args)
 		}
 	default:
 		return fmt.Errorf("未知抓包命令: %s", args[0])

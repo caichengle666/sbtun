@@ -580,3 +580,7 @@ func TestNodeServersBypassTUNAndResolveLocally(t *testing.T) {
 		}
 	}
 }
+
+func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
+	return BuildConfigWithAuth(cfg, exeDir, LocalAuth{}, nil)
+}

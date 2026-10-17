@@ -30,15 +30,9 @@ const (
 	captureUpstreamPort = 9082
 )
 
-// BuildConfig 将用户配置转换为 sing-box 运行配置。
+// BuildConfigWithAuth 将用户配置转换为 sing-box 运行配置，并用本地凭据保护
+// clash API 和抓包代理端口。resolved 是域名节点当前解析出的地址。
 // 四种模式在这里形成明确、可验证的路由闭环：智能分流、全局代理、全局直连、自定义规则。
-func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
-	return BuildConfigWithAuth(cfg, exeDir, LocalAuth{}, nil)
-}
-
-// BuildConfigWithAuth builds the runtime config and protects the clash API and
-// capture proxy ports with the given local credentials. resolved holds the
-// current addresses of node servers given as domain names.
 func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth, resolved []netip.Addr) ([]byte, error) {
 	if err := config.Validate(cfg); err != nil {
 		return nil, err
@@ -681,7 +675,7 @@ func NodeDomains(nodes []config.Node) []string {
 		if server == "" {
 			continue
 		}
-		if _, err := netip.ParseAddr(strings.Trim(server, "[]")); err == nil {
+		if _, ok := literalIP(server); ok {
 			continue
 		}
 		if _, ok := seen[server]; ok {
@@ -694,12 +688,19 @@ func NodeDomains(nodes []config.Node) []string {
 	return domains
 }
 
+// literalIP reports whether a node server is an IP literal, with or without
+// IPv6 brackets.
+func literalIP(server string) (netip.Addr, bool) {
+	addr, err := netip.ParseAddr(strings.Trim(strings.TrimSpace(server), "[]"))
+	return addr, err == nil
+}
+
 // nodeBypassPrefixes lists node server IPs (literal or resolved) as host
 // prefixes. Private and loopback addresses never enter TUN and are skipped.
 func nodeBypassPrefixes(nodes []config.Node, resolved []netip.Addr, ipv6Enabled bool) []string {
 	addrs := append([]netip.Addr(nil), resolved...)
 	for _, node := range nodes {
-		if addr, err := netip.ParseAddr(strings.Trim(strings.TrimSpace(node.Server), "[]")); err == nil {
+		if addr, ok := literalIP(node.Server); ok {
 			addrs = append(addrs, addr)
 		}
 	}

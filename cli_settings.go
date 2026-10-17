@@ -23,12 +23,6 @@ var ruleMatchLabels = map[string]string{
 
 var ruleActionLabels = map[string]string{"proxy": "代理", "direct": "直连", "block": "阻断"}
 
-const (
-	customUsage = "sbtun custom [list|add <类型> <内容> <proxy|direct|block>|delete <编号>]"
-	filterUsage = "sbtun filter [list|add <类型> <内容>|delete <编号>]"
-	setUsage    = "sbtun set <ipv6|webrtc|diagnostics> <on|off>"
-)
-
 func onOff(enabled bool) string {
 	if enabled {
 		return "开启"
@@ -49,7 +43,7 @@ func mutateConfig(application *app.App, mutate func(cfg *config.Config) error) e
 	return application.SaveConfig(cfg)
 }
 
-func validateRuleListArgs(args []string, usage string, withAction bool) error {
+func validateRuleListArgs(command string, args []string, withAction bool) error {
 	switch {
 	case len(args) == 0, len(args) == 1 && args[0] == "list":
 		return nil
@@ -72,12 +66,12 @@ func validateRuleListArgs(args []string, usage string, withAction bool) error {
 		}
 		return nil
 	}
-	return fmt.Errorf("用法: %s", usage)
+	return usageError(command, args)
 }
 
 func validateSetArgs(args []string) error {
 	if len(args) != 2 || (args[1] != "on" && args[1] != "off") {
-		return fmt.Errorf("用法: %s", setUsage)
+		return usageError("set", args)
 	}
 	switch args[0] {
 	case "ipv6", "webrtc", "diagnostics":
@@ -190,21 +184,29 @@ func runDiagCommand(application *app.App) error {
 	return nil
 }
 
+// nodeIDsOrAll resolves node numbers to IDs; no numbers means every node.
+func nodeIDsOrAll(application *app.App, cfg config.Config, args []string) ([]string, error) {
+	if len(args) > 0 {
+		return nodeIDsFromArgs(application, args)
+	}
+	if len(cfg.Nodes) == 0 {
+		return nil, errors.New("暂无节点，请先使用 add-node 添加")
+	}
+	ids := make([]string, 0, len(cfg.Nodes))
+	for _, node := range cfg.Nodes {
+		ids = append(ids, node.ID)
+	}
+	return ids, nil
+}
+
 func runExportCommand(application *app.App, args []string) error {
-	var ids []string
-	if len(args) == 0 {
-		cfg, err := application.LoadConfig()
-		if err != nil {
-			return err
-		}
-		for _, node := range cfg.Nodes {
-			ids = append(ids, node.ID)
-		}
-	} else {
-		var err error
-		if ids, err = nodeIDsFromArgs(application, args); err != nil {
-			return err
-		}
+	cfg, err := application.LoadConfig()
+	if err != nil {
+		return err
+	}
+	ids, err := nodeIDsOrAll(application, cfg, args)
+	if err != nil {
+		return err
 	}
 	links, err := application.ExportNodes(ids)
 	if err != nil {
@@ -231,16 +233,9 @@ func runTestCommand(application *app.App, args []string) error {
 	if err != nil {
 		return err
 	}
-	var ids []string
-	if len(args) == 0 {
-		for _, node := range cfg.Nodes {
-			ids = append(ids, node.ID)
-		}
-	} else if ids, err = nodeIDsFromArgs(application, args); err != nil {
+	ids, err := nodeIDsOrAll(application, cfg, args)
+	if err != nil {
 		return err
-	}
-	if len(ids) == 0 {
-		return errors.New("暂无节点，请先使用 add-node 添加")
 	}
 	index := make(map[string]int, len(cfg.Nodes))
 	for i, node := range cfg.Nodes {

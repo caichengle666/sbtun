@@ -189,16 +189,6 @@ func (a *App) UpdateSingBox() (SingBoxUpdateResult, error) {
 	return result, nil
 }
 
-func downloadSingBox(ctx context.Context, client *http.Client, releaseURL, goos, goarch string) ([]byte, string, error) {
-	release, err := latestSingBoxRelease(ctx, client, releaseURL)
-	if err != nil {
-		return nil, "", err
-	}
-	version := strings.TrimPrefix(strings.TrimSpace(release.TagName), "v")
-	binary, err := downloadSingBoxAsset(ctx, client, release, goos, goarch)
-	return binary, version, err
-}
-
 func latestSingBoxRelease(ctx context.Context, client *http.Client, releaseURL string) (singBoxRelease, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, releaseURL, nil)
 	if err != nil {

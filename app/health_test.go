@@ -147,3 +147,8 @@ func TestTestNodeUsesUDPForHysteria2(t *testing.T) {
 		t.Fatalf("unexpected hysteria2 health result: %+v", result)
 	}
 }
+
+// testNode runs the checks without a sing-box binary (Ping and port only).
+func testNode(ctx context.Context, node config.Node) NodeHealthDTO {
+	return testNodeWithBinary(ctx, node, "")
+}

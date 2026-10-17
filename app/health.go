@@ -38,10 +38,6 @@ type HealthCheckDTO struct {
 	StatusCode int    `json:"status_code,omitempty"`
 }
 
-func testNode(ctx context.Context, node config.Node) NodeHealthDTO {
-	return testNodeWithBinary(ctx, node, "")
-}
-
 func testNodeWithBinary(ctx context.Context, node config.Node, binary string) NodeHealthDTO {
 	if ctx == nil {
 		ctx = context.Background()
