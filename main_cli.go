@@ -32,6 +32,7 @@ func main() {
 	}
 	if command == "version" || command == "-v" || command == "--version" {
 		fmt.Println("sbtun " + app.Version())
+		printAppUpdate()
 		return
 	}
 	if hasHelpArg(commandArgs) && printCommandHelp(command, commandArgs) {
@@ -514,7 +515,7 @@ func printHelp() {
 		{"kernel version", "查看当前 sing-box 内核版本"},
 		{"kernel update", "更新到 sing-box 官方最新稳定版"},
 		{"help", "显示帮助"},
-		{"version", "显示版本"},
+		{"version", "显示版本并检查是否有新版本"},
 	})
 	fmt.Println(`
 示例:
@@ -1052,4 +1053,16 @@ func sortedSettingKeys(settings map[string]string) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func printAppUpdate() {
+	result, err := app.New().CheckAppUpdate()
+	switch {
+	case err != nil:
+		fmt.Fprintln(os.Stderr, err)
+	case result.HasUpdate:
+		fmt.Printf("发现新版本 v%s: %s\n", result.LatestVersion, result.ReleaseURL)
+	default:
+		fmt.Println("已是最新版本")
+	}
 }

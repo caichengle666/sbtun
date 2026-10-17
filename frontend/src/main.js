@@ -9,6 +9,7 @@ const savedNodeFilter = localStorage.getItem('sbtun-ui-node-filter') || 'all'
 const NODE_PROTOCOLS = [['hysteria2', 'Hysteria2'], ['vless', 'VLESS'], ['vmess', 'VMess'], ['trojan', 'Trojan'], ['shadowsocks', 'Shadowsocks'], ['tuic', 'TUIC'], ['anytls', 'AnyTLS'], ['wireguard', 'WireGuard'], ['socks', 'SOCKS'], ['http', 'HTTP']]
 const TRAFFIC_SLOTS = 30
 const NODE_TEST_CONCURRENCY = 4
+const APP_UPDATE_INTERVAL = 6 * 60 * 60 * 1000
 const validNodeFilters = ['all', ...NODE_PROTOCOLS.map(([id]) => id)]
 
 const state = {
@@ -16,6 +17,7 @@ const state = {
   running: false,
   version: '',
   singBoxVersion: '',
+  appUpdate: null,
   singBoxUpdating: false,
   singBoxUpdateMessage: '',
   singBoxUpdateState: 'idle',
@@ -247,6 +249,7 @@ function render() {
             <h1>${viewTitle(state.view)}</h1>
           </div>
           <div class="topbar-actions">
+            ${state.appUpdate?.has_update ? `<button id="appUpdate" class="update-pill" type="button" title="当前 v${escapeHtml(state.appUpdate.current_version)}，点击打开下载页"><span class="update-dot" aria-hidden="true"></span>新版本 v${escapeHtml(state.appUpdate.latest_version)}</button>` : ''}
             <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">${state.theme === 'dark' ? '☀' : '<span class="moon-icon" aria-hidden="true"></span>'}</button>
             <button id="power" class="switch ${state.running ? 'on' : ''}">${state.running ? '关闭 TUN' : '开启 TUN'}</button>
           </div>
@@ -913,6 +916,15 @@ async function refreshStatus() {
   }
 }
 
+async function checkAppUpdate() {
+  try {
+    state.appUpdate = await window.go.app.App.CheckAppUpdate()
+    renderApp()
+  } catch (e) {
+    console.error('check sbtun update failed:', e)
+  }
+}
+
 async function refreshSingBoxVersion() {
   try {
     state.singBoxVersion = await window.go.app.App.SingBoxVersion()
@@ -1106,6 +1118,9 @@ function bindEvents() {
     })
     state.ruleMenuDocumentBound = true
   }
+  document.querySelector('#appUpdate')?.addEventListener('click', () => {
+    if (state.appUpdate?.release_url) window.runtime.BrowserOpenURL(state.appUpdate.release_url)
+  })
   const themeToggle = document.querySelector('#themeToggle')
   if (themeToggle) {
     themeToggle.addEventListener('click', () => {
@@ -2011,6 +2026,8 @@ window.addEventListener('DOMContentLoaded', async () => {
     setInterval(refreshConfig, 1500)
     setInterval(refreshDiagnostics, 1500)
     setInterval(refreshCapture, 1500)
+    checkAppUpdate()
+    setInterval(checkAppUpdate, APP_UPDATE_INTERVAL)
   } else {
     showToast('Wails 运行时未加载', 'error')
     renderApp()

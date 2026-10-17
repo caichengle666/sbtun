@@ -231,7 +231,8 @@ textarea.input { resize: vertical; }
   .workspace { padding: 22px 16px 34px; }
   .topbar, .status-bar { align-items: flex-start; }
   .topbar { flex-direction: column; }
-  .topbar-actions { width: 100%; justify-content: space-between; }
+  .topbar-actions { width: 100%; }
+  .topbar-actions .switch { margin-left: auto; }
   .status-bar { flex-wrap: wrap; }
   .status-bar .muted { width: 100%; margin-left: 19px; }
   .overview-grid { grid-template-columns: 1fr; }
@@ -776,3 +777,8 @@ h2 { color: var(--text); letter-spacing: 0; }
   .node-item .latency { min-width: 52px; padding: 3px 5px; }
   .modal { padding: 10px; }
 }
+
+.update-pill { display: inline-flex; align-items: center; gap: 8px; height: 38px; padding: 0 14px; border: 1px solid var(--amber); border-radius: 8px; color: var(--amber); background: var(--amber-bg); font-size: 13px; font-weight: 600; white-space: nowrap; cursor: pointer; }
+.update-pill:hover { filter: brightness(1.1); }
+.update-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); animation: update-pulse 2s ease-in-out infinite; }
+@keyframes update-pulse { 50% { opacity: .35; } }

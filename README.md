@@ -15,6 +15,7 @@ sbtun 负责节点、订阅、路由、规则集、健康检查和运行状态�
 - **运行时切换与容错**：运行中切换节点、节点失效检测和自动切换。
 - **流量分析**：按域名或关键词查看经过 TUN 的 HTTP/HTTPS 请求，并保存为 JSON。
 - **便携发布包**：GitHub Actions 构建 Windows/Linux 的 amd64 与 arm64 版本。
+- **新版本提示**：启动时及每 6 小时检查 GitHub Releases，有新版本时右上角显示提示，点击打开下载页。
 
 ## 界面预览
 
@@ -222,7 +223,7 @@ run                             前台启动 TUN 与代理
 start                           同 run
 stop                            停止运行中的实例
 status                          查看当前状态
-version                         查看 sbtun 版本
+version                         查看 sbtun 版本并检查是否有新版本
 ```
 
 ### 节点管理
