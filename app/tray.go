@@ -53,6 +53,7 @@ func (a *App) StartTray() {
 			nodeItems := make(map[string]*systray.MenuItem)
 			nodeNames := make(map[string]string)
 			lastNodeSignature := ""
+			autoSwitchItem := systray.AddMenuItemCheckbox("自动切换节点", "当前节点失效时自动切换到可用节点", true)
 			systray.AddSeparator()
 			quitItem := systray.AddMenuItem("退出", "退出 sbtun 并关闭代理")
 
@@ -71,6 +72,13 @@ func (a *App) StartTray() {
 					case <-stopItem.ClickedCh:
 						go a.runTrayAction(func() {
 							if err := a.Stop(); err != nil {
+								a.showTrayError(err)
+							}
+						})
+					case <-autoSwitchItem.ClickedCh:
+						enabled := !autoSwitchItem.Checked()
+						go a.runTrayAction(func() {
+							if err := a.SetAutoSwitch(enabled); err != nil {
 								a.showTrayError(err)
 							}
 						})
@@ -93,6 +101,11 @@ func (a *App) StartTray() {
 					currentNodeID := ""
 					if cfg, err := a.manager.Load(); err == nil {
 						currentNodeID = cfg.CurrentNodeID
+						if cfg.AutoSwitchDisabled {
+							autoSwitchItem.Uncheck()
+						} else {
+							autoSwitchItem.Check()
+						}
 						signature := trayNodeSignature(cfg)
 						if signature != lastNodeSignature {
 							for _, item := range nodeItems {
@@ -131,7 +144,11 @@ func (a *App) StartTray() {
 						startItem.Disable()
 						stopItem.Enable()
 						runningNodeItem.SetTitle(fmt.Sprintf("当前运行节点：%s", trayNodeName(nodeNames, currentNodeID)))
-						systray.SetTooltip(fmt.Sprintf("sbtun | 实时 ↑ %s/s ↓ %s/s | 累计 ↑ %s ↓ %s", formatTraffic(up), formatTraffic(down), formatTraffic(upTotal), formatTraffic(downTotal)))
+						tooltip := fmt.Sprintf("sbtun | 实时 ↑ %s/s ↓ %s/s | 累计 ↑ %s ↓ %s", formatTraffic(up), formatTraffic(down), formatTraffic(upTotal), formatTraffic(downTotal))
+						if event, ok := a.recentAutoSwitchEvent(); ok {
+							tooltip += fmt.Sprintf("\n已自动切换：%s → %s", event.FromName, event.ToName)
+						}
+						systray.SetTooltip(limitTrayTooltip(tooltip))
 					case core.StateError:
 						startItem.Enable()
 						stopItem.Disable()
@@ -221,4 +238,22 @@ func (a *App) QuitApp() {
 	if a.ctx != nil {
 		runtime.Quit(a.ctx)
 	}
+}
+
+// Windows keeps tray tooltips in a fixed 128 UTF-16 unit buffer; longer text
+// would lose its terminator, so long node names are cut here.
+func limitTrayTooltip(text string) string {
+	const limit = 127
+	units := 0
+	for i, r := range text {
+		size := 1
+		if r > 0xFFFF {
+			size = 2
+		}
+		if units+size > limit {
+			return text[:i]
+		}
+		units += size
+	}
+	return text
 }

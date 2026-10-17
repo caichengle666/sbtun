@@ -10,6 +10,7 @@ const NODE_PROTOCOLS = [['hysteria2', 'Hysteria2'], ['vless', 'VLESS'], ['vmess'
 const TRAFFIC_SLOTS = 30
 const NODE_TEST_CONCURRENCY = 4
 const APP_UPDATE_INTERVAL = 6 * 60 * 60 * 1000
+const AUTO_SWITCH_BADGE_SECONDS = 10 * 60
 const validNodeFilters = ['all', ...NODE_PROTOCOLS.map(([id]) => id)]
 
 const state = {
@@ -18,6 +19,7 @@ const state = {
   version: '',
   singBoxVersion: '',
   appUpdate: null,
+  autoSwitch: null,
   singBoxUpdating: false,
   singBoxUpdateMessage: '',
   singBoxUpdateState: 'idle',
@@ -258,6 +260,7 @@ function render() {
           <span class="dot ${dotClass(state.statusState)}"></span>
           <strong id="statusText">${statusLabel(state.statusState, state.statusMessage)}</strong>
           ${state.running && state.selectorSyncState !== 'idle' ? `<span class="badge selector-sync ${state.selectorSyncState}" title="${escapeHtml(state.selectorSyncMessage)}">${selectorSyncLabel(state.selectorSyncState)}</span>` : ''}
+          ${renderAutoSwitchBadge()}
           <span class="status-context" id="statusNode">节点：${escapeHtml(state.config?.nodes?.find(node => node.id === activeNodeID())?.name || '未选择')}</span>
           <span class="status-context" id="statusMode">模式：${MODES.find(mode => mode.id === state.config?.routing_mode)?.name || '未设置'}</span>
           <span class="muted" id="statusTraffic">${formatTraffic(state.traffic)}</span>
@@ -461,7 +464,7 @@ function renderRoutingPage() {
   const matchType = RULE_MATCH_TYPES.find(item => item.id === state.customRuleForm.match_type) || RULE_MATCH_TYPES[0]
   const action = RULE_ACTIONS.find(item => item.id === state.customRuleForm.action) || RULE_ACTIONS[0]
   const diagnostics = state.diagnostics
-  return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div><div class="network-options"><div class="network-options-title">网络选项</div><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用 IPv6</strong><small>${escapeHtml(state.ipv6Status?.message || '正在检测设备 IPv6')}</small></span><span class="toggle-switch"><input id="ipv6Toggle" type="checkbox" ${state.config?.ipv6_enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用 WebRTC 防泄漏</strong><small>防止 WebRTC 通过直连暴露真实 IPv4/IPv6</small></span><span class="toggle-switch"><input id="webrtcProtectionToggle" type="checkbox" ${state.config?.webrtc_protection_enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用诊断信息</strong><small>显示当前 selector 和运行节点，仅用于排查问题</small></span><span class="toggle-switch"><input id="diagnosticsToggle" type="checkbox" ${state.config?.diagnostics_enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label></div></section>${state.config?.diagnostics_enabled ? `<section class="card"><h2>运行诊断</h2><div class="diagnostics-grid"><span>当前配置节点</span><strong>${escapeHtml(diagnostics?.current_node_id || '未选择')}</strong><span>实际 selector</span><strong>${escapeHtml(diagnostics?.selector || '未读取')}</strong><span>状态</span><strong>${escapeHtml(diagnostics?.message || '读取中')}</strong></div></section>` : ''}
+  return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div><div class="network-options"><div class="network-options-title">网络选项</div><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>节点失效自动切换</strong><small>当前节点连续两次测试失败时，切换到延迟最低的可用节点，优先同一订阅</small></span><span class="toggle-switch"><input id="autoSwitchToggle" type="checkbox" ${state.config?.auto_switch_disabled ? '' : 'checked'}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用 IPv6</strong><small>${escapeHtml(state.ipv6Status?.message || '正在检测设备 IPv6')}</small></span><span class="toggle-switch"><input id="ipv6Toggle" type="checkbox" ${state.config?.ipv6_enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用 WebRTC 防泄漏</strong><small>防止 WebRTC 通过直连暴露真实 IPv4/IPv6</small></span><span class="toggle-switch"><input id="webrtcProtectionToggle" type="checkbox" ${state.config?.webrtc_protection_enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用诊断信息</strong><small>显示当前 selector 和运行节点，仅用于排查问题</small></span><span class="toggle-switch"><input id="diagnosticsToggle" type="checkbox" ${state.config?.diagnostics_enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label></div></section>${state.config?.diagnostics_enabled ? `<section class="card"><h2>运行诊断</h2><div class="diagnostics-grid"><span>当前配置节点</span><strong>${escapeHtml(diagnostics?.current_node_id || '未选择')}</strong><span>实际 selector</span><strong>${escapeHtml(diagnostics?.selector || '未读取')}</strong><span>状态</span><strong>${escapeHtml(diagnostics?.message || '读取中')}</strong></div></section>` : ''}
     ${state.config?.routing_mode === 'custom' ? `<section class="card"><div class="section-heading"><div><h2>自定义分流规则</h2><p class="muted">先选择匹配对象，再填写内容和处理方式。</p></div></div><div id="customRulesPanel">${renderCustomRules()}</div><div class="rule-editor"><label class="rule-field"><span>匹配对象</span><select id="ruleMatchType" class="select">${RULE_MATCH_TYPES.map(item => `<option value="${item.id}" ${item.id === matchType.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-field"><span>匹配内容</span><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="${matchType.placeholder}" /></label><label class="rule-field"><span>处理方式</span><select id="ruleAction" class="select">${RULE_ACTIONS.map(item => `<option value="${item.id}" ${item.id === action.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><button id="addRuleBtn" class="btn btn-primary">添加规则</button><small class="rule-hint value-hint" id="ruleValueHint">${matchType.hint}</small><small class="rule-hint action-hint" id="ruleActionHint">${action.hint}</small></div><details class="rule-import" open><summary>批量导入规则</summary><div class="rule-import-body"><textarea id="ruleImport" class="input" rows="3" placeholder="每行一条，例如：proxy,domain_suffix,example.com"></textarea><button id="importRuleBtn" class="btn btn-ghost">导入</button></div></details></section>` : ''}
   </div>`
 }
@@ -916,6 +919,42 @@ async function refreshStatus() {
   }
 }
 
+function recentAutoSwitch() {
+  const event = state.autoSwitch?.event
+  if (!event?.seq || !event.ok || !state.running) return null
+  return Date.now() / 1000 - event.at <= AUTO_SWITCH_BADGE_SECONDS ? event : null
+}
+
+function renderAutoSwitchBadge() {
+  const event = recentAutoSwitch()
+  return event ? `<span class="badge auto-switched" title="${escapeHtml(event.message)}">已自动切换</span>` : ''
+}
+
+// refreshAutoSwitch toasts new failover events and merges the latencies the
+// background monitor measured into the node list.
+async function refreshAutoSwitch() {
+  try {
+    const previous = state.autoSwitch
+    const next = await window.go.app.App.GetAutoSwitchStatus()
+    state.autoSwitch = next
+    const event = next.event
+    const newEvent = previous && event?.seq && event.seq !== previous.event?.seq
+    let changed = newEvent || !!recentAutoSwitch() !== !!document.querySelector('.badge.auto-switched')
+    if (next.health_seq && next.health_seq !== previous?.health_seq) {
+      for (const health of await window.go.app.App.GetBackgroundNodeHealth()) {
+        if (!state.nodeTesting.has(health.node_id)) state.nodeHealth[health.node_id] = health
+      }
+      saveNodeHealth()
+      changed = true
+    }
+    if (changed) renderApp()
+    // The toast element is part of the rendered page, so show it after rendering.
+    if (newEvent) showToast(event.message, event.ok ? 'success' : 'error')
+  } catch (e) {
+    console.error('read auto switch status failed:', e)
+  }
+}
+
 async function checkAppUpdate() {
   try {
     state.appUpdate = await window.go.app.App.CheckAppUpdate()
@@ -1334,6 +1373,20 @@ function bindEvents() {
     })
   })
 
+  const autoSwitchToggle = document.querySelector('#autoSwitchToggle')
+  if (autoSwitchToggle) {
+    autoSwitchToggle.addEventListener('change', async () => {
+      const enabled = autoSwitchToggle.checked
+      try {
+        await window.go.app.App.SetAutoSwitch(enabled)
+        await refreshConfig()
+        showToast(enabled ? '已开启自动切换' : '已关闭自动切换', 'success')
+      } catch (e) {
+        autoSwitchToggle.checked = !enabled
+        showToast(e.message || String(e), 'error')
+      }
+    })
+  }
   const diagnosticsToggle = document.querySelector('#diagnosticsToggle')
   if (diagnosticsToggle) {
     diagnosticsToggle.addEventListener('change', async () => {
@@ -2026,6 +2079,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     setInterval(refreshConfig, 1500)
     setInterval(refreshDiagnostics, 1500)
     setInterval(refreshCapture, 1500)
+    setInterval(refreshAutoSwitch, 2000)
     checkAppUpdate()
     setInterval(checkAppUpdate, APP_UPDATE_INTERVAL)
   } else {

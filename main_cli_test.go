@@ -30,6 +30,7 @@ func TestValidateCLIArgsRejectsInvalidInputBeforeElevation(t *testing.T) {
 	}{
 		{command: "route", want: "sbtun route"},
 		{command: "route", args: []string{"invalid"}, want: "无效路由模式"},
+		{command: "auto-switch", args: []string{"maybe"}, want: "sbtun auto-switch"},
 		{command: "test", want: "sbtun test"},
 		{command: "del", want: "sbtun del"},
 		{command: "capture", args: []string{"cert"}, want: "capture cert"},
@@ -50,6 +51,7 @@ func TestValidateCLIArgsAcceptsSupportedCommands(t *testing.T) {
 		args    []string
 	}{
 		{command: "route", args: []string{"smart"}},
+		{command: "auto-switch", args: []string{"off"}},
 		{command: "info", args: []string{"1"}},
 		{command: "rules", args: []string{"update-all"}},
 		{command: "rules", args: []string{"add", "AdGuard", "https://example.com/adguard.srs"}},

@@ -782,3 +782,4 @@ h2 { color: var(--text); letter-spacing: 0; }
 .update-pill:hover { filter: brightness(1.1); }
 .update-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); animation: update-pulse 2s ease-in-out infinite; }
 @keyframes update-pulse { 50% { opacity: .35; } }
+.badge.auto-switched { color: var(--amber); background: var(--amber-bg); border-color: transparent; white-space: nowrap; }

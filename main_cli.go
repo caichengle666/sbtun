@@ -123,6 +123,19 @@ func main() {
 		if status.Selector != "" {
 			fmt.Printf("运行时 selector: %s\n", status.Selector)
 		}
+		autoSwitch := "开启"
+		if cfg.AutoSwitchDisabled {
+			autoSwitch = "关闭"
+		}
+		fmt.Printf("自动切换: %s\n", autoSwitch)
+	case "auto-switch":
+		enabled := commandArgs[0] == "on"
+		err = application.SetAutoSwitch(enabled)
+		if err == nil && enabled {
+			fmt.Println("已开启自动切换：当前节点失效时切换到延迟最低的可用节点")
+		} else if err == nil {
+			fmt.Println("已关闭自动切换")
+		}
 	case "route":
 		err = application.SetRoutingMode(config.RoutingMode(commandArgs[0]))
 		if err == nil {
@@ -259,6 +272,8 @@ func printCommandHelp(command string, args []string) bool {
 		usage = "sbtun " + command
 	case "route":
 		usage = "sbtun route <smart|global|direct|custom>"
+	case "auto-switch":
+		usage = "sbtun auto-switch <on|off>"
 	case "add-node":
 		usage = "sbtun add-node <节点链接或订阅链接>"
 	case "switch", "info":
@@ -312,6 +327,11 @@ func validateCLIArgs(command string, args []string) error {
 	switch command {
 	case "run", "start", "stop", "status", "nodes":
 		return requireNoArgs()
+	case "auto-switch":
+		if len(args) != 1 || (args[0] != "on" && args[0] != "off") {
+			return usageError("sbtun auto-switch <on|off>")
+		}
+		return nil
 	case "route":
 		if len(args) != 1 {
 			return usageError("sbtun route <smart|global|direct|custom>")
@@ -453,7 +473,7 @@ func validateCaptureArgs(args []string) error {
 
 func requiresElevation(command string, args []string) bool {
 	switch command {
-	case "run", "start", "stop", "route", "add-node", "add-rule", "switch", "del", "delete", "edit":
+	case "run", "start", "stop", "route", "auto-switch", "add-node", "add-rule", "switch", "del", "delete", "edit":
 		return true
 	case "capture":
 		if len(args) == 0 {
@@ -493,6 +513,7 @@ func printHelp() {
 	})
 	printHelpGroup("路由与规则", []helpEntry{
 		{"route <模式>", "设置路由: smart/global/direct/custom"},
+		{"auto-switch <on|off>", "开启或关闭节点失效自动切换"},
 		{"add-rule <链接|文件|文本>", "添加自定义规则"},
 		{"rules list", "列出规则集"},
 		{"rules add <名称> <SRS_URL>", "添加广告或其他 SRS 规则集"},

@@ -32,14 +32,12 @@ type App struct {
 	operationMu     sync.Mutex
 	trafficMu       sync.RWMutex
 	failoverMu      sync.Mutex
+	failover        failoverState
 	selectorSyncMu  sync.Mutex
 	selectorSyncEnd context.CancelFunc
 	selectorSyncSeq uint64
 	selectorState   string
 	selectorMessage string
-	failoverNext    time.Time
-	failoverBackoff time.Duration
-	failoverBlocked map[string]time.Time
 	uploadRate      uint64
 	downloadRate    uint64
 	uploadTotal     uint64
@@ -47,8 +45,6 @@ type App struct {
 }
 
 var clashAPIBaseURL = "http://127.0.0.1:9090"
-
-const failoverCooldown = 30 * time.Second
 
 func New() *App { return &App{} }
 
@@ -973,125 +969,6 @@ func currentSelectorContext(ctx context.Context) (string, error) {
 		return "", errors.New("sing-box 未返回当前节点")
 	}
 	return result.Now, nil
-}
-
-func (a *App) monitorNodes() {
-	if a.ctx == nil {
-		return
-	}
-	ticker := time.NewTicker(30 * time.Second)
-	defer ticker.Stop()
-	for {
-		select {
-		case <-ticker.C:
-			a.autoSwitchNode()
-		case <-a.ctx.Done():
-			return
-		}
-	}
-}
-
-func (a *App) autoSwitchNode() {
-	if a.runtime == nil || a.runtime.State == nil || a.manager == nil || !a.runtime.State.IsRunning() {
-		return
-	}
-	a.failoverMu.Lock()
-	if time.Now().Before(a.failoverNext) {
-		a.failoverMu.Unlock()
-		return
-	}
-	a.failoverMu.Unlock()
-	cfg, err := a.manager.Load()
-	if err != nil {
-		return
-	}
-	current, ok := currentNode(cfg)
-	if !ok || a.testNodeHealthy(current) {
-		return
-	}
-	a.blockFailoverNode(current.ID)
-	if candidate, ok := firstHealthyReplacementWithCooldown(cfg.Nodes, current.ID, a.isFailoverNodeBlocked, a.testNodeHealthy); ok {
-		a.operationMu.Lock()
-		defer a.operationMu.Unlock()
-		latest, err := a.manager.Load()
-		if err != nil || latest.CurrentNodeID != current.ID || !a.runtime.State.IsRunning() {
-			return
-		}
-		if candidate, ok = firstHealthyReplacementWithCooldown(latest.Nodes, latest.CurrentNodeID, a.isFailoverNodeBlocked, a.testNodeHealthy); ok {
-			if err := a.selectNodeLocked(candidate.ID); err != nil {
-				fmt.Printf("自动切换节点失败（%s）: %v\n", candidate.ID, err)
-				a.failoverMu.Lock()
-				if a.failoverBackoff == 0 {
-					a.failoverBackoff = 10 * time.Second
-				} else if a.failoverBackoff < 2*time.Minute {
-					a.failoverBackoff *= 2
-				}
-				a.failoverNext = time.Now().Add(a.failoverBackoff)
-				a.failoverMu.Unlock()
-			} else {
-				a.failoverMu.Lock()
-				a.failoverBackoff = 0
-				a.failoverNext = time.Time{}
-				a.failoverMu.Unlock()
-			}
-		}
-		return
-	}
-}
-
-func firstHealthyReplacement(nodes []config.Node, currentID string, check func(config.Node) bool) (config.Node, bool) {
-	return firstHealthyReplacementWithCooldown(nodes, currentID, nil, check)
-}
-
-func firstHealthyReplacementWithCooldown(nodes []config.Node, currentID string, blocked func(string) bool, check func(config.Node) bool) (config.Node, bool) {
-	for _, candidate := range nodes {
-		if candidate.ID == currentID || (blocked != nil && blocked(candidate.ID)) || !check(candidate) {
-			continue
-		}
-		return candidate, true
-	}
-	return config.Node{}, false
-}
-
-func (a *App) blockFailoverNode(id string) {
-	if id == "" {
-		return
-	}
-	a.failoverMu.Lock()
-	defer a.failoverMu.Unlock()
-	if a.failoverBlocked == nil {
-		a.failoverBlocked = make(map[string]time.Time)
-	}
-	a.failoverBlocked[id] = time.Now().Add(failoverCooldown)
-}
-
-func (a *App) isFailoverNodeBlocked(id string) bool {
-	a.failoverMu.Lock()
-	defer a.failoverMu.Unlock()
-	if a.failoverBlocked == nil {
-		return false
-	}
-	expires, ok := a.failoverBlocked[id]
-	if !ok {
-		return false
-	}
-	if !time.Now().Before(expires) {
-		delete(a.failoverBlocked, id)
-		return false
-	}
-	return true
-}
-
-func testNodePort(node config.Node) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 4*time.Second)
-	defer cancel()
-	return testNode(ctx, node).Port.OK
-}
-
-func (a *App) testNodeHealthy(node config.Node) bool {
-	ctx, cancel := context.WithTimeout(context.Background(), 12*time.Second)
-	defer cancel()
-	return a.testNode(ctx, node).Healthy
 }
 
 func (a *App) SetRoutingMode(mode config.RoutingMode) error {

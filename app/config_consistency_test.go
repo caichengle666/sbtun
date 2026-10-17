@@ -115,3 +115,35 @@ func TestUninitializedAppReturnsErrors(t *testing.T) {
 		t.Fatal("SaveConfig should fail before initialization")
 	}
 }
+
+func TestSetAutoSwitchPersists(t *testing.T) {
+	dir := t.TempDir()
+	manager := config.NewManager(filepath.Join(dir, "config.json"))
+	cfg := config.Default()
+	cfg.Nodes = []config.Node{{ID: "one", Name: "one", Protocol: "socks", Server: "127.0.0.1", Port: 1080}}
+	cfg.CurrentNodeID = "one"
+	if err := manager.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	a := New()
+	a.manager = manager
+	a.runtime = NewRuntimeCoordinator(filepath.Join(dir, "runtime-data"), "sing-box")
+	if !a.GetAutoSwitchStatus().Enabled {
+		t.Fatal("auto switch should be enabled by default")
+	}
+	if err := a.SetAutoSwitch(false); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := manager.Load(); !got.AutoSwitchDisabled || got.CurrentNodeID != "one" {
+		t.Fatalf("config=%+v", got)
+	}
+	if a.GetAutoSwitchStatus().Enabled {
+		t.Fatal("status should report disabled")
+	}
+	if err := a.SetAutoSwitch(true); err != nil {
+		t.Fatal(err)
+	}
+	if got, _ := manager.Load(); got.AutoSwitchDisabled {
+		t.Fatal("auto switch should be enabled again")
+	}
+}
