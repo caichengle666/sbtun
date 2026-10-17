@@ -4,8 +4,10 @@ import (
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -31,12 +33,13 @@ const (
 // BuildConfig 将用户配置转换为 sing-box 运行配置。
 // 四种模式在这里形成明确、可验证的路由闭环：智能分流、全局代理、全局直连、自定义规则。
 func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
-	return BuildConfigWithAuth(cfg, exeDir, LocalAuth{})
+	return BuildConfigWithAuth(cfg, exeDir, LocalAuth{}, nil)
 }
 
 // BuildConfigWithAuth builds the runtime config and protects the clash API and
-// capture proxy ports with the given local credentials.
-func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth) ([]byte, error) {
+// capture proxy ports with the given local credentials. resolved holds the
+// current addresses of node servers given as domain names.
+func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth, resolved []netip.Addr) ([]byte, error) {
 	if err := config.Validate(cfg); err != nil {
 		return nil, err
 	}
@@ -63,11 +66,17 @@ func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth) ([]by
 		}
 		outbounds = append(outbounds, captureOutbound)
 	}
-	inbounds := []map[string]any{{
+	tunInbound := map[string]any{
 		"type": "tun", "tag": "tun-in",
 		"address":    tunAddresses(cfg.IPv6Enabled),
 		"auto_route": true, "strict_route": cfg.WebRTCProtectionEnabled, "stack": "system",
-	}}
+	}
+	// Node servers bypass TUN at the OS routing level, so Ping/TCPing from
+	// sbtun reach each node directly instead of going through the current node.
+	if exclude := nodeBypassPrefixes(cfg.Nodes, resolved, cfg.IPv6Enabled); len(exclude) > 0 {
+		tunInbound["route_exclude_address"] = exclude
+	}
+	inbounds := []map[string]any{tunInbound}
 	if cfg.CaptureEnabled && len(normalizeCaptureDomains(cfg.CaptureDomains)) > 0 {
 		upstream := map[string]any{
 			"type": "mixed", "tag": "capture-upstream",
@@ -85,7 +94,7 @@ func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth) ([]by
 	result := RuntimeConfig{
 		Schema:    "https://sing-box.sagernet.org/schema.json",
 		Log:       map[string]any{"level": "info", "timestamp": true},
-		DNS:       buildDNS(cfg.DNSMode, cfg.RoutingMode),
+		DNS:       buildDNS(cfg.DNSMode, cfg.RoutingMode, NodeDomains(cfg.Nodes)),
 		Inbounds:  inbounds,
 		Outbounds: outbounds,
 		Endpoints: endpoints,
@@ -143,7 +152,7 @@ func findNode(nodes []config.Node, id string) (config.Node, bool) {
 	return config.Node{}, false
 }
 
-func buildDNS(mode config.DNSMode, routeMode config.RoutingMode) map[string]any {
+func buildDNS(mode config.DNSMode, routeMode config.RoutingMode, nodeDomains []string) map[string]any {
 	servers := []map[string]any{
 		{"type": "udp", "tag": "dns-local", "server": "223.5.5.5", "server_port": 53, "detour": "direct"},
 		{"type": "udp", "tag": "dns-local-standby", "server": "119.29.29.29", "server_port": 53, "detour": "direct"},
@@ -158,6 +167,11 @@ func buildDNS(mode config.DNSMode, routeMode config.RoutingMode) map[string]any 
 		final = "dns-local"
 	}
 	rules := []map[string]any{}
+	// Node domains always resolve locally: tests must not depend on the
+	// current node, which may be the one that is down.
+	if len(nodeDomains) > 0 {
+		rules = append(rules, map[string]any{"domain": nodeDomains, "server": "dns-local"})
+	}
 	if mode == config.DNSAuto && routeMode == config.RoutingSmart {
 		rules = append(rules,
 			map[string]any{"rule_set": []string{"geosite-cn"}, "server": "dns-local"},
@@ -656,4 +670,52 @@ func normalizePortRanges(value string) []string {
 		parts[i] = strings.Replace(part, "-", ":", 1)
 	}
 	return parts
+}
+
+// NodeDomains returns the distinct node servers that are domain names.
+func NodeDomains(nodes []config.Node) []string {
+	seen := make(map[string]struct{})
+	var domains []string
+	for _, node := range nodes {
+		server := strings.ToLower(strings.TrimSpace(node.Server))
+		if server == "" {
+			continue
+		}
+		if _, err := netip.ParseAddr(strings.Trim(server, "[]")); err == nil {
+			continue
+		}
+		if _, ok := seen[server]; ok {
+			continue
+		}
+		seen[server] = struct{}{}
+		domains = append(domains, server)
+	}
+	sort.Strings(domains)
+	return domains
+}
+
+// nodeBypassPrefixes lists node server IPs (literal or resolved) as host
+// prefixes. Private and loopback addresses never enter TUN and are skipped.
+func nodeBypassPrefixes(nodes []config.Node, resolved []netip.Addr, ipv6Enabled bool) []string {
+	addrs := append([]netip.Addr(nil), resolved...)
+	for _, node := range nodes {
+		if addr, err := netip.ParseAddr(strings.Trim(strings.TrimSpace(node.Server), "[]")); err == nil {
+			addrs = append(addrs, addr)
+		}
+	}
+	seen := make(map[netip.Addr]struct{})
+	var prefixes []string
+	for _, addr := range addrs {
+		addr = addr.Unmap().WithZone("")
+		if !addr.IsValid() || addr.IsLoopback() || addr.IsPrivate() || addr.IsUnspecified() || addr.IsLinkLocalUnicast() || (addr.Is6() && !ipv6Enabled) {
+			continue
+		}
+		if _, ok := seen[addr]; ok {
+			continue
+		}
+		seen[addr] = struct{}{}
+		prefixes = append(prefixes, netip.PrefixFrom(addr, addr.BitLen()).String())
+	}
+	sort.Strings(prefixes)
+	return prefixes
 }

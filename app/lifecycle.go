@@ -40,6 +40,7 @@ type RuntimeCoordinator struct {
 	activeConfigSet bool
 	// LocalAuth protects the clash API and capture proxy ports.
 	LocalAuth singbox.LocalAuth
+	resolver  nodeResolver
 }
 
 func NewRuntimeCoordinator(workDir, binary string) *RuntimeCoordinator {
@@ -256,7 +257,7 @@ func (r *RuntimeCoordinator) SyncConfig(cfg config.Config) (string, error) {
 	if exeDir == "." || exeDir == "" {
 		exeDir, _ = os.Getwd()
 	}
-	data, err := singbox.BuildConfigWithAuth(cfg, exeDir, r.LocalAuth)
+	data, err := singbox.BuildConfigWithAuth(cfg, exeDir, r.LocalAuth, r.resolver.resolve(cfg.Nodes))
 	if err != nil {
 		return "", err
 	}

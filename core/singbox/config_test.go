@@ -2,9 +2,12 @@ package singbox
 
 import (
 	"encoding/json"
+	"fmt"
+	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/caichengle666/sbtun/config"
@@ -493,7 +496,7 @@ func TestBuildConfigWithAuthProtectsLocalPorts(t *testing.T) {
 	cfg.CaptureEnabled = true
 	cfg.CaptureDomains = []string{"example.com"}
 	auth := LocalAuth{ClashSecret: "clash", ProxyUsername: "sbtun", ProxyPassword: "pw"}
-	data, err := BuildConfigWithAuth(cfg, t.TempDir(), auth)
+	data, err := BuildConfigWithAuth(cfg, t.TempDir(), auth, nil)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -528,5 +531,52 @@ func TestBuildConfigWithAuthProtectsLocalPorts(t *testing.T) {
 	}
 	if !sawInbound || !sawOutbound {
 		t.Fatalf("capture ports not authenticated: inbound=%v outbound=%v", sawInbound, sawOutbound)
+	}
+}
+
+func TestNodeServersBypassTUNAndResolveLocally(t *testing.T) {
+	cfg := testConfig(config.RoutingGlobal)
+	cfg.Nodes = append(cfg.Nodes,
+		config.Node{ID: "ip", Name: "ip", Protocol: "socks", Server: "203.0.113.7", Port: 1080},
+		config.Node{ID: "v6", Name: "v6", Protocol: "socks", Server: "[2001:db8::1]", Port: 1080},
+		config.Node{ID: "dn", Name: "dn", Protocol: "socks", Server: "Node.Example.com", Port: 1080},
+		config.Node{ID: "dn2", Name: "dn2", Protocol: "socks", Server: "node.example.com", Port: 1081},
+	)
+	resolved := []netip.Addr{netip.MustParseAddr("198.51.100.9"), netip.MustParseAddr("203.0.113.7")}
+	data, err := BuildConfigWithAuth(cfg, t.TempDir(), LocalAuth{}, resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed RuntimeConfig
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	exclude, _ := parsed.Inbounds[0]["route_exclude_address"].([]any)
+	// 127.0.0.1 is skipped, duplicates merge, IPv6 is left out while IPv6 is off.
+	if fmt.Sprint(exclude) != "[198.51.100.9/32 203.0.113.7/32]" {
+		t.Fatalf("route_exclude_address=%v", exclude)
+	}
+	rules, _ := parsed.DNS["rules"].([]any)
+	first, _ := rules[0].(map[string]any)
+	if fmt.Sprint(first["domain"]) != "[node.example.com]" || first["server"] != "dns-local" {
+		t.Fatalf("first dns rule=%v", first)
+	}
+
+	cfg.IPv6Enabled = true
+	data, err = BuildConfigWithAuth(cfg, t.TempDir(), LocalAuth{}, resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !strings.Contains(string(data), `"2001:db8::1/128"`) {
+		t.Fatalf("ipv6 node not excluded: %s", data)
+	}
+	if binary := os.Getenv("SING_BOX_BINARY"); binary != "" {
+		path := filepath.Join(t.TempDir(), "bypass.json")
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if output, err := exec.Command(binary, "check", "-c", path).CombinedOutput(); err != nil {
+			t.Fatalf("sing-box check failed: %v\n%s\n%s", err, output, data)
+		}
 	}
 }
