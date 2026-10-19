@@ -159,22 +159,36 @@ func tryBase64Decode(s string) (string, error) {
 	return string(data), nil
 }
 
+// vmessConfig 是 v2rayN 的 vmess 分享格式。port、aid 等字段在不同客户端里
+// 可能是字符串也可能是数字，所以用 looseString 接收。
 type vmessConfig struct {
-	V    string `json:"v"`
-	Ps   string `json:"ps"`
-	Add  string `json:"add"`
-	Port string `json:"port"`
-	ID   string `json:"id"`
-	Aid  string `json:"aid"`
-	Net  string `json:"net"`
-	Type string `json:"type"`
-	Scy  string `json:"scy"`
-	Host string `json:"host"`
-	Path string `json:"path"`
-	TLS  string `json:"tls"`
-	SNI  string `json:"sni"`
-	ALPN string `json:"alpn"`
-	FP   string `json:"fp"`
+	V             looseString `json:"v"`
+	Ps            looseString `json:"ps"`
+	Add           looseString `json:"add"`
+	Port          looseString `json:"port"`
+	ID            looseString `json:"id"`
+	Aid           looseString `json:"aid"`
+	Net           looseString `json:"net"`
+	Type          looseString `json:"type"` // 伪装类型，导入时不使用
+	Scy           looseString `json:"scy"`
+	Host          looseString `json:"host"`
+	Path          looseString `json:"path"`
+	TLS           looseString `json:"tls"`
+	SNI           looseString `json:"sni"`
+	ALPN          looseString `json:"alpn"`
+	FP            looseString `json:"fp"`
+	AllowInsecure looseString `json:"allowInsecure"`
+}
+
+type looseString string
+
+func (s *looseString) UnmarshalJSON(data []byte) error {
+	var v any
+	if err := json.Unmarshal(data, &v); err != nil {
+		return err
+	}
+	*s = looseString(strings.TrimSpace(anyString(v)))
+	return nil
 }
 
 func parseVMess(link string) (config.Node, error) {
@@ -190,45 +204,40 @@ func parseVMess(link string) (config.Node, error) {
 	if err := json.Unmarshal([]byte(decoded), &cfg); err != nil {
 		return config.Node{}, fmt.Errorf("vmess JSON 解析失败: %w", err)
 	}
-	port, err := parsePort(cfg.Port)
+	port, err := parsePort(string(cfg.Port))
 	if err != nil {
 		return config.Node{}, fmt.Errorf("vmess 端口无效: %s", cfg.Port)
 	}
-	settings := map[string]string{"uuid": cfg.ID}
-	if cfg.Aid != "" {
-		settings["alter_id"] = cfg.Aid
+	settings := map[string]string{"uuid": string(cfg.ID)}
+	set := func(key string, v looseString) {
+		if v != "" {
+			settings[key] = string(v)
+		}
 	}
-	security := cfg.Scy
-	if security == "" {
-		security = cfg.Type
+	set("alter_id", cfg.Aid)
+	// "type" 是伪装类型（none/http），不是加密方式，不能拿来当 security。
+	set("security", cfg.Scy)
+	setLinkTransport(settings, string(cfg.Net))
+	set("transport_host", cfg.Host)
+	if settings["transport_type"] == "grpc" {
+		set("transport_service_name", cfg.Path)
+	} else {
+		set("transport_path", cfg.Path)
 	}
-	if security != "" {
-		settings["security"] = security
-	}
-	setLinkTransport(settings, cfg.Net)
-	if cfg.Host != "" {
-		settings["transport_host"] = cfg.Host
-	}
-	if cfg.Path != "" {
-		settings["transport_path"] = cfg.Path
-	}
-	if strings.EqualFold(cfg.TLS, "tls") {
+	if strings.EqualFold(string(cfg.TLS), "tls") {
 		settings["tls"] = "true"
 	}
-	if cfg.SNI != "" {
-		settings["server_name"] = cfg.SNI
-	}
-	if cfg.ALPN != "" {
-		settings["alpn"] = cfg.ALPN
-	}
-	if cfg.FP != "" {
-		settings["utls_fingerprint"] = cfg.FP
+	set("server_name", cfg.SNI)
+	set("alpn", cfg.ALPN)
+	set("utls_fingerprint", cfg.FP)
+	if cfg.AllowInsecure == "1" || strings.EqualFold(string(cfg.AllowInsecure), "true") {
+		settings["insecure"] = "true"
 	}
 	return config.Node{
-		ID:       "vmess-" + cfg.Add + "-" + cfg.Port,
-		Name:     cfg.Ps,
+		ID:       "vmess-" + string(cfg.Add) + "-" + string(cfg.Port),
+		Name:     string(cfg.Ps),
 		Protocol: "vmess",
-		Server:   cfg.Add,
+		Server:   string(cfg.Add),
 		Port:     port,
 		Settings: settings,
 	}, nil
@@ -270,7 +279,7 @@ func parseVLess(link string) (config.Node, error) {
 	if vals.Get("alpn") != "" {
 		settings["alpn"] = vals.Get("alpn")
 	}
-	if vals.Get("insecure") == "1" || strings.EqualFold(vals.Get("insecure"), "true") {
+	if queryEnabled(vals, "insecure", "allowInsecure", "allow_insecure") {
 		settings["insecure"] = "true"
 	}
 	if vals.Get("pbk") != "" {
@@ -321,16 +330,23 @@ func parseTrojan(link string) (config.Node, error) {
 	if vals.Get("path") != "" {
 		settings["transport_path"] = vals.Get("path")
 	}
+	if vals.Get("serviceName") != "" {
+		settings["transport_service_name"] = vals.Get("serviceName")
+	}
 	if vals.Get("sni") != "" {
 		settings["server_name"] = vals.Get("sni")
 	}
-	if vals.Get("security") == "tls" {
+	// Trojan 默认就是 TLS，链接里通常不写 security；只有明确写 none 才关闭。
+	if !strings.EqualFold(vals.Get("security"), "none") {
 		settings["tls"] = "true"
+	}
+	if vals.Get("fp") != "" {
+		settings["utls_fingerprint"] = vals.Get("fp")
 	}
 	if vals.Get("alpn") != "" {
 		settings["alpn"] = vals.Get("alpn")
 	}
-	if vals.Get("insecure") == "1" || strings.EqualFold(vals.Get("insecure"), "true") {
+	if queryEnabled(vals, "insecure", "allowInsecure", "allow_insecure") {
 		settings["insecure"] = "true"
 	}
 	name := u.Fragment
@@ -366,7 +382,8 @@ func parseShadowsocks(link string) (config.Node, error) {
 		return config.Node{}, fmt.Errorf("ss 格式错误: 缺少 @")
 	}
 	userPart := payload[:atIdx]
-	address := payload[atIdx+1:]
+	address, query, _ := strings.Cut(payload[atIdx+1:], "?")
+	address = strings.TrimSuffix(address, "/")
 	if decoded, err := tryBase64Decode(userPart); err == nil && strings.Contains(decoded, ":") {
 		userPart = decoded
 	}
@@ -382,6 +399,22 @@ func parseShadowsocks(link string) (config.Node, error) {
 	if err != nil {
 		return config.Node{}, fmt.Errorf("ss 端口无效: %s", portStr)
 	}
+	settings := map[string]string{"method": method, "password": password}
+	// SIP002：?plugin=obfs-local;obfs=http;obfs-host=example.com
+	if vals, err := url.ParseQuery(query); err == nil && vals.Get("plugin") != "" {
+		plugin, opts, _ := strings.Cut(vals.Get("plugin"), ";")
+		switch plugin {
+		case "obfs-local", "simple-obfs":
+			plugin = "obfs-local"
+		case "v2ray-plugin":
+		default:
+			return config.Node{}, fmt.Errorf("ss 插件暂不支持: %s", plugin)
+		}
+		settings["plugin"] = plugin
+		if opts != "" {
+			settings["plugin_opts"] = opts
+		}
+	}
 	if name == "" {
 		name = "ss-" + server
 	}
@@ -391,7 +424,7 @@ func parseShadowsocks(link string) (config.Node, error) {
 		Protocol: "shadowsocks",
 		Server:   server,
 		Port:     port,
-		Settings: map[string]string{"method": method, "password": password},
+		Settings: settings,
 	}, nil
 }
 
@@ -416,7 +449,7 @@ func parseHysteria2(link string) (config.Node, error) {
 	if v := vals.Get("sni"); v != "" {
 		settings["sni"] = v
 	}
-	if v := vals.Get("insecure"); v == "1" || strings.EqualFold(v, "true") {
+	if queryEnabled(vals, "insecure", "allowInsecure", "allow_insecure") {
 		settings["insecure"] = "true"
 	}
 	if v := vals.Get("up_mbps"); v != "" {
@@ -483,9 +516,18 @@ func parseHTTPStyle(link string) (config.Node, error) {
 		settings["version"] = version
 	}
 	if u.User != nil {
-		settings["username"] = u.User.Username()
+		username, password := u.User.Username(), ""
 		if pw, ok := u.User.Password(); ok {
-			settings["password"] = pw
+			password = pw
+		} else if decoded, err := tryBase64Decode(username); err == nil && strings.Contains(decoded, ":") {
+			// v2rayN 的 socks 链接把 user:pass 整体 base64 编码。
+			username, password, _ = strings.Cut(decoded, ":")
+		}
+		if username != "" {
+			settings["username"] = username
+		}
+		if password != "" {
+			settings["password"] = password
 		}
 	}
 	vals := u.Query()
@@ -495,7 +537,7 @@ func parseHTTPStyle(link string) (config.Node, error) {
 	if vals.Get("sni") != "" {
 		settings["server_name"] = vals.Get("sni")
 	}
-	if vals.Get("insecure") == "1" || strings.EqualFold(vals.Get("insecure"), "true") {
+	if queryEnabled(vals, "insecure", "allowInsecure", "allow_insecure") {
 		settings["insecure"] = "true"
 	}
 	if vals.Get("path") != "" {

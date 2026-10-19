@@ -60,7 +60,14 @@ func nodeShareLink(node config.Node) (string, error) {
 			return "", fmt.Errorf("缺少加密方式或密码")
 		}
 		credentials := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + password))
-		return "ss://" + credentials + "@" + nodeAddress(node) + "#" + url.PathEscape(node.Name), nil
+		query := ""
+		if plugin := node.Settings["plugin"]; plugin != "" {
+			if opts := node.Settings["plugin_opts"]; opts != "" {
+				plugin += ";" + opts
+			}
+			query = "/?" + url.Values{"plugin": []string{plugin}}.Encode()
+		}
+		return "ss://" + credentials + "@" + nodeAddress(node) + query + "#" + url.PathEscape(node.Name), nil
 	case "hysteria2":
 		return hysteria2ShareLink(node), nil
 	case "tuic":
@@ -88,15 +95,22 @@ func vmessShareLink(node config.Node) (string, error) {
 	if security == "" {
 		security = "auto"
 	}
+	path := node.Settings["transport_path"]
+	if transport == "grpc" {
+		path = node.Settings["transport_service_name"]
+	}
 	cfg := vmessConfig{
-		V: "2", Ps: node.Name, Add: node.Server, Port: strconv.Itoa(int(node.Port)),
-		ID: node.Settings["uuid"], Aid: node.Settings["alter_id"], Net: transport,
-		Type: "none", Scy: security, Host: node.Settings["transport_host"],
-		Path: node.Settings["transport_path"], SNI: node.Settings["server_name"],
-		ALPN: node.Settings["alpn"], FP: node.Settings["utls_fingerprint"],
+		V: "2", Ps: looseString(node.Name), Add: looseString(node.Server), Port: looseString(strconv.Itoa(int(node.Port))),
+		ID: looseString(node.Settings["uuid"]), Aid: looseString(node.Settings["alter_id"]), Net: looseString(transport),
+		Type: "none", Scy: looseString(security), Host: looseString(node.Settings["transport_host"]),
+		Path: looseString(path), SNI: looseString(node.Settings["server_name"]),
+		ALPN: looseString(node.Settings["alpn"]), FP: looseString(node.Settings["utls_fingerprint"]),
 	}
 	if settingEnabled(node.Settings, "tls") {
 		cfg.TLS = "tls"
+	}
+	if settingEnabled(node.Settings, "insecure") {
+		cfg.AllowInsecure = "1"
 	}
 	data, err := json.Marshal(cfg)
 	if err != nil {

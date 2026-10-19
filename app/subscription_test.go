@@ -35,7 +35,7 @@ func TestParseVMessKeepsUUIDAndTransportFields(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	for key, value := range map[string]string{"uuid": "uuid", "security": "none", "transport_type": "ws", "transport_host": "cdn.example.com", "transport_path": "/ws", "server_name": "tls.example.com", "tls": "true", "alpn": "h2", "utls_fingerprint": "chrome"} {
+	for key, value := range map[string]string{"uuid": "uuid", "security": "", "transport_type": "ws", "transport_host": "cdn.example.com", "transport_path": "/ws", "server_name": "tls.example.com", "tls": "true", "alpn": "h2", "utls_fingerprint": "chrome"} {
 		if node.Settings[key] != value {
 			t.Fatalf("setting %s=%q want %q; settings=%v", key, node.Settings[key], value, node.Settings)
 		}

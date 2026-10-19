@@ -160,6 +160,7 @@ const NODE_FIELDS = {
     { key: 'server_name', label: 'TLS SNI', placeholder: '可选，默认服务器地址' },
     { key: 'alpn', label: 'TLS ALPN', placeholder: '逗号分隔，例如 h2,http/1.1' },
     { key: 'insecure', label: '跳过证书校验', type: 'checkbox' },
+    { key: 'utls_fingerprint', label: 'uTLS 指纹', placeholder: '可选，例如 chrome' },
     { key: 'transport_type', label: '传输', type: 'select', options: [['', '无'], ['ws', 'WebSocket'], ['http', 'HTTP'], ['grpc', 'gRPC'], ['httpupgrade', 'HTTPUpgrade']] },
     { key: 'multiplex', label: '启用 Multiplex', type: 'checkbox' },
   ],
@@ -446,7 +447,9 @@ function renderNodeField(field) {
     return `<label class="check-field"><input data-setting="${field.key}" type="checkbox" ${value ? 'checked' : ''} /> ${field.label}</label>`
   }
   if (field.type === 'select') {
-    return `<label class="setting-field"><span>${field.label}</span><select data-setting="${field.key}" class="select">${field.options.map(([key, label]) => `<option value="${key}" ${value === key ? 'selected' : ''}>${label}</option>`).join('')}</select></label>`
+    // 导入的值不在预设选项里时也要显示出来，否则保存时会被改成第一个选项。
+    const options = value && !field.options.some(([key]) => key === value) ? [...field.options, [value, value]] : field.options
+    return `<label class="setting-field"><span>${field.label}</span><select data-setting="${field.key}" class="select">${options.map(([key, label]) => `<option value="${escapeHtml(key)}" ${value === key ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}</select></label>`
   }
   return `<label class="setting-field"><span>${field.label}</span><input data-setting="${field.key}" class="input" type="${field.type || 'text'}" value="${escapeHtml(value)}" placeholder="${field.placeholder || ''}" ${field.required ? 'required' : ''} /></label>`
 }
@@ -470,7 +473,27 @@ function buildManualSettings(protocol, password) {
     settings.sni = settings.server_name
     delete settings.server_name
   }
+  for (const key of transportKeys(protocol, settings.transport_type)) {
+    const value = String(form[key] || '').trim()
+    if (value) settings[key] = value
+  }
   return settings
+}
+
+// transportKeys 返回当前传输方式在表单里显示的参数（Host/Path 或 Service Name）。
+function transportKeys(protocol, type) {
+  if (!type || !(NODE_FIELDS[protocol] || []).some(field => field.key === 'transport_type')) return []
+  if (type === 'grpc') return ['transport_service_name']
+  return ['transport_host', 'transport_path']
+}
+
+// 表单负责的设置项；编辑节点时其余字段（表单里没有的）原样保留。
+function formSettingKeys(protocol) {
+  const keys = new Set((NODE_FIELDS[protocol] || []).map(field => field.key))
+  if (keys.has('transport_type')) ['transport_host', 'transport_path', 'transport_service_name'].forEach(key => keys.add(key))
+  if (protocol === 'vless' || protocol === 'vmess') { keys.delete('password'); keys.add('uuid') }
+  if (protocol === 'hysteria2') { keys.delete('server_name'); keys.add('sni') }
+  return keys
 }
 
 function renderRoutingPage() {
@@ -2078,6 +2101,12 @@ function bindEvents() {
         }
         if (editing) {
           node.id = state.editingNodeId
+          const original = state.config?.nodes?.find(n => n.id === state.editingNodeId)
+          if (original?.protocol === protocol) {
+            const managed = formSettingKeys(protocol)
+            const kept = Object.fromEntries(Object.entries(original.settings || {}).filter(([key]) => !managed.has(key)))
+            node.settings = { ...kept, ...node.settings }
+          }
           await window.go.app.App.UpdateNode(state.editingNodeId, node)
           state.editingNodeId = ''
         } else {
