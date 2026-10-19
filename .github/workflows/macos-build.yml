@@ -16,6 +16,7 @@ concurrency:
 jobs:
   build-macos:
     runs-on: macos-latest
+    timeout-minutes: 30
     strategy:
       fail-fast: false
       matrix:
@@ -110,6 +111,7 @@ jobs:
 
       - name: TUN 冒烟测试
         if: matrix.arch == 'arm64'
+        timeout-minutes: 5
         run: |
           set -euo pipefail
           CLI="$APP/Contents/MacOS/sbtun-cli"
