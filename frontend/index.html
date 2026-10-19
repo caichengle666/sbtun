@@ -6,6 +6,14 @@
   <title>sbtun</title>
 </head>
 <body>
+  <header class="titlebar" style="--wails-draggable: drag">
+    <span class="titlebar-brand"><img class="titlebar-logo" src="/src/assets/logo.svg" alt="" />sbtun</span>
+    <div class="window-controls" style="--wails-draggable: no-drag">
+      <button type="button" data-window="minimise" aria-label="最小化" title="最小化"><svg viewBox="0 0 10 10"><path d="M0 5h10" /></svg></button>
+      <button type="button" data-window="maximise" aria-label="最大化" title="最大化"><svg viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" /></svg></button>
+      <button type="button" data-window="close" class="window-close" aria-label="关闭" title="关闭"><svg viewBox="0 0 10 10"><path d="M0 0l10 10M10 0L0 10" /></svg></button>
+    </div>
+  </header>
   <div id="app"></div>
   <script type="module" src="/src/main.js"></script>
 </body>

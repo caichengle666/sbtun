@@ -77,12 +77,6 @@ jobs:
           Write-Host "sing-box latest: $singVersion"
           Write-Host "Wintun latest: $wintunVersion"
 
-      - name: 生成统一 Windows 图标
-        shell: pwsh
-        run: |
-          if (Test-Path build\windows\icon.ico) { Move-Item build\windows\icon.ico "$env:RUNNER_TEMP\old-icon.ico" -Force }
-          Copy-Item resources\icon.png build\appicon.png -Force
-
       - name: 构建 sbtun.exe
         shell: pwsh
         run: wails build -clean -platform windows/$env:TARGET_ARCH
@@ -159,7 +153,7 @@ jobs:
           Copy-Item VERSION dist\sbtun\VERSION -Force
           New-Item -ItemType Directory -Force -Path dist\sbtun\resources | Out-Null
           Copy-Item resources\icon.png dist\sbtun\resources\icon.png -Force
-          Copy-Item build\windows\icon.ico dist\sbtun\resources\sbtun.ico -Force
+          Copy-Item resources\sbtun.ico dist\sbtun\resources\sbtun.ico -Force
           @"
           sbtun Windows $env:TARGET_ARCH 便携版
 

@@ -8,6 +8,7 @@ import (
 )
 
 func configurePlatformOptions(appOptions *options.App) {
+	appOptions.Frameless = true
 	appOptions.Windows = &windows.Options{
 		WebviewIsTransparent: false,
 		WindowIsTranslucent:  false,

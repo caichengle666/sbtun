@@ -1,5 +1,6 @@
 
 import './style.css'
+import logoUrl from './assets/logo.svg'
 
 const app = document.querySelector('#app')
 const THEMES = [
@@ -235,7 +236,7 @@ function render() {
   return `
     <main class="shell">
       <aside class="sidebar">
-        <div class="brand"><span class="brand-mark">s</span><span class="brand-name">sbtun</span></div>
+        <div class="brand"><img class="brand-mark" src="${logoUrl}" alt="" /><span class="brand-name">sbtun</span></div>
         <div class="nav-caption">工作区</div>
         <nav class="nav-list">
           ${[
@@ -2121,8 +2122,37 @@ function beginEditNode(node) {
   document.querySelector('#nodeName')?.focus()
 }
 
+const MAXIMISE_ICON = '<svg viewBox="0 0 10 10"><rect x=".5" y=".5" width="9" height="9" /></svg>'
+const RESTORE_ICON = '<svg viewBox="0 0 10 10"><path d="M2.5 2.5V.5h7v7h-2" /><rect x=".5" y="2.5" width="7" height="7" /></svg>'
+
+// The window has no system title bar; macOS keeps its own traffic-light buttons.
+async function setupTitlebar() {
+  const runtime = window.runtime
+  if (!runtime) return
+  const platform = (await runtime.Environment().catch(() => ({}))).platform || ''
+  document.documentElement.dataset.platform = platform
+  if (platform === 'darwin') return
+  const maximise = document.querySelector('[data-window="maximise"]')
+  const syncMaximise = async () => {
+    const maximised = await runtime.WindowIsMaximised().catch(() => false)
+    maximise.innerHTML = maximised ? RESTORE_ICON : MAXIMISE_ICON
+    maximise.title = maximised ? '还原' : '最大化'
+    maximise.setAttribute('aria-label', maximise.title)
+  }
+  document.querySelector('[data-window="minimise"]').addEventListener('click', () => runtime.WindowMinimise())
+  maximise.addEventListener('click', () => runtime.WindowToggleMaximise())
+  // Closing hides to the tray, the same as the old system close button.
+  document.querySelector('[data-window="close"]').addEventListener('click', () => runtime.WindowHide())
+  document.querySelector('.titlebar').addEventListener('dblclick', event => {
+    if (!event.target.closest('.window-controls')) runtime.WindowToggleMaximise()
+  })
+  window.addEventListener('resize', syncMaximise)
+  syncMaximise()
+}
+
 // Wails runtime ready
 window.addEventListener('DOMContentLoaded', async () => {
+  setupTitlebar()
   if (window.go?.app?.App) {
     await refreshStatus()
     await refreshConfig()
