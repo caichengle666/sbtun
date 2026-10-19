@@ -124,6 +124,7 @@ func vlessShareLink(node config.Node) string {
 	q := url.Values{"encryption": []string{"none"}}
 	setTransportQuery(q, node.Settings)
 	setQuery(q, "flow", node.Settings["flow"])
+	setQuery(q, "packetEncoding", node.Settings["packet_encoding"])
 	setQuery(q, "sni", node.Settings["server_name"])
 	setQuery(q, "alpn", node.Settings["alpn"])
 	setQuery(q, "pbk", node.Settings["reality_public_key"])

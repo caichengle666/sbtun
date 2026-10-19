@@ -270,6 +270,9 @@ func parseVLess(link string) (config.Node, error) {
 	if vals.Get("flow") != "" {
 		settings["flow"] = vals.Get("flow")
 	}
+	if vals.Get("packetEncoding") != "" {
+		settings["packet_encoding"] = vals.Get("packetEncoding")
+	}
 	if vals.Get("sni") != "" {
 		settings["server_name"] = vals.Get("sni")
 	}

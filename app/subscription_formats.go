@@ -42,8 +42,15 @@ func parseClashSubscription(text string) ([]config.Node, error) {
 
 func clashNode(m map[string]any) (config.Node, bool) {
 	kind := strings.ToLower(anyString(m["type"]))
-	server := anyString(m["server"])
-	port, err := parsePort(anyString(m["port"]))
+	server, portText := anyString(m["server"]), anyString(m["port"])
+	// mihomo 的 WireGuard 可以把地址写在 peers 列表里，取第一个 peer。
+	var peer map[string]any
+	if peers, ok := m["peers"].([]any); ok && len(peers) > 0 && kind == "wireguard" {
+		peer = anyMap(peers[0])
+		server = firstNonEmpty(anyString(peer["server"]), server)
+		portText = firstNonEmpty(anyString(peer["port"]), portText)
+	}
+	port, err := parsePort(portText)
 	if server == "" || err != nil {
 		return config.Node{}, false
 	}
@@ -155,6 +162,19 @@ func clashNode(m map[string]any) (config.Node, bool) {
 		if ips := anyList(m["allowed-ips"]); len(ips) > 0 {
 			s["allowed_ips"] = strings.Join(ips, ",")
 		}
+		if peer != nil {
+			for target, key := range map[string]string{"public_key": "public-key", "pre_shared_key": "pre-shared-key"} {
+				if v := anyString(peer[key]); v != "" {
+					s[target] = v
+				}
+			}
+			if v := anyList(peer["reserved"]); len(v) > 0 {
+				s["reserved"] = strings.Join(v, ",")
+			}
+			if v := anyList(peer["allowed-ips"]); len(v) > 0 {
+				s["allowed_ips"] = strings.Join(v, ",")
+			}
+		}
 		if s["private_key"] == "" || s["public_key"] == "" || s["local_address"] == "" {
 			return config.Node{}, false
 		}
@@ -168,6 +188,13 @@ func clashNode(m map[string]any) (config.Node, bool) {
 		setTLS("sni")
 	default:
 		return config.Node{}, false
+	}
+	if kind == "vmess" || kind == "vless" {
+		set("packet_encoding", "packet-encoding")
+	}
+	// 只有这几种协议支持 multiplex。
+	if smux := anyMap(m["smux"]); smux != nil && anyBool(smux["enabled"]) && (kind == "vmess" || kind == "vless" || kind == "trojan" || kind == "ss") {
+		s["multiplex"] = "true"
 	}
 	if (kind == "vmess" || kind == "vless" || kind == "socks5" || kind == "http") && s["tls"] != "true" {
 		// 未开启 TLS 时 servername 等字段没有意义，留着会被当成开启 TLS。
@@ -190,6 +217,9 @@ func clashTransport(s map[string]string, m map[string]any) bool {
 	case "ws":
 		s["transport_type"] = "ws"
 		opts := anyMap(m["ws-opts"])
+		if anyBool(opts["v2ray-http-upgrade"]) {
+			s["transport_type"] = "httpupgrade"
+		}
 		if v := anyString(opts["path"]); v != "" {
 			s["transport_path"] = v
 		}
@@ -270,9 +300,15 @@ func singBoxNode(m map[string]any) (config.Node, bool) {
 	server := anyString(m["server"])
 	portText := anyString(m["server_port"])
 	s := map[string]string{}
-	for _, key := range []string{"uuid", "password", "method", "flow", "security", "alter_id", "username", "version", "plugin", "plugin_opts", "congestion_control", "udp_relay_mode", "up_mbps", "down_mbps", "hop_interval", "path"} {
+	for _, key := range []string{"uuid", "password", "method", "flow", "security", "alter_id", "username", "version", "plugin", "plugin_opts", "congestion_control", "udp_relay_mode", "up_mbps", "down_mbps", "hop_interval", "path", "network", "packet_encoding"} {
 		if v := anyString(m[key]); v != "" {
 			s[key] = v
+		}
+	}
+	// multiplex、udp_over_tcp 在 sing-box 里可以是对象 {"enabled": true} 或布尔值。
+	for _, key := range []string{"multiplex", "udp_over_tcp"} {
+		if v, ok := m[key].(map[string]any); ok && anyBool(v["enabled"]) || anyBool(m[key]) {
+			s[key] = "true"
 		}
 	}
 	switch protocol {
@@ -351,12 +387,9 @@ func singBoxNode(m map[string]any) (config.Node, bool) {
 		if v := anyString(transport["path"]); v != "" {
 			s["transport_path"] = v
 		}
-		host := anyString(anyMap(transport["headers"])["Host"])
-		if hosts := anyList(transport["host"]); host == "" && len(hosts) > 0 {
-			host = hosts[0]
-		}
-		if host != "" {
-			s["transport_host"] = host
+		headers := anyMap(transport["headers"])
+		if hosts := anyList(firstPresent(headers["Host"], headers["host"], transport["host"])); len(hosts) > 0 {
+			s["transport_host"] = hosts[0]
 		}
 		if v := anyString(transport["service_name"]); v != "" {
 			s["transport_service_name"] = v
@@ -400,6 +433,15 @@ func anyString(v any) string {
 	default:
 		return ""
 	}
+}
+
+func firstPresent(values ...any) any {
+	for _, v := range values {
+		if anyString(v) != "" || len(anyList(v)) > 0 {
+			return v
+		}
+	}
+	return nil
 }
 
 func anyBool(v any) bool {
