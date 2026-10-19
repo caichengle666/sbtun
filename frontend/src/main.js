@@ -2,7 +2,17 @@
 import './style.css'
 
 const app = document.querySelector('#app')
-const initialTheme = localStorage.getItem('sbtun-theme') === 'light' ? 'light' : 'dark'
+const THEMES = [
+  { id: 'dark', name: '深色' },
+  { id: 'light', name: '浅色' },
+  { id: 'glass', name: '毛玻璃' },
+]
+const savedTheme = localStorage.getItem('sbtun-theme')
+const initialTheme = THEMES.some(theme => theme.id === savedTheme) ? savedTheme : 'dark'
+const THEME_ICONS = { dark: '<span class="moon-icon" aria-hidden="true"></span>', light: '☀', glass: '<span class="glass-icon" aria-hidden="true"></span>' }
+function nextTheme() {
+  return THEMES[(THEMES.findIndex(theme => theme.id === state.theme) + 1) % THEMES.length]
+}
 const savedView = localStorage.getItem('sbtun-ui-view')
 const initialView = ['overview', 'nodes', 'routing', 'rules', 'capture'].includes(savedView) ? savedView : 'overview'
 const savedNodeFilter = localStorage.getItem('sbtun-ui-node-filter') || 'all'
@@ -253,7 +263,7 @@ function render() {
           </div>
           <div class="topbar-actions">
             ${state.appUpdate?.has_update ? `<button id="appUpdate" class="update-pill" type="button" title="当前 v${escapeHtml(state.appUpdate.current_version)}，点击打开下载页"><span class="update-dot" aria-hidden="true"></span>新版本 v${escapeHtml(state.appUpdate.latest_version)}</button>` : ''}
-            <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换主题" title="切换主题">${state.theme === 'dark' ? '☀' : '<span class="moon-icon" aria-hidden="true"></span>'}</button>
+            <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换主题" title="切换到${nextTheme().name}主题">${THEME_ICONS[nextTheme().id]}</button>
             <button id="power" class="switch ${state.running ? 'on' : ''}">${state.running ? '关闭 TUN' : '开启 TUN'}</button>
           </div>
         </header>
@@ -1183,7 +1193,7 @@ function bindEvents() {
   const themeToggle = document.querySelector('#themeToggle')
   if (themeToggle) {
     themeToggle.addEventListener('click', () => {
-      state.theme = state.theme === 'dark' ? 'light' : 'dark'
+      state.theme = nextTheme().id
       localStorage.setItem('sbtun-theme', state.theme)
       renderApp()
     })

@@ -787,3 +787,50 @@ h2 { color: var(--text); letter-spacing: 0; }
 .update-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--amber); animation: update-pulse 2s ease-in-out infinite; }
 @keyframes update-pulse { 50% { opacity: .35; } }
 .badge.auto-switched { color: var(--amber); background: var(--amber-bg); border-color: transparent; white-space: nowrap; }
+
+:root[data-theme="glass"] {
+  color-scheme: dark;
+  --bg: #0b1020;
+  --side: rgba(255, 255, 255, .06);
+  --panel: rgba(255, 255, 255, .08);
+  --raised: rgba(255, 255, 255, .07);
+  --border: rgba(255, 255, 255, .14);
+  --text: #f1f5f9;
+  --muted: #b8c3d6;
+  --quiet: #8c99b0;
+  --accent: #5eead4;
+  --accent-bg: rgba(94, 234, 212, .16);
+  --green: #6ee7a8;
+  --green-bg: rgba(110, 231, 168, .14);
+  --blue: #a5b8ff;
+  --blue-bg: rgba(129, 152, 255, .18);
+  --amber: #f5cd7e;
+  --amber-bg: rgba(245, 205, 126, .15);
+  --red: #fda4a4;
+  --red-bg: rgba(248, 113, 113, .16);
+  --glass-blur: blur(22px) saturate(160%);
+  --shadow: 0 18px 50px rgba(2, 6, 23, .35);
+}
+:root[data-theme="glass"] body {
+  background:
+    radial-gradient(circle at 12% 18%, rgba(59, 130, 246, .55), transparent 42%),
+    radial-gradient(circle at 88% 8%, rgba(168, 85, 247, .45), transparent 40%),
+    radial-gradient(circle at 72% 88%, rgba(20, 184, 166, .45), transparent 44%),
+    radial-gradient(circle at 18% 92%, rgba(244, 114, 182, .32), transparent 40%),
+    var(--bg);
+  background-attachment: fixed;
+}
+:root[data-theme="glass"] :is(.sidebar, .status-bar, .card, .toast, .modal-panel, .capture-body-modal-panel, .rule-menu-list) {
+  border-color: var(--border);
+  -webkit-backdrop-filter: var(--glass-blur);
+  backdrop-filter: var(--glass-blur);
+  box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, .08);
+}
+:root[data-theme="glass"] :is(.modal-panel, .capture-body-modal-panel, .rule-menu-list, .toast) { background: rgba(22, 28, 48, .72); }
+:root[data-theme="glass"] :is(.modal-backdrop, .capture-body-modal-backdrop) { background: rgba(5, 8, 20, .4); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+:root[data-theme="glass"] :is(.btn-primary, .filter-btn.active, .brand-mark, .switch:not(.on)) { color: #062420; }
+:root[data-theme="glass"] option { background: #1a2034; color: var(--text); }
+@supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
+  :root[data-theme="glass"] { --side: rgba(20, 26, 44, .86); --panel: rgba(24, 30, 50, .86); }
+}
+.glass-icon { display: block; width: 17px; height: 17px; border: 1.5px solid currentColor; border-radius: 5px; background: linear-gradient(135deg, rgba(255, 255, 255, .55), rgba(255, 255, 255, .08)); }
