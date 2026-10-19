@@ -45,8 +45,12 @@ func (m *Manager) WaitReady(timeout time.Duration) error {
 	if !waitForInterface(name, timeout) {
 		return fmt.Errorf("TUN 网卡未出现: %s", name)
 	}
-	return nil
+	return configurePlatform(name)
 }
+
+// RecoverStale undoes system settings left behind by a run that ended without
+// cleanup (for example a killed process). Call it only while no instance runs.
+func (m *Manager) RecoverStale() error { return recoverPlatform() }
 
 // SetTunName 设置要管理的 TUN 网卡名称。
 func (m *Manager) SetTunName(name string) {

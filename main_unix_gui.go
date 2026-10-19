@@ -1,4 +1,4 @@
-//go:build linux && !cli
+//go:build (linux || darwin) && !cli
 
 package main
 
@@ -23,6 +23,7 @@ var assets embed.FS
 var trayIcon []byte
 
 func main() {
+	ensureElevated()
 	release, err := app.AcquireSingleInstance()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)

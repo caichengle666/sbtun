@@ -113,6 +113,7 @@ func (r *RuntimeCoordinator) Start(ctx context.Context, cfg config.Config) error
 	if state == core.StateStarting || state == core.StateRunning || state == core.StateStopping {
 		return fmt.Errorf("runtime already active: %s", state)
 	}
+	_ = r.TUN.RecoverStale()
 	return r.startConfigLocked(ctx, cfg)
 }
 

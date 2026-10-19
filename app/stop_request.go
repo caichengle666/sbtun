@@ -15,7 +15,7 @@ func RequestRunningInstanceStop() error {
 	if err != nil {
 		return err
 	}
-	workDir := runtimeDataDir(filepath.Dir(executable))
+	workDir := runtimeDataDir(appBaseDir(filepath.Dir(executable)))
 	if err := os.MkdirAll(workDir, 0o755); err != nil {
 		return err
 	}

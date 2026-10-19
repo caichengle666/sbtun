@@ -54,6 +54,9 @@ func (a *App) SetTrayIcon(icon []byte) {
 
 func (a *App) Startup(ctx context.Context) {
 	a.startupCore(ctx)
+	// The GUI holds the single-instance lock, so leftovers from a killed run
+	// (system DNS on macOS) can be undone before TUN is turned on.
+	_ = a.runtime.TUN.RecoverStale()
 	_ = a.ClearStopRequest()
 	go func() {
 		if a.WaitForStopRequest(ctx) {
@@ -105,7 +108,7 @@ func (a *App) Shutdown(ctx context.Context) {
 func (a *App) initPaths() {
 	execPath, err := os.Executable()
 	if execPath != "" && err == nil {
-		base := filepath.Dir(execPath)
+		base := appBaseDir(filepath.Dir(execPath))
 		a.workDir = runtimeDataDir(base)
 		a.binary = filepath.Join(base, singBoxBinaryName())
 	} else {

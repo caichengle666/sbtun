@@ -14,7 +14,7 @@ sbtun 负责节点、订阅、路由、规则集、健康检查和运行状态�
 - **真实可用性检查**：区分 Ping、TCP/UDP 端口探测与实际代理 URL 测试。开启 TUN 时，节点服务器地址不经过 TUN、节点域名用国内 DNS 直接解析，所以 Ping 和端口探测始终直连各节点，不受当前节点影响。
 - **运行时切换与容错**：运行中切换节点；当前节点失效时自动切换到延迟最低的可用节点，可随时关闭。
 - **流量分析**：按域名或关键词查看经过 TUN 的 HTTP/HTTPS 请求，并保存为 JSON。
-- **便携发布包**：GitHub Actions 构建 Windows/Linux 的 amd64 与 arm64 版本。
+- **便携发布包**：GitHub Actions 构建 Windows、Linux、macOS 的 amd64 与 arm64 版本。
 - **三种主题**：深色、浅色和毛玻璃，右上角按钮循环切换；毛玻璃效果在各平台表现一致。
 - **新版本提示**：启动时及每 6 小时检查 GitHub Releases，有新版本时右上角显示提示，点击打开下载页。
 
@@ -71,6 +71,27 @@ chmod +x sbtun-cli
 > [!NOTE]
 > Linux GUI 依赖 GTK3/WebKitGTK。官方发布包带有配套运行库和启动脚本；只复制 GUI 主程序可能导致 `libwebkit2gtk-4.0.so.37` 缺失。
 
+### macOS
+
+1. 在本仓库的 **Releases** 页面下载 `sbtun-macos-arm64.zip`（Apple 芯片）或 `sbtun-macos-amd64.zip`（Intel）。
+2. 解压后把 `sbtun.app` 拖进“应用程序”。
+3. 发布包没有苹果开发者签名，第一次打开前在终端执行：
+
+```bash
+xattr -dr com.apple.quarantine /Applications/sbtun.app
+```
+
+4. 打开 sbtun，输入管理员密码。创建 TUN 网卡和修改系统 DNS 都需要管理员权限，每次启动都会询问。
+
+命令行入口在 App 里面：
+
+```bash
+sudo /Applications/sbtun.app/Contents/MacOS/sbtun-cli help
+```
+
+> [!NOTE]
+> macOS 上开启 TUN 时，sbtun 会把所有网络服务的 DNS 临时设为 `172.18.0.2`，由 TUN 接管 DNS，关闭 TUN 或退出时恢复原设置。如果程序被强制结束导致无法上网，重新打开 sbtun，或运行 `sudo sbtun-cli run` 后再停止，就会恢复 DNS。macOS 版没有菜单栏图标，关闭窗口即退出并关闭 TUN。
+
 ### 首次使用
 
 1. 打开“节点管理”，导入单个节点链接、订阅地址，或手动填写协议参数。导入的订阅会显示在节点列表上方，可随时一键更新。
@@ -89,7 +110,7 @@ chmod +x sbtun-cli
 | --- | --- | --- | --- |
 | Windows | 支持 | 支持 | amd64、arm64 |
 | Linux | 支持 | 支持 | amd64、arm64 |
-| macOS | 暂无发布包 | 暂无发布包 | — |
+| macOS | 支持 | 支持 | Intel（amd64）、Apple 芯片（arm64） |
 
 ## 支持的节点类型
 
@@ -290,7 +311,7 @@ kernel update                   更新到官方最新稳定版
 
 ## 数据与目录
 
-sbtun 使用便携式目录结构，配置和运行数据默认保存在可执行文件旁边：
+sbtun 使用便携式目录结构，配置和运行数据默认保存在可执行文件旁边。macOS 例外：App 可能运行在只读位置，sing-box、规则集和运行数据统一保存在 `/Library/Application Support/sbtun/`，GUI 和 CLI 共用，首次运行时从 App 里复制内置的 sing-box 和规则集。
 
 ```text
 sbtun/

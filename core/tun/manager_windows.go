@@ -65,3 +65,7 @@ func interfaceIndex(name string) (string, bool) {
 	}
 	return "", false
 }
+
+func configurePlatform(string) error { return nil }
+
+func recoverPlatform() error { return nil }

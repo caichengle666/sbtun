@@ -69,9 +69,6 @@ func (a *App) UpdateSingBox() (SingBoxUpdateResult, error) {
 		return SingBoxUpdateResult{}, errors.New("sing-box 路径未初始化")
 	}
 	installed := fileExists(a.binary)
-	if runtime.GOOS != "windows" && runtime.GOOS != "linux" {
-		return SingBoxUpdateResult{}, fmt.Errorf("暂不支持在 %s 上更新 sing-box", runtime.GOOS)
-	}
 	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
 		return SingBoxUpdateResult{}, fmt.Errorf("暂不支持 %s 架构的 sing-box 更新", runtime.GOARCH)
 	}
@@ -403,8 +400,8 @@ func singBoxAssetTarget(goos, goarch string) (suffix, binaryName, archiveType st
 	switch goos {
 	case "windows":
 		return "windows-" + goarch + ".zip", "sing-box.exe", "zip", nil
-	case "linux":
-		return "linux-" + goarch + ".tar.gz", "sing-box", "tar.gz", nil
+	case "linux", "darwin":
+		return goos + "-" + goarch + ".tar.gz", "sing-box", "tar.gz", nil
 	default:
 		return "", "", "", fmt.Errorf("暂不支持 %s 平台", goos)
 	}

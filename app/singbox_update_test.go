@@ -30,6 +30,8 @@ func TestDownloadSingBoxUsesMatchingOfficialPlatformAsset(t *testing.T) {
 		{"windows-arm64", "windows", "arm64", "sing-box-1.2.3-windows-arm64.zip", "sing-box.exe", makeSingBoxZip},
 		{"linux-amd64", "linux", "amd64", "sing-box-1.2.3-linux-amd64.tar.gz", "sing-box", makeSingBoxTarGz},
 		{"linux-arm64", "linux", "arm64", "sing-box-1.2.3-linux-arm64.tar.gz", "sing-box", makeSingBoxTarGz},
+		{"darwin-amd64", "darwin", "amd64", "sing-box-1.2.3-darwin-amd64.tar.gz", "sing-box", makeSingBoxTarGz},
+		{"darwin-arm64", "darwin", "arm64", "sing-box-1.2.3-darwin-arm64.tar.gz", "sing-box", makeSingBoxTarGz},
 	}
 	for _, tc := range cases {
 		t.Run(tc.name, func(t *testing.T) {
@@ -129,7 +131,7 @@ func TestDownloadSingBoxRejectsDigestMismatch(t *testing.T) {
 }
 
 func TestSingBoxAssetTargetRejectsUnsupportedPlatform(t *testing.T) {
-	if _, _, _, err := singBoxAssetTarget("darwin", "arm64"); err == nil {
+	if _, _, _, err := singBoxAssetTarget("freebsd", "amd64"); err == nil {
 		t.Fatal("expected unsupported platform error")
 	}
 }

@@ -1,0 +1,170 @@
+name: macOS 构建
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: macos-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-macos:
+    runs-on: macos-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        arch: [arm64, amd64]
+    env:
+      ARCH: ${{ matrix.arch }}
+      APP: build/bin/sbtun.app
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.25.x'
+          cache: false
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: ''
+
+      - name: 安装 Wails
+        run: |
+          go install github.com/wailsapp/wails/v2/cmd/wails@v2.15.0
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+
+      - name: 安装前端依赖
+        working-directory: frontend
+        run: npm install
+
+      - name: 下载最新 sing-box
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release=$(curl -fsSL -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SagerNet/sing-box/releases/latest)
+          asset=$(printf '%s' "$release" | jq -c --arg suffix "darwin-$ARCH.tar.gz" '[.assets[] | select(.name | endswith($suffix))][0]')
+          url=$(printf '%s' "$asset" | jq -r '.browser_download_url')
+          digest=$(printf '%s' "$asset" | jq -r '.digest' | sed 's/^sha256://')
+          test -n "$url" && test "$url" != null && test -n "$digest" && test "$digest" != null
+          curl -fL "$url" -o "$RUNNER_TEMP/sing-box.tar.gz"
+          echo "$digest  $RUNNER_TEMP/sing-box.tar.gz" | shasum -a 256 -c -
+          mkdir -p "$RUNNER_TEMP/sing-box"
+          tar -xzf "$RUNNER_TEMP/sing-box.tar.gz" -C "$RUNNER_TEMP/sing-box"
+          sing_box=$(find "$RUNNER_TEMP/sing-box" -type f -name sing-box | head -n 1)
+          test -n "$sing_box"
+          echo "SING_BOX=$sing_box" >> "$GITHUB_ENV"
+          echo "SING_BOX_VERSION=$(printf '%s' "$release" | jq -r '.tag_name' | sed 's/^v//')" >> "$GITHUB_ENV"
+
+      - name: Go 测试
+        if: matrix.arch == 'arm64'
+        run: SING_BOX_BINARY="$SING_BOX" go test -tags cli . ./app ./config ./core/...
+
+      - name: 构建 sbtun.app
+        run: wails build -clean -platform "darwin/$ARCH"
+
+      - name: 下载分流规则集
+        run: |
+          set -euo pipefail
+          mkdir -p "$RUNNER_TEMP/rules"
+          download_rule() {
+            curl -fL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 "$1" -o "$3" ||
+              curl -fL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 "$2" -o "$3"
+          }
+          download_rule \
+            https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-cn.srs \
+            https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-geolocation-cn.srs \
+            "$RUNNER_TEMP/rules/geosite-geolocation-cn.srs"
+          download_rule \
+            'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-%21cn.srs' \
+            'https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-geolocation-%21cn.srs' \
+            "$RUNNER_TEMP/rules/geosite-geolocation-!cn.srs"
+          download_rule \
+            https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs \
+            https://cdn.jsdelivr.net/gh/SagerNet/sing-geoip@rule-set/geoip-cn.srs \
+            "$RUNNER_TEMP/rules/geoip-cn.srs"
+
+      - name: 组装 App
+        run: |
+          set -euo pipefail
+          CGO_ENABLED=1 GOARCH="$ARCH" go build -tags cli -o "$APP/Contents/MacOS/sbtun-cli" .
+          cp "$SING_BOX" "$APP/Contents/MacOS/sing-box"
+          chmod +x "$APP/Contents/MacOS/sing-box" "$APP/Contents/MacOS/sbtun-cli"
+          mkdir -p "$APP/Contents/Resources/rules"
+          cp "$RUNNER_TEMP/rules/"*.srs "$APP/Contents/Resources/rules/"
+          cp VERSION "$APP/Contents/Resources/VERSION"
+          codesign --force --deep --sign - "$APP"
+          codesign --verify --deep "$APP"
+          lipo -archs "$APP/Contents/MacOS/sbtun" | grep -qx "$([ "$ARCH" = amd64 ] && echo x86_64 || echo arm64)"
+
+      - name: TUN 冒烟测试
+        if: matrix.arch == 'arm64'
+        run: |
+          set -euo pipefail
+          CLI="$APP/Contents/MacOS/sbtun-cli"
+          dns_state() {
+            networksetup -listallnetworkservices | tail -n +2 | grep -v '^\*' | while IFS= read -r svc; do
+              printf '%s=%s\n' "$svc" "$(networksetup -getdnsservers "$svc" | tr '\n' ' ')"
+            done
+          }
+          tun_up() { ifconfig | grep -q 'inet 172.18.0.1 '; }
+          before=$(dns_state)
+          echo "$before"
+          sudo -n "$CLI" add-node 'socks5://127.0.0.1:1#placeholder'
+          sudo -n "$CLI" route direct
+          sudo -n "$CLI" run > "$RUNNER_TEMP/run.log" 2>&1 &
+          for _ in $(seq 1 60); do tun_up && break; sleep 0.5; done
+          tun_up || { cat "$RUNNER_TEMP/run.log"; exit 1; }
+          sleep 2
+          during=$(dns_state)
+          echo "$during"
+          if printf '%s\n' "$during" | grep -v '=172.18.0.2 $'; then echo 'DNS 未指向 TUN'; cat "$RUNNER_TEMP/run.log"; exit 1; fi
+          dscacheutil -q host -a name www.apple.com | grep -q ip_address
+          code=$(curl -sS -m 20 -o /dev/null -w '%{http_code}' https://www.apple.com)
+          echo "HTTP $code"
+          test "$code" -ge 200 -a "$code" -lt 400
+          sudo -n "$CLI" stop
+          for _ in $(seq 1 20); do tun_up || break; sleep 0.5; done
+          if tun_up; then echo 'TUN 未关闭'; exit 1; fi
+          after=$(dns_state)
+          echo "$after"
+          test "$before" = "$after"
+          test ! -e "/Library/Application Support/sbtun/dns-backup.json"
+          cat "$RUNNER_TEMP/run.log"
+
+      - name: 打包 ZIP
+        run: mkdir -p dist && ditto -c -k --sequesterRsrc --keepParent "$APP" "dist/sbtun-macos-$ARCH.zip"
+
+      - name: 上传构建产物
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbtun-macos-${{ matrix.arch }}
+          path: dist/sbtun-macos-${{ matrix.arch }}.zip
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: 创建并上传 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          file="dist/sbtun-macos-$ARCH.zip"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" "$file" --clobber
+          else
+            # Builds run in parallel; if another workflow created the release first, upload instead.
+            gh release create "$tag" "$file" --title "sbtun $tag" --generate-notes || gh release upload "$tag" "$file" --clobber
+          fi
