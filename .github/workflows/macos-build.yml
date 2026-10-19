@@ -123,7 +123,11 @@ jobs:
           tun_up() { ifconfig | grep -q 'inet 172.18.0.1 '; }
           before=$(dns_state)
           echo "$before"
-          sudo -n "$CLI" add-node 'socks5://127.0.0.1:1#placeholder'
+          # A local SOCKS server gives the pre-start node health check a working node.
+          printf '%s' '{"inbounds":[{"type":"socks","listen":"127.0.0.1","listen_port":10808}],"outbounds":[{"type":"direct"}]}' > "$RUNNER_TEMP/socks.json"
+          "$SING_BOX" run -c "$RUNNER_TEMP/socks.json" > "$RUNNER_TEMP/socks.log" 2>&1 &
+          sleep 1
+          sudo -n "$CLI" add-node 'socks5://127.0.0.1:10808#local'
           sudo -n "$CLI" route direct
           sudo -n "$CLI" run > "$RUNNER_TEMP/run.log" 2>&1 &
           for _ in $(seq 1 60); do tun_up && break; sleep 0.5; done
