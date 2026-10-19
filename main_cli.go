@@ -167,6 +167,8 @@ func main() {
 		err = runTestCommand(application, commandArgs)
 	case "export":
 		err = runExportCommand(application, commandArgs)
+	case "qr":
+		err = runQRCommand(application, commandArgs)
 	case "custom":
 		err = runRuleListCommand(application, commandArgs, false)
 	case "filter":
@@ -279,7 +281,7 @@ func cliUsage(command string, args []string) string {
 		return "sbtun auto-switch <on|off>"
 	case "add-node":
 		return "sbtun add-node <节点链接或订阅链接>"
-	case "switch", "info":
+	case "switch", "info", "qr":
 		return "sbtun " + command + " <编号>"
 	case "del", "delete":
 		return "sbtun " + command + " <编号...>"
@@ -375,7 +377,7 @@ func validateCLIArgs(command string, args []string) error {
 			return usageError(command, args)
 		}
 		return app.ValidateNodeSource(args[0])
-	case "switch", "info":
+	case "switch", "info", "qr":
 		if len(args) != 1 {
 			return usageError(command, args)
 		}
@@ -547,6 +549,7 @@ func printHelp() {
 		{"switch <编号>", "按编号切换节点"},
 		{"test [编号...]", "测试节点 Ping、端口和 URL 延迟，省略编号则测试全部，最多 4 个并行"},
 		{"export [编号...]", "导出节点分享链接，省略编号则导出全部"},
+		{"qr <编号>", "在终端显示节点分享链接二维码"},
 		{"del <编号...>", "批量删除节点，例如 del 1 2 3"},
 		{"edit [编号]", "进入交互式编辑，可直接指定节点"},
 		{"edit <编号> <节点链接>", "用完整链接覆盖全部参数"},

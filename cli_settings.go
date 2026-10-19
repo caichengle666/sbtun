@@ -218,6 +218,24 @@ func runExportCommand(application *app.App, args []string) error {
 	return nil
 }
 
+func runQRCommand(application *app.App, args []string) error {
+	ids, err := nodeIDsFromArgs(application, args)
+	if err != nil {
+		return err
+	}
+	links, err := application.ExportNodes(ids)
+	if err != nil {
+		return err
+	}
+	code, err := app.TerminalQRCode(links[0])
+	if err != nil {
+		return err
+	}
+	fmt.Print(code)
+	fmt.Println(links[0])
+	return nil
+}
+
 func formatCheck(label string, check app.HealthCheckDTO) string {
 	if check.Message == "" && !check.OK {
 		return label + " -"

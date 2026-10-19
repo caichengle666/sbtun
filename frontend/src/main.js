@@ -70,6 +70,7 @@ const state = {
   selectedCaptureFlow: null,
   captureDetailTab: 'overview',
   captureBodyViewer: null,
+  nodeQRCode: null,
   captureSearch: '',
   captureFilter: 'all',
   captureListScroll: 0,
@@ -270,6 +271,7 @@ function render() {
     </main>
     ${renderNodeModal()}
     ${renderCaptureBodyModal()}
+    ${renderNodeQRCodeModal()}
     <div id="toast" class="toast" style="display:none"></div>
   `
 }
@@ -593,6 +595,22 @@ function renderCaptureBody(flow, tab) {
   return `<div class="capture-body-viewer"><div class="capture-body-toolbar"><span class="capture-body-meta">${escapeHtml(contentType || (encoding === 'base64' ? '二进制内容' : '文本内容'))} · ${formatBytes(body.length)}</span><span>${encoding === 'base64' ? '<span class="badge">Base64 编码</span>' : ''}${formatted.pretty ? '<span class="badge direct">已格式化</span>' : ''}</span><button class="btn btn-ghost capture-expand-body" data-capture-body-id="${flow.id}" data-capture-body-tab="${tab}">展开查看</button></div><pre data-capture-body-scroll="${flow.id}:${tab}">${escapeHtml(formatted.text)}</pre></div>`
 }
 
+function renderNodeQRCodeModal() {
+  const qr = state.nodeQRCode
+  if (!qr) return ''
+  return `<div class="modal" id="nodeQRCodeModal" role="dialog" aria-modal="true" aria-labelledby="nodeQRCodeTitle"><div class="modal-backdrop" data-close-node-qrcode></div>
+    <section class="modal-panel qrcode-modal">
+      <header class="modal-header"><h2 id="nodeQRCodeTitle">${escapeHtml(qr.name)}</h2><button class="icon-btn" data-close-node-qrcode aria-label="关闭" title="关闭">×</button></header>
+      <div class="modal-body qrcode-body"><img class="qrcode-image" src="${qr.image}" alt="节点分享链接二维码"><p class="muted modal-hint">用手机客户端扫码即可导入该节点</p><code class="qrcode-link">${escapeHtml(qr.link)}</code></div>
+      <footer class="modal-footer"><button class="btn btn-ghost" data-close-node-qrcode>关闭</button><button class="btn btn-primary" id="copyNodeQRCodeLink">复制链接</button></footer>
+    </section></div>`
+}
+
+function closeNodeQRCode() {
+  state.nodeQRCode = null
+  renderApp()
+}
+
 function renderCaptureBodyModal() {
   const viewer = state.captureBodyViewer
   if (!viewer) return ''
@@ -746,7 +764,7 @@ function renderNodes() {
         ${renderLatency(n.id)}
         <div class="node-actions">
           <button class="btn btn-ghost test-node" data-id="${n.id}" ${testing ? 'disabled' : ''}>测试</button>
-          <details class="rule-menu node-menu" data-rule-menu-id="node-${n.id}"><summary aria-label="节点操作" title="更多操作">⋯</summary><div class="rule-menu-list"><button class="rule-menu-action edit-node" data-id="${n.id}">编辑</button><button class="rule-menu-action export-node" data-id="${n.id}">复制分享链接</button><button class="rule-menu-action danger rm-node" data-id="${n.id}">删除</button></div></details>
+          <details class="rule-menu node-menu" data-rule-menu-id="node-${n.id}"><summary aria-label="节点操作" title="更多操作">⋯</summary><div class="rule-menu-list"><button class="rule-menu-action edit-node" data-id="${n.id}">编辑</button><button class="rule-menu-action export-node" data-id="${n.id}">复制分享链接</button><button class="rule-menu-action qrcode-node" data-id="${n.id}">显示二维码</button><button class="rule-menu-action danger rm-node" data-id="${n.id}">删除</button></div></details>
         </div>
       </li>`
   }
@@ -1153,7 +1171,9 @@ function bindEvents() {
       })
     })
     document.addEventListener('keydown', event => {
-      if (event.key === 'Escape' && (state.nodeFormOpen || state.editingNodeId) && !state.captureBodyViewer) closeNodeModal()
+      if (event.key !== 'Escape' || state.captureBodyViewer) return
+      if (state.nodeQRCode) closeNodeQRCode()
+      else if (state.nodeFormOpen || state.editingNodeId) closeNodeModal()
     })
     state.ruleMenuDocumentBound = true
   }
@@ -1782,6 +1802,32 @@ function bindEvents() {
         btn.disabled = false
       }
     })
+  })
+  document.querySelectorAll('.qrcode-node').forEach(btn => {
+    btn.addEventListener('click', async () => {
+      const node = state.config.nodes.find(item => item.id === btn.dataset.id)
+      if (!node) return
+      btn.disabled = true
+      try {
+        const qr = await window.go.app.App.NodeQRCode(node.id)
+        state.nodeQRCode = { name: node.name, link: qr.link, image: qr.image }
+        renderApp()
+      } catch (e) {
+        showToast(e.message || String(e), 'error')
+      } finally {
+        btn.disabled = false
+      }
+    })
+  })
+  document.querySelectorAll('[data-close-node-qrcode]').forEach(element => element.addEventListener('click', closeNodeQRCode))
+  document.querySelector('#copyNodeQRCodeLink')?.addEventListener('click', async () => {
+    if (!state.nodeQRCode) return
+    try {
+      await window.runtime.ClipboardSetText(state.nodeQRCode.link)
+      showToast('节点链接已复制', 'success')
+    } catch (e) {
+      showToast(e.message || String(e), 'error')
+    }
   })
   document.querySelectorAll('.test-node').forEach(btn => {
     btn.addEventListener('click', async () => {
