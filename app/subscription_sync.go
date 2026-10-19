@@ -6,6 +6,8 @@ import (
 	"errors"
 	"fmt"
 	"net/url"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/caichengle666/sbtun/config"
@@ -57,18 +59,22 @@ func (a *App) ImportSubscription(link string) (int, error) {
 func (a *App) addNodesLocked(nodes []config.Node) (int, error) {
 	added := 0
 	err := a.mutateConfigAndSyncLocked(func(_ config.Config, next *config.Config) error {
-		existing := make(map[string]struct{}, len(next.Nodes))
+		taken := make(map[string]struct{}, len(next.Nodes))
+		seen := make(map[string]struct{}, len(next.Nodes))
 		for _, n := range next.Nodes {
-			existing[n.ID] = struct{}{}
+			taken[n.ID] = struct{}{}
+			seen[nodeFingerprint(n)] = struct{}{}
 		}
 		added = 0
 		for _, n := range nodes {
-			if _, ok := existing[n.ID]; ok {
+			fp := nodeFingerprint(n)
+			if _, ok := seen[fp]; ok {
 				continue
 			}
+			seen[fp] = struct{}{}
+			n.ID = uniqueNodeID(n.ID, fp, taken)
 			n.Subscription = ""
 			next.Nodes = append(next.Nodes, n)
-			existing[n.ID] = struct{}{}
 			added++
 		}
 		ensureCurrentNode(next)
@@ -177,36 +183,74 @@ func (a *App) applySubscriptionLocked(sub config.Subscription, fresh []config.No
 }
 
 // mergeSubscriptionNodes 用 fresh 替换属于 subID 的节点，并保持其在列表中的位置。
-// 未归属任何订阅、但 ID 与订阅节点相同的旧节点会被收编；属于其他订阅的同 ID 节点保持不动。
+// 节点按参数指纹比对：参数没变的节点沿用原 ID（当前选中不丢）；未归属任何订阅、
+// 但参数完全相同的旧节点会被收编；属于其他订阅的相同节点跳过。
 func mergeSubscriptionNodes(nodes []config.Node, subID string, fresh []config.Node) ([]config.Node, SubscriptionUpdateDTO) {
-	before := make(map[string]struct{}, len(nodes))
-	blocked := make(map[string]struct{})
-	for _, n := range nodes {
-		before[n.ID] = struct{}{}
-		if n.Subscription != "" && n.Subscription != subID {
-			blocked[n.ID] = struct{}{}
-		}
-	}
-	incoming := make([]config.Node, 0, len(fresh))
-	incomingIDs := make(map[string]struct{}, len(fresh))
+	freshFPs := make(map[string]struct{}, len(fresh))
 	for _, n := range fresh {
-		if _, ok := blocked[n.ID]; ok {
-			continue
-		}
-		if _, ok := incomingIDs[n.ID]; ok {
-			continue
-		}
-		n.Subscription = subID
-		incoming = append(incoming, n)
-		incomingIDs[n.ID] = struct{}{}
+		freshFPs[nodeFingerprint(n)] = struct{}{}
 	}
+	otherFPs := make(map[string]struct{}) // 其他订阅里节点的指纹
+	for _, n := range nodes {
+		if n.Subscription != "" && n.Subscription != subID {
+			otherFPs[nodeFingerprint(n)] = struct{}{}
+		}
+	}
+	ownedIDs := make(map[string]string) // 指纹 -> 本订阅（或待收编）旧节点的 ID
+	taken := make(map[string]struct{}, len(nodes))
+	replaced := make([]bool, len(nodes))
+	for i, n := range nodes {
+		fp := nodeFingerprint(n)
+		_, inFresh := freshFPs[fp]
+		_, inOther := otherFPs[fp]
+		if n.Subscription == subID || n.Subscription == "" && inFresh && !inOther {
+			replaced[i] = true
+			if _, ok := ownedIDs[fp]; !ok {
+				ownedIDs[fp] = n.ID
+			}
+			continue
+		}
+		taken[n.ID] = struct{}{}
+	}
+
+	incoming := make([]config.Node, 0, len(fresh))
+	fps := make([]string, 0, len(fresh))
+	bases := make([]string, 0, len(fresh))
+	seen := make(map[string]struct{}, len(fresh))
+	for _, n := range fresh {
+		fp := nodeFingerprint(n)
+		if _, ok := seen[fp]; ok {
+			continue
+		}
+		if _, ok := otherFPs[fp]; ok {
+			continue
+		}
+		seen[fp] = struct{}{}
+		bases = append(bases, n.ID)
+		n.Subscription = subID
+		n.ID = ""
+		if id, ok := ownedIDs[fp]; ok {
+			if _, used := taken[id]; !used {
+				n.ID = id
+				taken[id] = struct{}{}
+			}
+		}
+		incoming = append(incoming, n)
+		fps = append(fps, fp)
+	}
+	// 先让参数没变的节点占住原 ID，再给新节点分配，避免新节点抢走旧 ID。
+	for i := range incoming {
+		if incoming[i].ID == "" {
+			incoming[i].ID = uniqueNodeID(bases[i], fps[i], taken)
+		}
+	}
+
 	var stats SubscriptionUpdateDTO
 	out := make([]config.Node, 0, len(nodes)+len(incoming))
 	inserted := false
-	for _, n := range nodes {
-		_, adopt := incomingIDs[n.ID]
-		if n.Subscription == subID || n.Subscription == "" && adopt {
-			if !adopt {
+	for i, n := range nodes {
+		if replaced[i] {
+			if _, ok := seen[nodeFingerprint(n)]; !ok {
 				stats.Removed++
 			}
 			if !inserted {
@@ -220,13 +264,45 @@ func mergeSubscriptionNodes(nodes []config.Node, subID string, fresh []config.No
 	if !inserted {
 		out = append(out, incoming...)
 	}
-	for _, n := range incoming {
-		if _, ok := before[n.ID]; !ok {
+	for _, fp := range fps {
+		if _, ok := ownedIDs[fp]; !ok {
 			stats.Added++
 		}
 	}
 	stats.Total = len(incoming)
 	return out, stats
+}
+
+// nodeFingerprint 用协议、地址和全部参数（不含名称）标识节点。同一地址、不同参数的
+// 节点（比如 CF 优选里同一域名下不同 path、uuid 的节点）指纹不同，不会被当成重复。
+func nodeFingerprint(n config.Node) string {
+	keys := make([]string, 0, len(n.Settings))
+	for k := range n.Settings {
+		keys = append(keys, k)
+	}
+	sort.Strings(keys)
+	h := sha256.New()
+	fmt.Fprintf(h, "%s\x00%s\x00%d", n.Protocol, strings.ToLower(n.Server), n.Port)
+	for _, k := range keys {
+		fmt.Fprintf(h, "\x00%s=%s", k, n.Settings[k])
+	}
+	return hex.EncodeToString(h.Sum(nil))[:8]
+}
+
+// uniqueNodeID 优先使用解析器给出的基础 ID（协议+地址），被占用时加上指纹后缀。
+func uniqueNodeID(base, fp string, taken map[string]struct{}) string {
+	id := base
+	for i := 1; ; i++ {
+		if _, ok := taken[id]; !ok {
+			taken[id] = struct{}{}
+			return id
+		}
+		if i == 1 {
+			id = base + "-" + fp
+		} else {
+			id = fmt.Sprintf("%s-%s-%d", base, fp, i)
+		}
+	}
 }
 
 func ensureCurrentNode(cfg *config.Config) {

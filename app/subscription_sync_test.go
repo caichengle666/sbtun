@@ -119,14 +119,63 @@ func TestImportSameSubscriptionAdoptsLegacyNodes(t *testing.T) {
 	}
 }
 
+func vlessNode(id, server, path string) config.Node {
+	return config.Node{ID: id, Protocol: "vless", Server: server, Port: 443, Settings: map[string]string{"transport_path": path}}
+}
+
 func TestMergeSubscriptionNodesSkipsOtherSubscriptions(t *testing.T) {
-	nodes := []config.Node{{ID: "x", Subscription: "other"}, {ID: "y", Subscription: "mine"}}
-	out, stats := mergeSubscriptionNodes(nodes, "mine", []config.Node{{ID: "x"}, {ID: "z"}, {ID: "z"}})
+	x := vlessNode("x", "a.example", "/x")
+	x.Subscription = "other"
+	y := vlessNode("y", "b.example", "/y")
+	y.Subscription = "mine"
+	z := vlessNode("z", "c.example", "/z")
+	out, stats := mergeSubscriptionNodes([]config.Node{x, y}, "mine", []config.Node{vlessNode("x", "a.example", "/x"), z, z})
 	if got := nodeIDs(out); len(got) != 2 || got[0] != "x" || got[1] != "z" || out[0].Subscription != "other" {
 		t.Fatalf("out=%+v", out)
 	}
 	if stats.Total != 1 || stats.Added != 1 || stats.Removed != 1 {
 		t.Fatalf("stats=%+v", stats)
+	}
+}
+
+func TestMergeSubscriptionNodesKeepsSameAddressNodes(t *testing.T) {
+	manual := vlessNode("vless-cf.example:443", "cf.example", "/manual")
+	old := vlessNode("vless-cf.example:443-old", "cf.example", "/a")
+	old.Subscription = "mine"
+	fresh := []config.Node{
+		vlessNode("vless-cf.example:443", "cf.example", "/new"),
+		vlessNode("vless-cf.example:443", "cf.example", "/a"),
+	}
+	out, stats := mergeSubscriptionNodes([]config.Node{manual, old}, "mine", fresh)
+	ids := nodeIDs(out)
+	if len(ids) != 3 || ids[0] != manual.ID || out[0].Settings["transport_path"] != "/manual" {
+		t.Fatalf("manual node replaced: %+v", out)
+	}
+	// 参数没变的节点保留原 ID，新节点不能抢走被手动节点占用的 ID。
+	if ids[2] != old.ID || ids[1] == manual.ID || ids[1] == old.ID {
+		t.Fatalf("ids=%v", ids)
+	}
+	if stats.Total != 2 || stats.Added != 1 || stats.Removed != 0 {
+		t.Fatalf("stats=%+v", stats)
+	}
+}
+
+func TestAddNodesKeepsSameAddressDifferentParams(t *testing.T) {
+	a := newSubscriptionTestApp(t)
+	first := "vless://80f98886-b370-4fd0-8ad5-e567421d79e1@cf.example:443?encryption=none&security=tls&sni=t.example&type=ws&path=%2Fa#A"
+	second := "vless://80f98886-b370-4fd0-8ad5-e567421d79e1@cf.example:443?encryption=none&security=tls&sni=t.example&type=ws&path=%2Fb#B"
+	for i, link := range []string{first, second, first} {
+		added, err := a.ImportSubscription(link)
+		if err != nil {
+			t.Fatal(err)
+		}
+		if want := map[int]int{0: 1, 1: 1, 2: 0}[i]; added != want {
+			t.Fatalf("import %d added=%d want %d", i, added, want)
+		}
+	}
+	cfg := a.GetConfig()
+	if len(cfg.Nodes) != 2 || cfg.Nodes[0].ID == cfg.Nodes[1].ID {
+		t.Fatalf("nodes=%+v", cfg.Nodes)
 	}
 }
 
@@ -142,5 +191,15 @@ func TestUpdateNodeKeepsSubscription(t *testing.T) {
 	}
 	if got := a.GetConfig().Nodes[0].Subscription; got != "s" {
 		t.Fatalf("subscription=%q", got)
+	}
+}
+
+func TestMergeSubscriptionNodesKeepsManualNodeSharedWithOtherSubscription(t *testing.T) {
+	manual := vlessNode("m", "a.example", "/x")
+	other := vlessNode("o", "a.example", "/x")
+	other.Subscription = "other"
+	out, _ := mergeSubscriptionNodes([]config.Node{manual, other}, "mine", []config.Node{vlessNode("n", "a.example", "/x")})
+	if got := nodeIDs(out); len(got) != 2 || got[0] != "m" || got[1] != "o" {
+		t.Fatalf("out=%+v", out)
 	}
 }

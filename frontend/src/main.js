@@ -2044,7 +2044,8 @@ function bindEvents() {
       state.manualForm.url = failed.map(item => item.link).join('\n')
       state.nodeFormOpen = failed.length > 0
       renderApp()
-      if (!failed.length) showToast(`导入成功，新增 ${added} 个节点`, 'success')
+      if (!failed.length && !added) showToast('节点已存在，没有重复添加', 'success')
+      else if (!failed.length) showToast(`导入成功，新增 ${added} 个节点`, 'success')
       else if (failed.length === links.length) showToast('导入失败：' + failed[0].error, 'error')
       else showToast(`新增 ${added} 个节点，${failed.length} 条失败：${failed[0].error}`, 'error')
     })
