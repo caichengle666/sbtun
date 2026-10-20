@@ -81,7 +81,7 @@ func TestFetchURLRejectsOversizedSubscription(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	if _, err := fetchURL(server.URL); err == nil || !strings.Contains(err.Error(), "上限") {
+	if _, err := fetchURL(server.URL, "test"); err == nil || !strings.Contains(err.Error(), "上限") {
 		t.Fatalf("oversized subscription err=%v", err)
 	}
 }

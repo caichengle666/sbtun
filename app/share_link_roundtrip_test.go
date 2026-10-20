@@ -16,6 +16,7 @@ func TestShareLinksKeepAllFieldsAndRoundTrip(t *testing.T) {
 		"trojan://pw@t.example:443?sni=s.example&type=ws&host=w.example&path=%2Ft&allowInsecure=1&alpn=h2#trojan",
 		"trojan://pw@t.example:443?sni=s.example&type=grpc&serviceName=g#trojang",
 		"hysteria2://pw@h.example:443?sni=s.example&obfs=salamander&obfs-password=op&insecure=1&mport=2000-3000&alpn=h3#hy2",
+		"hysteria://h1.example:443?protocol=udp&auth=pw&peer=s.example&upmbps=30&downmbps=200&obfs=xplus&obfsParam=op&mport=2000-3000&insecure=1&alpn=h3#hy1",
 		"tuic://uuid:pw@t.example:443?congestion_control=bbr&udp_relay_mode=quic&sni=s&alpn=h3&allow_insecure=1#tuic",
 		"anytls://pw@a.example:443?sni=s&fp=chrome&insecure=1&alpn=h2#anytls",
 		"wireguard://PRIV@w.example:51820?publickey=PUB&address=172.16.0.2/32&reserved=1,2,3&mtu=1280&presharedkey=PSK&allowedips=0.0.0.0/0#wg",

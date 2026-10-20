@@ -134,7 +134,7 @@ func TestParseSingBoxSubscription(t *testing.T) {
 	}
 	byName := nodesByName(nodes)
 	assertSettings(t, byName["VLESS"], map[string]string{"tls": "true", "server_name": "sni.example.com", "utls_fingerprint": "chrome", "reality_public_key": "pk", "reality_short_id": "sid", "transport_type": "ws", "transport_path": "/ws", "transport_host": "cdn.example.com"})
-	assertSettings(t, byName["Hy2"], map[string]string{"sni": "sni.example.com", "up_mbps": "50", "server_ports": "2000:3000", "obfs_type": "salamander"})
+	assertSettings(t, byName["Hy2"], map[string]string{"sni": "sni.example.com", "up_mbps": "50", "server_ports": "2000-3000", "obfs_type": "salamander"})
 	assertSettings(t, byName["TUIC"], map[string]string{"congestion_control": "bbr", "alpn": "h3"})
 	assertSettings(t, byName["AnyTLS"], map[string]string{"insecure": "true"})
 	assertSettings(t, byName["WG"], map[string]string{"private_key": "priv", "public_key": "pub", "local_address": "172.16.0.2/32", "reserved": "1,2,3", "allowed_ips": "0.0.0.0/0", "mtu": "1280"})

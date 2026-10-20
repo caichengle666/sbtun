@@ -14,6 +14,7 @@ var formatSampleLinks = []string{
 	"trojan://pw@t.example:443?sni=s.example&type=ws&host=w.example&path=%2Ft&allowInsecure=1&alpn=h2&fp=chrome#trojan",
 	"trojan://pw@t.example:443?sni=s.example&type=grpc&serviceName=g#trojang",
 	"hysteria2://pw@h.example:443?sni=s.example&obfs=salamander&obfs-password=op&insecure=1&alpn=h3#hy2",
+	"hysteria://h1.example:443?protocol=udp&auth=pw&peer=s.example&upmbps=30&downmbps=200&obfs=xplus&obfsParam=op&mport=2000-3000&insecure=1&alpn=h3#hy1",
 	"tuic://uuid:pw@t.example:443?congestion_control=bbr&udp_relay_mode=quic&sni=s&alpn=h3&allow_insecure=1#tuic",
 	"anytls://pw@a.example:443?sni=s&fp=chrome&insecure=1#anytls",
 	"wireguard://PRIV@w.example:51820?publickey=PUB&address=172.16.0.2/32&reserved=1,2,3&mtu=1280&presharedkey=PSK#wg",
@@ -29,6 +30,7 @@ const formatSampleClash = `proxies:
   - {name: trojan, type: trojan, server: t.example, port: 443, password: pw, sni: s.example, skip-cert-verify: true, alpn: [h2], client-fingerprint: chrome, network: ws, ws-opts: {path: /t, headers: {Host: w.example}}}
   - {name: trojang, type: trojan, server: t.example, port: 443, password: pw, sni: s.example, network: grpc, grpc-opts: {grpc-service-name: g}}
   - {name: hy2, type: hysteria2, server: h.example, port: 443, password: pw, sni: s.example, obfs: salamander, obfs-password: op, skip-cert-verify: true, alpn: [h3]}
+  - {name: hy1, type: hysteria, server: h1.example, port: 443, ports: 2000-3000, auth-str: pw, sni: s.example, up: "30 Mbps", down: "200 Mbps", obfs: op, protocol: udp, skip-cert-verify: true, alpn: [h3]}
   - {name: tuic, type: tuic, server: t.example, port: 443, uuid: uuid, password: pw, congestion-controller: bbr, udp-relay-mode: quic, sni: s, alpn: [h3], skip-cert-verify: true}
   - {name: anytls, type: anytls, server: a.example, port: 443, password: pw, sni: s, client-fingerprint: chrome, skip-cert-verify: true}
   - {name: wg, type: wireguard, private-key: PRIV, ip: 172.16.0.2/32, mtu: 1280, peers: [{server: w.example, port: 51820, public-key: PUB, pre-shared-key: PSK, reserved: [1, 2, 3]}]}
@@ -52,6 +54,8 @@ const formatSampleSingBox = `{"outbounds": [
  {"type": "trojan", "tag": "trojang", "server": "t.example", "server_port": 443, "password": "pw", "tls": {"enabled": true, "server_name": "s.example"},
   "transport": {"type": "grpc", "service_name": "g"}},
  {"type": "hysteria2", "tag": "hy2", "server": "h.example", "server_port": 443, "password": "pw", "obfs": {"type": "salamander", "password": "op"},
+  "tls": {"enabled": true, "server_name": "s.example", "insecure": true, "alpn": ["h3"]}},
+ {"type": "hysteria", "tag": "hy1", "server": "h1.example", "server_port": 443, "server_ports": ["2000:3000"], "auth_str": "pw", "up_mbps": 30, "down": "200 Mbps", "obfs": "op",
   "tls": {"enabled": true, "server_name": "s.example", "insecure": true, "alpn": ["h3"]}},
  {"type": "tuic", "tag": "tuic", "server": "t.example", "server_port": 443, "uuid": "uuid", "password": "pw", "congestion_control": "bbr", "udp_relay_mode": "quic",
   "tls": {"enabled": true, "server_name": "s", "insecure": true, "alpn": ["h3"]}},
@@ -96,23 +100,29 @@ func TestSubscriptionFormatsMatchShareLinks(t *testing.T) {
 		t.Fatal(err)
 	}
 	for format, nodes := range map[string][]config.Node{"clash": clash, "sing-box": singbox} {
-		if len(nodes) != len(want) {
-			t.Errorf("%s: parsed %d nodes, want %d", format, len(nodes), len(want))
+		assertNodesMatch(t, format, nodes, want)
+	}
+}
+
+// assertNodesMatch 要求 nodes 与 want（按名称）逐字段一致，数量也要相同。
+func assertNodesMatch(t *testing.T, format string, nodes []config.Node, want map[string]config.Node) {
+	t.Helper()
+	if len(nodes) != len(want) {
+		t.Errorf("%s: parsed %d nodes, want %d", format, len(nodes), len(want))
+	}
+	for _, n := range nodes {
+		w, ok := want[n.Name]
+		if !ok {
+			t.Errorf("%s: unexpected node %s", format, n.Name)
+			continue
 		}
-		for _, n := range nodes {
-			w, ok := want[n.Name]
-			if !ok {
-				t.Errorf("%s: unexpected node %s", format, n.Name)
-				continue
-			}
-			if n.Protocol != w.Protocol || n.Server != w.Server || n.Port != w.Port || n.ID != w.ID {
-				t.Errorf("%s %s: %s %s:%d id=%s, want %s %s:%d id=%s", format, n.Name, n.Protocol, n.Server, n.Port, n.ID, w.Protocol, w.Server, w.Port, w.ID)
-			}
-			got, exp := comparableSettings(n), comparableSettings(w)
-			for k := range mergeKeys(got, exp) {
-				if got[k] != exp[k] {
-					t.Errorf("%s %s %s: %q, link gives %q", format, n.Name, k, got[k], exp[k])
-				}
+		if n.Protocol != w.Protocol || n.Server != w.Server || n.Port != w.Port || n.ID != w.ID {
+			t.Errorf("%s %s: %s %s:%d id=%s, want %s %s:%d id=%s", format, n.Name, n.Protocol, n.Server, n.Port, n.ID, w.Protocol, w.Server, w.Port, w.ID)
+		}
+		got, exp := comparableSettings(n), comparableSettings(w)
+		for k := range mergeKeys(got, exp) {
+			if got[k] != exp[k] {
+				t.Errorf("%s %s %s: %q, link gives %q", format, n.Name, k, got[k], exp[k])
 			}
 		}
 	}

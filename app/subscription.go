@@ -3,6 +3,7 @@ package app
 import (
 	"encoding/base64"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net"
@@ -24,6 +25,9 @@ func parseSubscription(link string) ([]config.Node, error) {
 	}
 	node, err := parseSubscriptionLine(link)
 	if err != nil {
+		if configNode, ok := parseConfigLine(link); ok {
+			return []config.Node{configNode}, nil
+		}
 		return nil, err
 	}
 	return []config.Node{node}, nil
@@ -47,22 +51,57 @@ func ValidateNodeSource(link string) error {
 	if link == "" {
 		return fmt.Errorf("节点链接不能为空")
 	}
-	if hasScheme(link, "vmess", "vless", "trojan", "ss", "hysteria2", "tuic", "anytls", "wireguard", "socks", "socks4", "socks4a", "socks5", "socks5h", "http", "https") {
+	if hasScheme(link, "vmess", "vless", "trojan", "ss", "hysteria", "hysteria2", "tuic", "anytls", "wireguard", "socks", "socks4", "socks4a", "socks5", "socks5h", "http", "https") {
 		return nil
 	}
-	return fmt.Errorf("无效节点链接: 支持 vmess、vless、trojan、ss、hy2/hysteria2、tuic、anytls、wireguard/wg、socks、http 或 https")
+	if _, ok := parseConfigLine(link); ok {
+		return nil // Surge / Loon / Quantumult X 节点配置行
+	}
+	return fmt.Errorf("无效节点链接: 支持 vmess、vless、trojan、ss、hysteria、hy2/hysteria2、tuic、anytls、wireguard/wg、socks、http 或 https 链接，或 Surge / Loon / Quantumult X 节点配置行")
+}
+
+// subscriptionUserAgents 是下载订阅时依次尝试的 User-Agent。不少机场按 UA 决定返回什么格式，
+// 不认识的 UA 可能返回空内容或者直接拒绝；前一个拿不到节点再换下一个。
+var subscriptionUserAgents = []string{
+	"clash.meta/1.19.0 mihomo/1.19.0",
+	"sing-box/1.12.0",
+	"v2rayN/7.10.0",
 }
 
 func parseSubscriptionBody(link string) ([]config.Node, error) {
-	body, err := fetchURL(link)
-	if err != nil {
-		return nil, fmt.Errorf("下载订阅失败: %w", err)
+	var lastErr error
+	for _, ua := range subscriptionUserAgents {
+		body, err := fetchURL(link, ua)
+		if err != nil {
+			lastErr = fmt.Errorf("下载订阅失败: %w", err)
+			var status httpStatusError
+			if !errors.As(err, &status) {
+				break // 网络不通、超时：换 UA 也没用
+			}
+			continue
+		}
+		nodes, err := parseSubscriptionText(body)
+		if err == nil && len(nodes) > 0 {
+			return nodes, nil
+		}
+		if err == nil {
+			err = errors.New("订阅中未识别到任何节点")
+		}
+		lastErr = err
 	}
+	return nil, lastErr
+}
+
+// parseSubscriptionText 识别订阅正文格式：sing-box JSON、SIP008、Clash YAML、
+// 分享链接列表（可 base64），以及 Surge / Loon / Quantumult X 配置行。
+func parseSubscriptionText(body string) ([]config.Node, error) {
 	text := strings.TrimSpace(strings.TrimPrefix(body, "\ufeff"))
 	if text == "" {
 		return nil, fmt.Errorf("订阅内容为空")
 	}
 	switch {
+	case strings.HasPrefix(text, "{") && isSIP008(text):
+		return parseSIP008Subscription(text)
 	case strings.HasPrefix(text, "{"):
 		return parseSingBoxSubscription(text)
 	case looksLikeClashYAML(text):
@@ -77,11 +116,11 @@ func parseSubscriptionBody(link string) ([]config.Node, error) {
 		if line == "" {
 			continue
 		}
-		node, err := parseSubscriptionLine(line)
-		if err != nil {
-			continue
+		if node, err := parseSubscriptionLine(line); err == nil {
+			nodes = append(nodes, node)
+		} else if node, ok := parseConfigLine(line); ok {
+			nodes = append(nodes, node)
 		}
-		nodes = append(nodes, node)
 	}
 	return nodes, nil
 }
@@ -99,6 +138,8 @@ func parseSubscriptionLine(line string) (config.Node, error) {
 		return parseShadowsocks(line)
 	case strings.HasPrefix(line, "hysteria2://"):
 		return parseHysteria2(line)
+	case strings.HasPrefix(line, "hysteria://"):
+		return parseHysteria(line)
 	case strings.HasPrefix(line, "tuic://"):
 		return parseTUIC(line)
 	case strings.HasPrefix(line, "anytls://"):
@@ -263,6 +304,7 @@ func parseVLess(link string) (config.Node, error) {
 	}
 	settings := map[string]string{"uuid": u.User.Username()}
 	vals := u.Query()
+	shadowrocketQuery(vals)
 	setLinkTransport(settings, vals.Get("type"))
 	if vals.Get("host") != "" {
 		settings["transport_host"] = vals.Get("host")
@@ -332,6 +374,7 @@ func parseTrojan(link string) (config.Node, error) {
 	}
 	settings := map[string]string{"password": password}
 	vals := u.Query()
+	shadowrocketQuery(vals) // Shadowrocket 写法：peer=、obfs=websocket、obfsParam=
 	setLinkTransport(settings, vals.Get("type"))
 	if vals.Get("host") != "" {
 		settings["transport_host"] = vals.Get("host")
@@ -588,20 +631,25 @@ func setLinkTransport(settings map[string]string, value string) {
 // server cannot exhaust memory. Real subscriptions are far below this.
 const maxSubscriptionBytes = 8 << 20
 
-func fetchURL(link string) (string, error) {
+// httpStatusError 是订阅服务器返回的非 2xx 状态。
+type httpStatusError struct{ code int }
+
+func (e httpStatusError) Error() string { return fmt.Sprintf("订阅 HTTP %d", e.code) }
+
+func fetchURL(link, userAgent string) (string, error) {
 	client := &http.Client{Timeout: 15 * time.Second}
 	req, err := http.NewRequest(http.MethodGet, link, nil)
 	if err != nil {
 		return "", err
 	}
-	req.Header.Set("User-Agent", "sbtun/"+Version())
+	req.Header.Set("User-Agent", userAgent)
 	resp, err := client.Do(req)
 	if err != nil {
 		return "", err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", fmt.Errorf("订阅 HTTP %d", resp.StatusCode)
+		return "", httpStatusError{resp.StatusCode}
 	}
 	if resp.ContentLength > maxSubscriptionBytes {
 		return "", fmt.Errorf("订阅内容过大: %d 字节，上限 %d 字节", resp.ContentLength, maxSubscriptionBytes)

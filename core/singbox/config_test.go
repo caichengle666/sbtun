@@ -23,12 +23,14 @@ func TestGeneratedProtocolConfigsPassSingBoxCheck(t *testing.T) {
 		{ID: "socks", Protocol: "socks", Server: "example.com", Port: 1080, Settings: map[string]string{"version": "5", "username": "user", "password": "secret"}},
 		{ID: "http", Protocol: "http", Server: "example.com", Port: 8080, Settings: map[string]string{"username": "user", "password": "secret", "tls": "true", "server_name": "example.com", "path": "/proxy"}},
 		{ID: "hysteria2", Protocol: "hysteria2", Server: "example.com", Port: 443, Settings: map[string]string{"password": "secret", "sni": "example.com", "alpn": "h3", "server_ports": "2000-3000", "hop_interval": "30s", "obfs_type": "salamander", "obfs_password": "secret"}},
+		{ID: "hysteria", Protocol: "hysteria", Server: "example.com", Port: 443, Settings: map[string]string{"password": "secret", "sni": "example.com", "server_ports": "2000-3000", "obfs_password": "secret", "insecure": "true"}},
+		{ID: "hysteria-bw", Protocol: "hysteria", Server: "example.com", Port: 443, Settings: map[string]string{"up_mbps": "30", "down_mbps": "200", "alpn": "h3"}},
 		{ID: "tuic", Protocol: "tuic", Server: "example.com", Port: 443, Settings: map[string]string{"uuid": "00000000-0000-0000-0000-000000000001", "password": "secret", "congestion_control": "bbr", "udp_relay_mode": "native", "server_name": "sni.example.com"}},
 		{ID: "anytls", Protocol: "anytls", Server: "example.com", Port: 443, Settings: map[string]string{"password": "secret", "insecure": "true", "utls_fingerprint": "chrome"}},
 		{ID: "wireguard", Protocol: "wireguard", Server: "example.com", Port: 51820, Settings: map[string]string{"private_key": "GBI17Q5In1YIWiw67IH5PS18N+FuH/xIren5DUH11WY=", "public_key": "fvrhwBf3ofI/oWcIZPIySYyB1SqHv/dOM8kTVGxYlS0=", "local_address": "172.16.0.2,fd01::2", "reserved": "1,2,3", "mtu": "1280"}},
 	}
 	for _, node := range cases {
-		t.Run(node.Protocol, func(t *testing.T) {
+		t.Run(node.ID, func(t *testing.T) {
 			data, err := BuildHealthConfig(node, 18080)
 			if err != nil {
 				t.Fatal(err)
@@ -56,6 +58,27 @@ func singBoxTestBinary(t *testing.T) string {
 		t.Skip("local sing-box binary not available")
 	}
 	return binary
+}
+
+func TestHysteriaOutboundFields(t *testing.T) {
+	out, err := buildOutbound(config.Node{Protocol: "hysteria", Server: "h.example", Port: 443, Settings: map[string]string{"password": "pw", "obfs_password": "op", "down_mbps": "300"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if out["type"] != "hysteria" || out["auth_str"] != "pw" || out["obfs"] != "op" || out["up_mbps"] != defaultHysteriaUpMbps || out["down_mbps"] != 300 || out["password"] != nil {
+		t.Fatalf("out=%v", out)
+	}
+}
+
+func TestRealityDefaultsToChromeUTLS(t *testing.T) {
+	out, err := buildOutbound(config.Node{Protocol: "vless", Server: "r.example", Port: 443, Settings: map[string]string{"uuid": "u", "tls": "true", "reality_public_key": "PBK"}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	utls, _ := out["tls"].(map[string]any)["utls"].(map[string]any)
+	if utls["fingerprint"] != "chrome" {
+		t.Fatalf("tls=%v", out["tls"])
+	}
 }
 
 func TestWireGuardNodeBuildsEndpointUsableBySelector(t *testing.T) {

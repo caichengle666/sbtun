@@ -132,6 +132,27 @@ func clashNode(m map[string]any) (config.Node, bool) {
 		set("server_ports", "ports")
 		set("obfs_type", "obfs")
 		set("obfs_password", "obfs-password")
+	case "hysteria":
+		// sing-box 只支持 udp 协议，faketcp、wechat-video 跳过。
+		if p := strings.ToLower(anyString(m["protocol"])); p != "" && p != "udp" {
+			return config.Node{}, false
+		}
+		s["password"] = firstNonEmpty(anyString(m["auth-str"]), anyString(m["auth_str"]), decodeBase64Text(anyString(m["auth"])))
+		setTLS("sni")
+		delete(s, "tls")
+		if v := s["server_name"]; v != "" {
+			s["sni"] = v
+			delete(s, "server_name")
+		}
+		s["up_mbps"] = bandwidthMbps(anyString(m["up"]))
+		s["down_mbps"] = bandwidthMbps(anyString(m["down"]))
+		set("server_ports", "ports")
+		set("obfs_password", "obfs")
+		for key, value := range s {
+			if value == "" {
+				delete(s, key)
+			}
+		}
 	case "tuic":
 		set("uuid", "uuid")
 		set("password", "password")
@@ -186,6 +207,9 @@ func clashNode(m map[string]any) (config.Node, bool) {
 		set("username", "username")
 		set("password", "password")
 		setTLS("sni")
+		if protocol == "socks" && s["tls"] == "true" {
+			return config.Node{}, false // sing-box 的 SOCKS 出站不支持 TLS
+		}
 	default:
 		return config.Node{}, false
 	}
@@ -313,9 +337,29 @@ func singBoxNode(m map[string]any) (config.Node, bool) {
 	}
 	switch protocol {
 	case "vmess", "vless", "trojan", "shadowsocks", "socks", "http", "tuic", "anytls":
-	case "hysteria2":
+	case "hysteria", "hysteria2":
 		if ports := anyList(m["server_ports"]); len(ports) > 0 {
+			// sing-box 写 2000:3000，链接和界面里统一写 2000-3000。
+			for i := range ports {
+				ports[i] = strings.Replace(ports[i], ":", "-", 1)
+			}
 			s["server_ports"] = strings.Join(ports, ",")
+		}
+		if protocol == "hysteria" {
+			s["password"] = firstNonEmpty(anyString(m["auth_str"]), decodeBase64Text(anyString(m["auth"])))
+			s["obfs_password"] = anyString(m["obfs"])
+			if s["up_mbps"] == "" {
+				s["up_mbps"] = bandwidthMbps(anyString(m["up"]))
+			}
+			if s["down_mbps"] == "" {
+				s["down_mbps"] = bandwidthMbps(anyString(m["down"]))
+			}
+			for key, value := range s {
+				if value == "" {
+					delete(s, key)
+				}
+			}
+			break
 		}
 		if obfs := anyMap(m["obfs"]); obfs != nil {
 			s["obfs_type"] = anyString(obfs["type"])
@@ -374,7 +418,7 @@ func singBoxNode(m map[string]any) (config.Node, bool) {
 			s["reality_public_key"] = anyString(reality["public_key"])
 			s["reality_short_id"] = anyString(reality["short_id"])
 		}
-		if protocol == "hysteria2" {
+		if protocol == "hysteria" || protocol == "hysteria2" {
 			delete(s, "tls")
 			if v := s["server_name"]; v != "" {
 				s["sni"] = v
@@ -400,6 +444,41 @@ func singBoxNode(m map[string]any) (config.Node, bool) {
 		name = protocol + "-" + server
 	}
 	return config.Node{ID: subscriptionNodeID(protocol, server, port), Name: name, Protocol: protocol, Server: server, Port: port, Settings: s}, true
+}
+
+// bandwidthMbps 把 "30 Mbps"、"30"、"1 Gbps" 这样的带宽换算成 Mbps 数字。
+func bandwidthMbps(value string) string {
+	value = strings.ToLower(strings.TrimSpace(value))
+	end := 0
+	for end < len(value) && (value[end] >= '0' && value[end] <= '9' || value[end] == '.') {
+		end++
+	}
+	n, err := strconv.ParseFloat(value[:end], 64)
+	if err != nil || n <= 0 {
+		return ""
+	}
+	unit := strings.TrimSpace(value[end:])
+	switch {
+	case strings.HasPrefix(unit, "g"):
+		n *= 1000
+	case strings.HasPrefix(unit, "k"):
+		n /= 1000
+	}
+	if n < 1 {
+		n = 1
+	}
+	return strconv.Itoa(int(n))
+}
+
+func decodeBase64Text(value string) string {
+	if value == "" {
+		return ""
+	}
+	decoded, err := tryBase64Decode(value)
+	if err != nil {
+		return ""
+	}
+	return decoded
 }
 
 // subscriptionNodeID 与各分享链接解析器生成的 ID 保持一致。

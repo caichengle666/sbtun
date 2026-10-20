@@ -70,6 +70,8 @@ func nodeShareLink(node config.Node) (string, error) {
 		return "ss://" + credentials + "@" + nodeAddress(node) + query + "#" + url.PathEscape(node.Name), nil
 	case "hysteria2":
 		return hysteria2ShareLink(node), nil
+	case "hysteria":
+		return hysteriaShareLink(node), nil
 	case "tuic":
 		return tuicShareLink(node), nil
 	case "anytls":
@@ -166,6 +168,26 @@ func hysteria2ShareLink(node config.Node) string {
 		"server_ports": "server_ports", "hop_interval": "hop_interval", "obfs_type": "obfs", "obfs_password": "obfs-password",
 	} {
 		setQuery(q, target, node.Settings[key])
+	}
+	if settingEnabled(node.Settings, "insecure") {
+		q.Set("insecure", "1")
+	}
+	u.RawQuery = q.Encode()
+	return u.String()
+}
+
+func hysteriaShareLink(node config.Node) string {
+	u := &url.URL{Scheme: "hysteria", Host: nodeAddress(node), Fragment: node.Name}
+	q := url.Values{}
+	q.Set("protocol", "udp")
+	for key, target := range map[string]string{
+		"password": "auth", "sni": "peer", "alpn": "alpn", "up_mbps": "upmbps", "down_mbps": "downmbps",
+		"server_ports": "mport", "obfs_password": "obfsParam",
+	} {
+		setQuery(q, target, node.Settings[key])
+	}
+	if node.Settings["obfs_password"] != "" {
+		q.Set("obfs", "xplus")
 	}
 	if settingEnabled(node.Settings, "insecure") {
 		q.Set("insecure", "1")

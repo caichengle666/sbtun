@@ -52,6 +52,56 @@ func setLinkTLS(settings map[string]string, vals url.Values) {
 	}
 }
 
+// hysteria://host:port?protocol=udp&auth=密码&peer=SNI&insecure=1&upmbps=50&downmbps=100&alpn=h3&obfs=xplus&obfsParam=混淆密码#name
+// （Hysteria 第一版）
+func parseHysteria(link string) (config.Node, error) {
+	u, err := url.Parse(link)
+	if err != nil {
+		return config.Node{}, fmt.Errorf("hysteria 解析失败: %w", err)
+	}
+	port, err := parsePort(u.Port())
+	if err != nil {
+		return config.Node{}, fmt.Errorf("hysteria 端口无效: %w", err)
+	}
+	vals := u.Query()
+	if p := strings.ToLower(vals.Get("protocol")); p != "" && p != "udp" {
+		return config.Node{}, fmt.Errorf("hysteria 的 %s 协议 sing-box 不支持，只支持 udp", p)
+	}
+	settings := map[string]string{}
+	set := func(key string, values ...string) {
+		if v := firstNonEmpty(values...); v != "" {
+			settings[key] = v
+		}
+	}
+	set("password", vals.Get("auth"), vals.Get("auth_str"), u.User.Username())
+	set("sni", vals.Get("peer"), vals.Get("sni"))
+	set("alpn", vals.Get("alpn"))
+	set("up_mbps", bandwidthMbps(firstNonEmpty(vals.Get("upmbps"), vals.Get("up_mbps"), vals.Get("up"))))
+	set("down_mbps", bandwidthMbps(firstNonEmpty(vals.Get("downmbps"), vals.Get("down_mbps"), vals.Get("down"))))
+	set("server_ports", vals.Get("mport"), vals.Get("server_ports"))
+	// obfs=xplus 时密码在 obfsParam；有的链接直接把密码写在 obfs 里。
+	obfs := vals.Get("obfs")
+	if strings.EqualFold(obfs, "xplus") || strings.EqualFold(obfs, "none") {
+		obfs = ""
+	}
+	set("obfs_password", vals.Get("obfsParam"), vals.Get("obfs-password"), obfs)
+	if queryEnabled(vals, "insecure", "allowInsecure", "allow_insecure") {
+		settings["insecure"] = "true"
+	}
+	name := u.Fragment
+	if name == "" {
+		name = "hysteria-" + u.Hostname()
+	}
+	return config.Node{
+		ID:       "hysteria-" + u.Host,
+		Name:     name,
+		Protocol: "hysteria",
+		Server:   u.Hostname(),
+		Port:     port,
+		Settings: settings,
+	}, nil
+}
+
 // tuic://uuid:password@host:port?congestion_control=bbr&udp_relay_mode=native&sni=&alpn=h3#name
 func parseTUIC(link string) (config.Node, error) {
 	u, port, name, err := parseURLNode(link, "tuic")

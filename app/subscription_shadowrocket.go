@@ -51,31 +51,56 @@ func parseShadowrocketLink(link string) (shadowrocketLink, bool) {
 	}
 	vals, _ := url.ParseQuery(rawQuery)
 	r := shadowrocketLink{method: method, uuid: uuid, server: server, port: port, query: vals, path: vals.Get("path")}
-	switch strings.ToLower(vals.Get("obfs")) {
-	case "websocket", "ws":
-		r.transport = "ws"
-	case "grpc":
-		r.transport = "grpc"
-	case "h2", "http2", "http":
-		r.transport = "http"
-	case "httpupgrade":
-		r.transport = "httpupgrade"
-	}
-	r.host = vals.Get("obfsParam")
-	if strings.HasPrefix(strings.TrimSpace(r.host), "{") {
-		// 有的版本写成 {"Host":"example.com"}
-		var headers map[string]string
-		r.host = ""
-		if json.Unmarshal([]byte(vals.Get("obfsParam")), &headers) == nil {
-			r.host = headers["Host"]
-		}
-	}
+	r.transport, r.host = shadowrocketTransport(vals)
 	if name, err := url.PathUnescape(fragment); err == nil && name != "" {
 		r.name = name
 	} else {
 		r.name = vals.Get("remarks")
 	}
 	return r, true
+}
+
+// shadowrocketTransport 把 obfs/obfsParam 换成传输方式和 Host。
+func shadowrocketTransport(vals url.Values) (transport, host string) {
+	switch strings.ToLower(vals.Get("obfs")) {
+	case "websocket", "ws":
+		transport = "ws"
+	case "grpc":
+		transport = "grpc"
+	case "h2", "http2", "http":
+		transport = "http"
+	case "httpupgrade":
+		transport = "httpupgrade"
+	}
+	host = vals.Get("obfsParam")
+	if strings.HasPrefix(strings.TrimSpace(host), "{") {
+		// 有的版本写成 {"Host":"example.com"}
+		var headers map[string]string
+		host = ""
+		if json.Unmarshal([]byte(vals.Get("obfsParam")), &headers) == nil {
+			host = firstNonEmpty(headers["Host"], headers["host"])
+		}
+	}
+	return transport, host
+}
+
+// shadowrocketQuery 把标准链接里混用的 Shadowrocket 参数补成标准参数（标准参数优先）。
+func shadowrocketQuery(vals url.Values) {
+	transport, host := shadowrocketTransport(vals)
+	fill := func(key, value string) {
+		if vals.Get(key) == "" && value != "" {
+			vals.Set(key, value)
+		}
+	}
+	fill("sni", vals.Get("peer"))
+	fill("type", transport)
+	fill("host", host)
+	if vals.Get("type") == "grpc" {
+		fill("serviceName", vals.Get("path"))
+		if vals.Get("serviceName") == vals.Get("path") {
+			vals.Del("path")
+		}
+	}
 }
 
 // standardVLESS 把 Shadowrocket 格式转成标准 vless 链接。

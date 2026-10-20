@@ -160,7 +160,7 @@ func (a *App) findSubscription(id string) (config.Subscription, bool) {
 
 func (a *App) applySubscriptionLocked(sub config.Subscription, fresh []config.Node) (SubscriptionUpdateDTO, error) {
 	result := SubscriptionUpdateDTO{ID: sub.ID, Name: sub.Name}
-	err := a.mutateConfigAndSyncLocked(func(_ config.Config, next *config.Config) error {
+	err := a.mutateConfigAndSyncLocked(func(before config.Config, next *config.Config) error {
 		sub.UpdatedAt = time.Now().UTC().Format(time.RFC3339)
 		replaced := false
 		for i := range next.Subscriptions {
@@ -176,6 +176,7 @@ func (a *App) applySubscriptionLocked(sub config.Subscription, fresh []config.No
 		var stats SubscriptionUpdateDTO
 		next.Nodes, stats = mergeSubscriptionNodes(next.Nodes, sub.ID, fresh)
 		result.Name, result.Total, result.Added, result.Removed = sub.Name, stats.Total, stats.Added, stats.Removed
+		keepCurrentNodeByName(before, next, sub.ID)
 		ensureCurrentNode(next)
 		return nil
 	}, true)
@@ -301,6 +302,31 @@ func uniqueNodeID(base, fp string, taken map[string]struct{}) string {
 			id = base + "-" + fp
 		} else {
 			id = fmt.Sprintf("%s-%s-%d", base, fp, i)
+		}
+	}
+}
+
+// keepCurrentNodeByName：当前选中的订阅节点参数变了（ID 跟着变）时，改选同一订阅里同名的节点，
+// 不让选中跳到列表第一个。
+func keepCurrentNodeByName(before config.Config, next *config.Config, subID string) {
+	var current *config.Node
+	for i := range before.Nodes {
+		if before.Nodes[i].ID == before.CurrentNodeID {
+			current = &before.Nodes[i]
+		}
+	}
+	if current == nil || current.Subscription != subID {
+		return
+	}
+	for _, n := range next.Nodes {
+		if n.ID == next.CurrentNodeID {
+			return
+		}
+	}
+	for _, n := range next.Nodes {
+		if n.Subscription == subID && n.Name == current.Name {
+			next.CurrentNodeID = n.ID
+			return
 		}
 	}
 }

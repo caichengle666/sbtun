@@ -391,6 +391,8 @@ func buildOutbound(n config.Node) (map[string]any, error) {
 	switch protocol {
 	case "hysteria2":
 		return buildHysteria2(map[string]any{"tag": "proxy"}, n), nil
+	case "hysteria":
+		return buildHysteria(map[string]any{"tag": "proxy"}, n), nil
 	case "wireguard":
 		return buildWireGuard(n)
 	case "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "tuic", "anytls":
@@ -403,6 +405,10 @@ func buildOutbound(n config.Node) (map[string]any, error) {
 			continue
 		}
 		addSetting(out, k, v)
+	}
+	if tls, _ := out["tls"].(map[string]any); tls != nil && tls["reality"] != nil && tls["utls"] == nil {
+		// sing-box 的 REALITY 客户端必须开 uTLS，链接里没写 fp 时用 chrome。
+		tls["utls"] = map[string]any{"enabled": true, "fingerprint": "chrome"}
 	}
 	if protocol == "tuic" || protocol == "anytls" {
 		// 这两个协议的 TLS 是必填项，分享链接通常不单独写 tls=1。
@@ -550,6 +556,34 @@ func buildHysteria2(out map[string]any, n config.Node) map[string]any {
 		tls["alpn"] = splitList(v)
 	}
 	out["tls"] = tls
+	return out
+}
+
+// Hysteria 第一版必须填上下行带宽，节点没写时用这两个默认值。
+const (
+	defaultHysteriaUpMbps   = 20
+	defaultHysteriaDownMbps = 100
+)
+
+// buildHysteria 生成 Hysteria 第一版出站：密码对应 auth_str，混淆只有一个密码字段。
+func buildHysteria(out map[string]any, n config.Node) map[string]any {
+	out = buildHysteria2(out, n)
+	out["type"] = "hysteria"
+	delete(out, "password")
+	delete(out, "obfs")
+	delete(out, "disable_path_mtu_discovery")
+	if v := n.Settings["password"]; v != "" {
+		out["auth_str"] = v
+	}
+	if v := n.Settings["obfs_password"]; v != "" {
+		out["obfs"] = v
+	}
+	if v, _ := out["up_mbps"].(int); v <= 0 {
+		out["up_mbps"] = defaultHysteriaUpMbps
+	}
+	if v, _ := out["down_mbps"].(int); v <= 0 {
+		out["down_mbps"] = defaultHysteriaDownMbps
+	}
 	return out
 }
 

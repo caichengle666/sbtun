@@ -17,7 +17,7 @@ function nextTheme() {
 const savedView = localStorage.getItem('sbtun-ui-view')
 const initialView = ['overview', 'nodes', 'routing', 'rules', 'capture'].includes(savedView) ? savedView : 'overview'
 const savedNodeFilter = localStorage.getItem('sbtun-ui-node-filter') || 'all'
-const NODE_PROTOCOLS = [['hysteria2', 'Hysteria2'], ['vless', 'VLESS'], ['vmess', 'VMess'], ['trojan', 'Trojan'], ['shadowsocks', 'Shadowsocks'], ['tuic', 'TUIC'], ['anytls', 'AnyTLS'], ['wireguard', 'WireGuard'], ['socks', 'SOCKS'], ['http', 'HTTP']]
+const NODE_PROTOCOLS = [['hysteria2', 'Hysteria2'], ['hysteria', 'Hysteria（第一版）'], ['vless', 'VLESS'], ['vmess', 'VMess'], ['trojan', 'Trojan'], ['shadowsocks', 'Shadowsocks'], ['tuic', 'TUIC'], ['anytls', 'AnyTLS'], ['wireguard', 'WireGuard'], ['socks', 'SOCKS'], ['http', 'HTTP']]
 const TRAFFIC_SLOTS = 30
 const NODE_TEST_CONCURRENCY = 4
 const APP_UPDATE_INTERVAL = 6 * 60 * 60 * 1000
@@ -190,6 +190,16 @@ const NODE_FIELDS = {
     { key: 'alpn', label: 'TLS ALPN', placeholder: '逗号分隔，例如 h2,http/1.1' },
     { key: 'insecure', label: '跳过证书校验', type: 'checkbox' },
     { key: 'path', label: 'HTTP Path', placeholder: '可选' },
+  ],
+  hysteria: [
+    { key: 'password', label: '认证密码', type: 'password', placeholder: 'auth_str，可选' },
+    { key: 'server_name', label: 'TLS SNI', placeholder: '可选，默认服务器地址' },
+    { key: 'alpn', label: 'TLS ALPN', placeholder: '可选，默认 hysteria' },
+    { key: 'up_mbps', label: '上行 Mbps', type: 'number', placeholder: '不填默认 20' },
+    { key: 'down_mbps', label: '下行 Mbps', type: 'number', placeholder: '不填默认 100' },
+    { key: 'server_ports', label: '跳跃端口', placeholder: '例如 2000-3000 或 443,8443' },
+    { key: 'obfs_password', label: 'Obfs 密码', type: 'password', placeholder: '服务端开了 xplus 混淆时填写' },
+    { key: 'insecure', label: '跳过证书校验', type: 'checkbox' },
   ],
   hysteria2: [
     { key: 'password', label: '密码', type: 'password', placeholder: 'Hysteria2 密码', required: true },
@@ -389,7 +399,7 @@ function renderNodeModal() {
   const editing = Boolean(state.editingNodeId)
   const tab = editing ? 'manual' : state.nodeFormTab
   const body = tab === 'link'
-    ? `<p class="muted modal-hint">粘贴节点分享链接（vless:// vmess:// trojan:// ss:// hy2:// tuic:// anytls:// wg:// 等，可多行，一行一个），或订阅地址（支持 Base64、Clash YAML、sing-box JSON）。</p>
+    ? `<p class="muted modal-hint">粘贴节点分享链接（vless:// vmess:// trojan:// ss:// hy2:// hysteria:// tuic:// anytls:// wg:// 等，可多行，一行一个），或订阅地址（支持 Base64、Clash YAML、sing-box JSON）。</p>
       <textarea id="nodeUrl" class="input node-url-input" rows="6" placeholder="每行一个链接或订阅地址">${escapeHtml(state.manualForm.url)}</textarea>`
     : `<div class="row"><select id="nodeProtocol" class="select">${NODE_PROTOCOLS.map(([id, label]) => `<option value="${id}" ${state.manualProtocol === id ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
       <div class="row"><input id="nodeName" class="input" value="${escapeHtml(state.manualForm.name)}" placeholder="节点名称" /></div>
@@ -472,7 +482,7 @@ function buildManualSettings(protocol, password) {
     settings.uuid = settings.password || password
     delete settings.password
   }
-  if (protocol === 'hysteria2' && settings.server_name) {
+  if ((protocol === 'hysteria' || protocol === 'hysteria2') && settings.server_name) {
     settings.sni = settings.server_name
     delete settings.server_name
   }
@@ -495,7 +505,7 @@ function formSettingKeys(protocol) {
   const keys = new Set((NODE_FIELDS[protocol] || []).map(field => field.key))
   if (keys.has('transport_type')) ['transport_host', 'transport_path', 'transport_service_name'].forEach(key => keys.add(key))
   if (protocol === 'vless' || protocol === 'vmess') { keys.delete('password'); keys.add('uuid') }
-  if (protocol === 'hysteria2') { keys.delete('server_name'); keys.add('sni') }
+  if (protocol === 'hysteria' || protocol === 'hysteria2') { keys.delete('server_name'); keys.add('sni') }
   return keys
 }
 
@@ -2279,7 +2289,7 @@ function beginEditNode(node) {
     if (key in form) form[key] = value === 'true' ? true : value
   }
   if (node.protocol === 'vless' || node.protocol === 'vmess') form.password = node.settings?.uuid || ''
-  if (node.protocol === 'hysteria2') form.server_name = node.settings?.sni || ''
+  if (node.protocol === 'hysteria' || node.protocol === 'hysteria2') form.server_name = node.settings?.sni || ''
   state.manualProtocol = node.protocol
   state.manualForm = form
   state.editingNodeId = node.id

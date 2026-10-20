@@ -7,7 +7,7 @@ sbtun 负责节点、订阅、路由、规则集、健康检查和运行状态�
 ## 主要特性
 
 - **桌面与命令行双入口**：GUI 和 CLI 共用配置与运行状态。
-- **常用协议支持**：VLESS、VMess、Trojan、Shadowsocks、Hysteria2、TUIC、AnyTLS、WireGuard、SOCKS 和 HTTP。
+- **常用协议支持**：VLESS、VMess、Trojan、Shadowsocks、Hysteria2、Hysteria、TUIC、AnyTLS、WireGuard、SOCKS 和 HTTP。
 - **节点管理**：点击节点即可切换；粘贴多行链接或订阅导入、一键更新订阅、手动编辑；按协议或订阅分组，测试后按延迟排序，批量导出与删除，单个节点可显示分享链接二维码供手机扫码导入。
 - **四种路由模式**：智能分流、全局代理、全局直连和自定义规则。
 - **规则集管理**：更新、启停和管理 sing-box SRS 规则集，并支持手动 DNS 过滤规则。
@@ -122,6 +122,7 @@ sudo /Applications/sbtun.app/Contents/MacOS/sbtun-cli help
 | Trojan | 支持 | 支持 |
 | Shadowsocks | 支持 | 支持 |
 | Hysteria2 | 支持 | 支持 |
+| Hysteria（第一版） | 支持（`hysteria://`） | 支持 |
 | TUIC | 支持 | 支持 |
 | AnyTLS | 支持 | 支持 |
 | WireGuard | 支持（`wireguard://` / `wg://`） | 支持 |
@@ -130,9 +131,13 @@ sudo /Applications/sbtun.app/Contents/MacOS/sbtun-cli help
 
 VLESS、VMess 和 Trojan 可配置 TLS、SNI、ALPN、uTLS 及 WebSocket、HTTP、gRPC、HTTPUpgrade 等传输参数；Hysteria2 支持端口跳跃与 Salamander 混淆等参数；TUIC 支持拥塞控制与 UDP 转发模式；WireGuard 按 sing-box 1.11+ 的 endpoint 方式生成。
 
-VLESS、VMess 链接也能识别 Shadowrocket 导出的写法（`vless://base64(...)?remarks=...&obfs=websocket&tls=1&peer=...`）。
+VLESS、VMess、Trojan 链接也能识别 Shadowrocket 导出的写法（`peer=`、`obfs=websocket`、`obfsParam=` 等参数）。Hysteria 第一版只支持 udp 协议（faketcp、wechat-video 会跳过），没写上下行带宽时按上行 20 Mbps、下行 100 Mbps。
 
-订阅地址除了常见的 base64 分享链接列表，也能直接识别 Clash / Mihomo YAML（`proxies:`）和 sing-box JSON（`outbounds` / `endpoints`），自动挑出其中支持的节点，分组、规则等内容会被忽略。
+订阅地址除了常见的 base64 分享链接列表，也能直接识别 Clash / Mihomo YAML（`proxies:`）、sing-box JSON（`outbounds` / `endpoints`）、SIP008（Shadowsocks 的 JSON 订阅）和 Surge / Loon / Quantumult X 的节点配置行，自动挑出其中支持的节点，分组、规则等内容会被忽略。单独一行 Surge / Loon / Quantumult X 节点配置也可以直接粘贴导入。
+
+下载订阅时依次用 Clash Meta、sing-box、v2rayN 的 User-Agent，哪个拿到节点就用哪个（很多机场按 UA 决定返回什么格式）；网络不通时不会重复尝试。订阅更新后，如果当前节点的参数变了，会继续选中同名节点。
+
+sing-box 不支持的内容会跳过：ShadowsocksR、Snell、xhttp 传输、带 TLS 的 SOCKS、TUIC v4、shadow-tls 等 SS 插件。
 
 ---
 

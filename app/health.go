@@ -81,7 +81,7 @@ func testNodeOnRunningInstance(ctx context.Context, node config.Node) NodeHealth
 func newNodeHealth(node config.Node) NodeHealthDTO {
 	transport := "tcp"
 	switch node.Protocol {
-	case "hysteria2", "tuic", "wireguard":
+	case "hysteria", "hysteria2", "tuic", "wireguard":
 		transport = "udp"
 	}
 	return NodeHealthDTO{NodeID: node.ID, Protocol: node.Protocol, Transport: transport}
