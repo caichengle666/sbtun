@@ -15,6 +15,8 @@
     </div>
   </header>
   <div id="app"></div>
+  <!-- 提示框放在 #app 外面，页面重绘时不会被清掉 -->
+  <div id="toast" class="toast" style="display:none"></div>
   <script type="module" src="/src/main.js"></script>
 </body>
 </html>

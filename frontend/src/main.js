@@ -297,7 +297,6 @@ function render() {
     ${renderCaptureBodyModal()}
     ${renderNodeQRCodeModal()}
     ${renderBackupModal()}
-    <div id="toast" class="toast" style="display:none"></div>
   `
 }
 
@@ -1116,12 +1115,13 @@ function escapeHtml(s) {
 }
 
 function showToast(msg, type = '') {
+  msg = String(msg)
   const t = document.querySelector('#toast')
   t.textContent = msg
   t.className = 'toast ' + type
   t.style.display = 'block'
   clearTimeout(t._timer)
-  t._timer = setTimeout(() => { t.style.display = 'none' }, 3000)
+  t._timer = setTimeout(() => { t.style.display = 'none' }, Math.min(10000, 3000 + msg.length * 80)) // 长提示多停留一会儿
 }
 
 async function refreshStatus() {
@@ -2103,7 +2103,7 @@ function bindEvents() {
     const url = btn.dataset.url || ''
     if (!url) { showToast('这个规则集没有可用 URL', 'error'); return }
     try {
-      await navigator.clipboard.writeText(url)
+      await window.runtime.ClipboardSetText(url)
       showToast('规则集 URL 已复制', 'success')
     } catch (_) {
       showToast(url, 'info')
