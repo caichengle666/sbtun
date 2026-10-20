@@ -13,6 +13,7 @@ sbtun 负责节点、订阅、路由、规则集、健康检查和运行状态�
 - **规则集管理**：更新、启停和管理 sing-box SRS 规则集，并支持手动 DNS 过滤规则。
 - **真实可用性检查**：区分 Ping、TCP/UDP 端口探测与实际代理 URL 测试。开启 TUN 时，节点服务器地址不经过 TUN、节点域名用国内 DNS 直接解析，所以 Ping 和端口探测始终直连各节点，不受当前节点影响。
 - **运行时切换与容错**：运行中切换节点；当前节点失效时自动切换到延迟最低的可用节点，可随时关闭。
+- **云端备份**：通过 WebDAV（坚果云、Nextcloud、Alist、NAS 等）备份手动节点、订阅地址、规则和设置，可加密，可在内容变化时自动备份。
 - **流量分析**：按域名或关键词查看经过 TUN 的 HTTP/HTTPS 请求，并保存为 JSON。
 - **便携发布包**：GitHub Actions 构建 Windows、Linux、macOS 的 amd64 与 arm64 版本。
 - **三种主题**：深色、浅色和毛玻璃，右上角按钮循环切换；毛玻璃效果在各平台表现一致。
@@ -159,6 +160,15 @@ VLESS、VMess 和 Trojan 可配置 TLS、SNI、ALPN、uTLS 及 WebSocket、HTTP�
 - **WebRTC 防泄漏**：启用更严格的 TUN 路由，减少 WebRTC 直连暴露地址的风险。
 - **诊断信息**：显示配置节点与 sing-box 实际 selector，用于排查状态不同步。
 
+### 云端备份（WebDAV）
+
+节点页右上角“云端备份”。填 WebDAV 地址、用户名和密码即可，坚果云、Nextcloud、Alist、群晖等都能用（坚果云地址填 `https://dav.jianguoyun.com/dav/sbtun/`，密码用“第三方应用密码”）。
+
+- **备份内容**：手动添加的节点、订阅地址、自定义规则、规则集列表和各项设置。订阅里的节点不备份，恢复时按订阅地址重新拉取；拉取失败的订阅保留本机已有的节点。
+- **加密**：填了加密密码，备份用 AES-256-GCM 加密（文件后缀 `.sbtun`），恢复时要用同一个密码；不填则是明文 JSON，里面有节点密码。
+- **自动备份**：开启后 sbtun 运行时每分钟检查一次，只有手动节点、订阅地址、规则或设置变了才上传，并且等改动停下一分钟后再传。切换节点、订阅节点更新都不算变化。
+- **恢复**：从列表里选一份，整体覆盖本机配置（本机的 WebDAV 设置保留）。云端保留最近 10 份，文件名带时间和电脑名。
+
 ---
 
 ## 规则集与广告过滤
@@ -298,6 +308,17 @@ set diagnostics <on|off>        诊断信息
 diag                            查看运行诊断
 ```
 
+### 云端备份
+
+```text
+backup set <地址> <用户名> <密码> [加密密码]   设置并测试 WebDAV
+backup                          立即备份
+backup list                     列出云端备份
+backup restore <编号>           用云端备份覆盖本机配置
+backup auto <on|off>            内容有变化时自动备份（sbtun 运行时生效）
+backup clear                    清除 WebDAV 设置
+```
+
 ### 内核管理
 
 ```text
@@ -323,6 +344,7 @@ sbtun/
 │   └── *.srs                   规则集文件
 └── runtime-data/
     ├── config.json             用户配置
+    ├── webdav-backup.json      上次自动备份的内容指纹
     ├── local-auth.json         本地 clash API 与分析代理的随机凭据
     ├── runtime/                sing-box 运行配置
     └── capture/

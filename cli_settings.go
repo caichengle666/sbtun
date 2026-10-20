@@ -288,3 +288,110 @@ func shortMessage(message string) string {
 	}
 	return message
 }
+
+func validateBackupArgs(args []string) error {
+	switch {
+	case len(args) == 0, len(args) == 1 && (args[0] == "list" || args[0] == "clear"):
+		return nil
+	case len(args) == 2 && args[0] == "auto" && (args[1] == "on" || args[1] == "off"):
+		return nil
+	case len(args) == 2 && args[0] == "restore":
+		if index, err := strconv.Atoi(args[1]); err != nil || index < 1 {
+			return fmt.Errorf("备份编号无效: %s", args[1])
+		}
+		return nil
+	case (len(args) == 4 || len(args) == 5) && args[0] == "set":
+		return nil
+	}
+	return usageError("backup", args)
+}
+
+func runBackupCommand(application *app.App, args []string) error {
+	if len(args) == 0 {
+		name, err := application.BackupToWebDAV()
+		if err == nil {
+			fmt.Println("已备份到 WebDAV:", name)
+		}
+		return err
+	}
+	switch args[0] {
+	case "set":
+		cfg, err := application.LoadConfig()
+		if err != nil {
+			return err
+		}
+		settings := config.WebDAVSettings{URL: args[1], Username: args[2], Password: args[3]}
+		if len(args) == 5 {
+			settings.EncryptPassword = args[4]
+		}
+		if cfg.WebDAV != nil {
+			settings.AutoBackup = cfg.WebDAV.AutoBackup
+		}
+		if err := application.TestWebDAV(settings); err != nil {
+			return err
+		}
+		if err := application.SaveWebDAVSettings(settings); err != nil {
+			return err
+		}
+		fmt.Println("WebDAV 已连接并保存")
+		if settings.EncryptPassword == "" {
+			fmt.Println("提示: 没有设置加密密码，备份以明文保存，里面有节点密码")
+		}
+	case "clear":
+		if err := application.SaveWebDAVSettings(config.WebDAVSettings{}); err != nil {
+			return err
+		}
+		fmt.Println("已清除 WebDAV 设置")
+	case "auto":
+		cfg, err := application.LoadConfig()
+		if err != nil {
+			return err
+		}
+		if cfg.WebDAV == nil {
+			return errors.New("还没有设置 WebDAV，先运行 sbtun backup set")
+		}
+		settings := *cfg.WebDAV
+		settings.AutoBackup = args[1] == "on"
+		if err := application.SaveWebDAVSettings(settings); err != nil {
+			return err
+		}
+		fmt.Printf("自动备份已%s\n", onOff(settings.AutoBackup))
+		if settings.AutoBackup {
+			fmt.Println("sbtun 运行时每分钟检查一次，手动节点、订阅地址、规则或设置有变化才上传")
+		}
+	case "list":
+		list, err := application.ListWebDAVBackups()
+		if err != nil {
+			return err
+		}
+		if len(list) == 0 {
+			fmt.Println("云端还没有备份")
+			return nil
+		}
+		for i, item := range list {
+			lock := ""
+			if item.Encrypted {
+				lock = "  已加密"
+			}
+			fmt.Printf("%2d. %s  %s  %.1f KB%s\n", i+1, item.Name, item.Modified, float64(item.Size)/1024, lock)
+		}
+	case "restore":
+		list, err := application.ListWebDAVBackups()
+		if err != nil {
+			return err
+		}
+		index, _ := strconv.Atoi(args[1])
+		if index > len(list) {
+			return fmt.Errorf("备份编号超出范围: %d", index)
+		}
+		warning, err := application.RestoreFromWebDAV(list[index-1].Name)
+		if err != nil {
+			return err
+		}
+		fmt.Println("已恢复:", list[index-1].Name)
+		if warning != "" {
+			fmt.Println("提示:", warning)
+		}
+	}
+	return nil
+}

@@ -847,3 +847,10 @@ h2 { color: var(--text); letter-spacing: 0; }
 :root[data-theme="glass"] .titlebar { -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
 :root[data-platform="darwin"] .titlebar { justify-content: center; padding-left: 0; }
 :root[data-platform="darwin"] .window-controls { display: none; }
+
+/* 云端备份弹窗 */
+.backup-modal { width: min(640px, calc(100vw - 32px)); }
+.backup-modal .modal-body { max-height: min(70vh, 620px); overflow-y: auto; }
+.backup-modal .setting-field .input { flex: 1; }
+.backup-list-heading { margin-top: 18px; }
+.backup-list .node-item { cursor: default; }

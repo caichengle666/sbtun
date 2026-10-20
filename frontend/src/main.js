@@ -82,6 +82,8 @@ const state = {
   captureDetailTab: 'overview',
   captureBodyViewer: null,
   nodeQRCode: null,
+  // 云端备份弹窗：form 是正在编辑的 WebDAV 设置，list 是云端备份列表
+  backup: null,
   captureSearch: '',
   captureFilter: 'all',
   captureListScroll: 0,
@@ -284,6 +286,7 @@ function render() {
     ${renderNodeModal()}
     ${renderCaptureBodyModal()}
     ${renderNodeQRCodeModal()}
+    ${renderBackupModal()}
     <div id="toast" class="toast" style="display:none"></div>
   `
 }
@@ -375,7 +378,7 @@ function renderNodesPage() {
   const selected = selectedNodeIDs().length
   const subtitle = selected ? `已选 ${selected} 个 · 共 ${nodes.length} 个节点` : `${nodes.length} 个节点 · 点击节点即可切换`
   return `<section class="page-stack">
-      <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">${subtitle}</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="toggleSelectNodes" ${visibleIDs.length ? '' : 'disabled'}>${allSelected ? '取消全选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes" ${state.batchTesting || !visibleIDs.length ? 'disabled' : ''}>${state.batchTesting ? '测试中…' : selected ? '测试选中' : '测试全部'}</button><button class="btn btn-ghost" id="batchExportNodes" ${selected ? '' : 'disabled'}>导出选中</button><button class="btn btn-danger" id="batchDeleteNodes" ${selected ? '' : 'disabled'}>删除选中</button><button class="btn btn-primary" id="toggleNodeForm">导入 / 添加</button></span></div>
+      <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">${subtitle}</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="openBackup" title="备份到 WebDAV 或从云端恢复">云端备份</button><button class="btn btn-ghost" id="toggleSelectNodes" ${visibleIDs.length ? '' : 'disabled'}>${allSelected ? '取消全选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes" ${state.batchTesting || !visibleIDs.length ? 'disabled' : ''}>${state.batchTesting ? '测试中…' : selected ? '测试选中' : '测试全部'}</button><button class="btn btn-ghost" id="batchExportNodes" ${selected ? '' : 'disabled'}>导出选中</button><button class="btn btn-danger" id="batchDeleteNodes" ${selected ? '' : 'disabled'}>删除选中</button><button class="btn btn-primary" id="toggleNodeForm">导入 / 添加</button></span></div>
       ${renderSubscriptions()}
       <div id="nodePanel">${renderNodes()}</div>
   </section>`
@@ -638,6 +641,137 @@ function renderNodeQRCodeModal() {
       <div class="modal-body qrcode-body"><img class="qrcode-image" src="${qr.image}" alt="节点分享链接二维码"><p class="muted modal-hint">用手机客户端扫码即可导入该节点</p><code class="qrcode-link">${escapeHtml(qr.link)}</code></div>
       <footer class="modal-footer"><button class="btn btn-ghost" data-close-node-qrcode>关闭</button><button class="btn btn-primary" id="copyNodeQRCodeLink">复制链接</button></footer>
     </section></div>`
+}
+
+function renderBackupModal() {
+  const b = state.backup
+  if (!b) return ''
+  const f = b.form
+  const busy = Boolean(b.busy)
+  const field = (key, label, type, placeholder) => `<label class="setting-field"><span>${label}</span><input class="input" data-backup-field="${key}" type="${type}" value="${escapeHtml(f[key] || '')}" placeholder="${placeholder}" autocomplete="off" /></label>`
+  const list = !b.saved
+    ? '<p class="muted">保存 WebDAV 设置后可以备份和恢复。</p>'
+    : b.listError
+      ? `<p class="muted">${escapeHtml(b.listError)}</p>`
+      : !b.list
+        ? '<p class="muted">读取中…</p>'
+        : !b.list.length
+          ? '<p class="muted">云端还没有备份。</p>'
+          : `<ul class="node-list backup-list">${b.list.map(item => `<li class="node-item"><div class="node-info"><div class="node-row"><span class="node-name" title="${escapeHtml(item.name)}">${escapeHtml(item.modified || item.name)}</span><span class="node-server">${escapeHtml(item.name)} · ${(item.size / 1024).toFixed(1)} KB${item.encrypted ? ' · 已加密' : ''}</span></div></div><div class="node-actions"><button class="btn btn-ghost restore-backup" data-name="${escapeHtml(item.name)}" ${busy ? 'disabled' : ''}>${b.busy === item.name ? '恢复中…' : '恢复'}</button></div></li>`).join('')}</ul>`
+  return `<div class="modal" id="backupModal" role="dialog" aria-modal="true" aria-labelledby="backupModalTitle"><div class="modal-backdrop" data-close-backup></div>
+    <section class="modal-panel backup-modal">
+      <header class="modal-header"><h2 id="backupModalTitle">云端备份（WebDAV）</h2><button class="icon-btn" data-close-backup aria-label="关闭" title="关闭">×</button></header>
+      <div class="modal-body">
+        <p class="muted modal-hint">备份手动添加的节点、订阅地址、规则和设置；订阅节点不备份，恢复时按订阅地址重新拉取。坚果云地址填 https://dav.jianguoyun.com/dav/sbtun/，密码用“第三方应用密码”。</p>
+        ${field('url', 'WebDAV 地址', 'text', 'https://…/dav/sbtun/')}
+        ${field('username', '用户名', 'text', '账号')}
+        ${field('password', '密码', 'password', '密码或应用密码')}
+        ${field('encrypt_password', '加密密码', 'password', '可选，填了就加密备份，恢复时要用同一个')}
+        <label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>自动备份</strong><small>sbtun 运行时每分钟检查一次，手动节点、订阅地址、规则或设置变了才上传；切换节点、订阅节点更新不算变化</small></span><span class="toggle-switch"><input id="backupAutoToggle" type="checkbox" ${f.auto_backup ? 'checked' : ''}><span aria-hidden="true"></span></span></label>
+        <div class="section-heading backup-list-heading"><div><h2>云端备份</h2><p class="muted">保留最近 10 份，恢复会整体覆盖本机的节点、订阅、规则和设置。</p></div></div>
+        ${list}
+      </div>
+      <footer class="modal-footer">${b.saved ? '<button class="btn btn-ghost" id="clearBackup" ' + (busy ? 'disabled' : '') + '>清除设置</button>' : ''}<button class="btn btn-ghost" id="saveBackupSettings" ${busy ? 'disabled' : ''}>${b.busy === 'save' ? '连接中…' : '保存并测试'}</button><button class="btn btn-primary" id="backupNow" ${busy || !b.saved ? 'disabled' : ''}>${b.busy === 'backup' ? '备份中…' : '立即备份'}</button></footer>
+    </section></div>`
+}
+
+function backupFormFromConfig() {
+  const w = state.config?.webdav
+  return { url: w?.url || '', username: w?.username || '', password: w?.password || '', encrypt_password: w?.encrypt_password || '', auto_backup: Boolean(w?.auto_backup) }
+}
+
+async function openBackup() {
+  state.backup = { form: backupFormFromConfig(), saved: Boolean(state.config?.webdav?.url), list: null, listError: '', busy: '' }
+  renderApp()
+  await refreshBackupList()
+}
+
+async function refreshBackupList() {
+  const b = state.backup
+  if (!b || !b.saved) return
+  try {
+    b.list = await window.go.app.App.ListWebDAVBackups() || []
+    b.listError = ''
+  } catch (e) {
+    b.list = null
+    b.listError = e.message || String(e)
+  }
+  if (state.backup === b) renderApp()
+}
+
+function closeBackup() {
+  state.backup = null
+  renderApp()
+}
+
+async function runBackupAction(name, action) {
+  const b = state.backup
+  if (!b || b.busy) return
+  b.busy = name
+  renderApp()
+  try {
+    await action(b)
+  } catch (e) {
+    showToast(e.message || String(e), 'error')
+  } finally {
+    b.busy = ''
+    if (state.backup === b) renderApp()
+  }
+}
+
+async function saveBackupSettings(b, form, message) {
+  await window.go.app.App.TestWebDAV(form)
+  await window.go.app.App.SaveWebDAVSettings(form)
+  state.config = await window.go.app.App.GetConfig()
+  b.form = { ...form }
+  b.saved = true
+  showToast(message, 'success')
+  await refreshBackupList()
+}
+
+function bindBackupModal() {
+  document.querySelector('#openBackup')?.addEventListener('click', openBackup)
+  const b = state.backup
+  if (!b) return
+  document.querySelectorAll('[data-close-backup]').forEach(element => element.addEventListener('click', closeBackup))
+  document.querySelectorAll('[data-backup-field]').forEach(input => input.addEventListener('input', () => {
+    b.form[input.dataset.backupField] = input.value
+  }))
+  document.querySelector('#saveBackupSettings')?.addEventListener('click', () => runBackupAction('save', b => saveBackupSettings(b, { ...b.form }, b.form.encrypt_password ? 'WebDAV 已连接并保存' : 'WebDAV 已保存，没有设置加密密码，备份以明文保存')))
+  document.querySelector('#backupAutoToggle')?.addEventListener('change', event => {
+    const enabled = event.target.checked
+    b.form.auto_backup = enabled
+    if (!b.saved) return // 还没保存设置时，跟着“保存并测试”一起生效
+    runBackupAction('save', b => saveBackupSettings(b, { ...backupFormFromConfig(), auto_backup: enabled }, enabled ? '自动备份已开启' : '自动备份已关闭')).then(() => {
+      if (state.backup === b) b.form.auto_backup = Boolean(state.config?.webdav?.auto_backup)
+    })
+  })
+  document.querySelector('#backupNow')?.addEventListener('click', () => runBackupAction('backup', async b => {
+    const name = await window.go.app.App.BackupToWebDAV()
+    showToast('已备份：' + name, 'success')
+    await refreshBackupList()
+  }))
+  document.querySelector('#clearBackup')?.addEventListener('click', () => {
+    if (!window.confirm('清除本机保存的 WebDAV 设置？云端已有的备份不会删除。')) return
+    runBackupAction('clear', async b => {
+      await window.go.app.App.SaveWebDAVSettings({ url: '', username: '', password: '', encrypt_password: '', auto_backup: false })
+      state.config = await window.go.app.App.GetConfig()
+      b.form = backupFormFromConfig()
+      b.saved = false
+      b.list = null
+      showToast('已清除 WebDAV 设置', 'success')
+    })
+  })
+  document.querySelectorAll('.restore-backup').forEach(btn => btn.addEventListener('click', () => {
+    const name = btn.dataset.name
+    if (!window.confirm('用这份备份覆盖本机的节点、订阅、规则和设置？订阅节点会按地址重新拉取。')) return
+    runBackupAction(name, async () => {
+      const warning = await window.go.app.App.RestoreFromWebDAV(name)
+      state.config = await window.go.app.App.GetConfig()
+      await refreshRules()
+      showToast(warning ? '已恢复，' + warning : '已恢复备份', warning ? '' : 'success')
+    })
+  }))
 }
 
 function closeNodeQRCode() {
@@ -1206,7 +1340,8 @@ function bindEvents() {
     })
     document.addEventListener('keydown', event => {
       if (event.key !== 'Escape' || state.captureBodyViewer) return
-      if (state.nodeQRCode) closeNodeQRCode()
+      if (state.backup) closeBackup()
+      else if (state.nodeQRCode) closeNodeQRCode()
       else if (state.nodeFormOpen || state.editingNodeId) closeNodeModal()
     })
     state.ruleMenuDocumentBound = true
@@ -1854,6 +1989,7 @@ function bindEvents() {
     })
   })
   document.querySelectorAll('[data-close-node-qrcode]').forEach(element => element.addEventListener('click', closeNodeQRCode))
+  bindBackupModal()
   document.querySelector('#copyNodeQRCodeLink')?.addEventListener('click', async () => {
     if (!state.nodeQRCode) return
     try {

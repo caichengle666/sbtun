@@ -123,6 +123,38 @@ func (m *Manager) save() error {
 	return os.WriteFile(m.statePath, data, 0o600)
 }
 
+// Sets 返回规则集列表的副本（用于备份）。
+func (m *Manager) Sets() []RuleSet {
+	return append([]RuleSet(nil), m.sets...)
+}
+
+// Replace 用备份里的规则集列表整体替换当前列表，返回本地还没有规则文件的规则集 ID。
+func (m *Manager) Replace(sets []RuleSet) ([]string, error) {
+	next := make([]RuleSet, 0, len(sets))
+	seen := map[string]bool{}
+	var missing []string
+	for _, set := range sets {
+		name := filepath.Base(set.Path)
+		if set.ID == "" || seen[set.ID] || strings.TrimSpace(set.URL) == "" || name == "." || name == string(filepath.Separator) {
+			return nil, fmt.Errorf("备份中的规则集无效: %q", set.ID)
+		}
+		seen[set.ID] = true
+		set.Path = filepath.Join(m.rulesDir, name)
+		if set.Source == "" {
+			set.Source = "custom"
+		}
+		if set.Action == "" {
+			set.Action = "block"
+		}
+		if _, err := os.Stat(set.Path); err != nil {
+			missing = append(missing, set.ID)
+		}
+		next = append(next, set)
+	}
+	m.sets = next
+	return missing, m.save()
+}
+
 // List 返回所有规则集状态。
 func (m *Manager) List() []RuleInfo {
 	var infos []RuleInfo

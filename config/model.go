@@ -45,6 +45,19 @@ type Config struct {
 	Subscriptions      []Subscription `json:"subscriptions,omitempty"`
 	CustomRules        []Rule         `json:"custom_rules,omitempty"`
 	DNSFilterRules     []Rule         `json:"dns_filter_rules,omitempty"`
+	// WebDAV 是云端备份设置，只保存在本机，不会写进备份文件。
+	WebDAV *WebDAVSettings `json:"webdav,omitempty"`
+}
+
+// WebDAVSettings 是备份到 WebDAV（坚果云、Nextcloud、Alist、NAS 等）所需的信息。
+type WebDAVSettings struct {
+	URL      string `json:"url"`
+	Username string `json:"username"`
+	Password string `json:"password"`
+	// EncryptPassword 不为空时备份文件用它加密，恢复时需要同一个密码。
+	EncryptPassword string `json:"encrypt_password,omitempty"`
+	// AutoBackup 开启后，节点、订阅、规则或设置有变化时自动上传一份。
+	AutoBackup bool `json:"auto_backup,omitempty"`
 }
 
 // Node 是统一的用户节点模型。

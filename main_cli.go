@@ -128,6 +128,9 @@ func main() {
 			autoSwitch = "关闭"
 		}
 		fmt.Printf("自动切换: %s\nIPv6: %s\nWebRTC 防泄漏: %s\n诊断信息: %s\n", autoSwitch, onOff(cfg.IPv6Enabled), onOff(cfg.WebRTCProtectionEnabled), onOff(cfg.DiagnosticsEnabled))
+		if cfg.WebDAV != nil {
+			fmt.Printf("WebDAV 备份: %s（自动备份%s）\n", cfg.WebDAV.URL, onOff(cfg.WebDAV.AutoBackup))
+		}
 	case "auto-switch":
 		enabled := commandArgs[0] == "on"
 		err = application.SetAutoSwitch(enabled)
@@ -175,6 +178,8 @@ func main() {
 		err = runRuleListCommand(application, commandArgs, true)
 	case "set":
 		err = runSetCommand(application, commandArgs)
+	case "backup":
+		err = runBackupCommand(application, commandArgs)
 	case "diag":
 		err = runDiagCommand(application)
 	case "info":
@@ -317,6 +322,8 @@ func cliUsage(command string, args []string) string {
 		return "sbtun capture <run|enable|disable|status|list|show|clear|cert>"
 	case "kernel":
 		return "sbtun kernel <version|update>"
+	case "backup":
+		return "sbtun backup [list|restore <编号>|set <WebDAV地址> <用户名> <密码> [加密密码]|auto <on|off>|clear]"
 	}
 	return ""
 }
@@ -453,6 +460,8 @@ func validateCLIArgs(command string, args []string) error {
 		return validateCaptureArgs(args)
 	case "kernel":
 		return validateKernelArgs(args)
+	case "backup":
+		return validateBackupArgs(args)
 	default:
 		return fmt.Errorf("未知命令: %s", command)
 	}
@@ -590,6 +599,14 @@ func printHelp() {
 		{"capture show <ID>", "查看一条已保存请求的完整内容"},
 		{"capture clear", "删除已保存请求"},
 		{"capture cert <install|uninstall> [user|system]", "安装或卸载抓包根证书，默认系统级"},
+	})
+	printHelpGroup("云端备份（WebDAV）", []helpEntry{
+		{"backup set <地址> <用户名> <密码> [加密密码]", "设置 WebDAV，例如坚果云 https://dav.jianguoyun.com/dav/sbtun/"},
+		{"backup", "立即备份手动节点、订阅地址、规则和设置（订阅节点不备份）"},
+		{"backup list", "列出云端备份，保留最近 10 份"},
+		{"backup restore <编号>", "用云端备份整体覆盖本机，订阅节点重新拉取"},
+		{"backup auto <on|off>", "开启后内容有变化时自动备份"},
+		{"backup clear", "清除 WebDAV 设置"},
 	})
 	printHelpGroup("其他", []helpEntry{
 		{"kernel version", "查看当前 sing-box 内核版本"},
