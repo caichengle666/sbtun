@@ -192,6 +192,9 @@ func (s *looseString) UnmarshalJSON(data []byte) error {
 }
 
 func parseVMess(link string) (config.Node, error) {
+	if r, ok := parseShadowrocketLink(link); ok {
+		link = r.standardVMess()
+	}
 	raw := strings.TrimPrefix(link, "vmess://")
 	if idx := strings.IndexByte(raw, '#'); idx >= 0 {
 		raw = raw[:idx]
@@ -244,6 +247,9 @@ func parseVMess(link string) (config.Node, error) {
 }
 
 func parseVLess(link string) (config.Node, error) {
+	if r, ok := parseShadowrocketLink(link); ok {
+		link = r.standardVLESS()
+	}
 	u, err := url.Parse(link)
 	if err != nil {
 		return config.Node{}, fmt.Errorf("vless 解析失败: %w", err)

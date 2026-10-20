@@ -130,6 +130,8 @@ sudo /Applications/sbtun.app/Contents/MacOS/sbtun-cli help
 
 VLESS、VMess 和 Trojan 可配置 TLS、SNI、ALPN、uTLS 及 WebSocket、HTTP、gRPC、HTTPUpgrade 等传输参数；Hysteria2 支持端口跳跃与 Salamander 混淆等参数；TUIC 支持拥塞控制与 UDP 转发模式；WireGuard 按 sing-box 1.11+ 的 endpoint 方式生成。
 
+VLESS、VMess 链接也能识别 Shadowrocket 导出的写法（`vless://base64(...)?remarks=...&obfs=websocket&tls=1&peer=...`）。
+
 订阅地址除了常见的 base64 分享链接列表，也能直接识别 Clash / Mihomo YAML（`proxies:`）和 sing-box JSON（`outbounds` / `endpoints`），自动挑出其中支持的节点，分组、规则等内容会被忽略。
 
 ---
