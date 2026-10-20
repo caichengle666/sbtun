@@ -2,11 +2,15 @@ package io.github.caichengle666.sbtun
 
 import android.Manifest
 import android.annotation.SuppressLint
+import android.app.AlertDialog
+import android.content.Intent
 import android.content.pm.PackageManager
 import android.graphics.Color
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.webkit.JsResult
+import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
@@ -56,6 +60,21 @@ class MainActivity : ComponentActivity() {
                 override fun onPageFinished(view: WebView, url: String?) {
                     if (safeArea.isNotEmpty()) view.evaluateJavascript(safeArea, null)
                 }
+
+                // 页面之外的链接交给系统浏览器，不在应用里跳走。
+                override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+                    if (request.url.host == WebViewAssetLoader.DEFAULT_DOMAIN) return false
+                    runCatching { startActivity(Intent(Intent.ACTION_VIEW, request.url)) }
+                    return true
+                }
+            }
+            // WebView 默认不弹 alert/confirm（confirm 直接返回 false），这里用系统对话框实现。
+            webChromeClient = object : WebChromeClient() {
+                override fun onJsAlert(view: WebView, url: String?, message: String?, result: JsResult): Boolean =
+                    showDialog(message, result, cancel = false)
+
+                override fun onJsConfirm(view: WebView, url: String?, message: String?, result: JsResult): Boolean =
+                    showDialog(message, result, cancel = true)
             }
         }
         setContentView(web)
@@ -101,6 +120,16 @@ class MainActivity : ComponentActivity() {
             isAppearanceLightStatusBars = !dark
             isAppearanceLightNavigationBars = !dark
         }
+    }
+
+    private fun showDialog(message: String?, result: JsResult, cancel: Boolean): Boolean {
+        AlertDialog.Builder(this)
+            .setMessage(message)
+            .setPositiveButton("确定") { _, _ -> result.confirm() }
+            .apply { if (cancel) setNegativeButton("取消") { _, _ -> result.cancel() } }
+            .setOnCancelListener { if (cancel) result.cancel() else result.confirm() }
+            .show()
+        return true
     }
 
     // 在后台线程调用：需要时弹出系统 VPN 授权框并等待用户选择。
