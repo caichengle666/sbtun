@@ -68,6 +68,9 @@ func (a *App) UpdateSingBox() (SingBoxUpdateResult, error) {
 	if a.binary == "" {
 		return SingBoxUpdateResult{}, errors.New("sing-box 路径未初始化")
 	}
+	if runtime.GOOS == "android" {
+		return SingBoxUpdateResult{}, errors.New("安卓版的内核随 APK 一起更新")
+	}
 	installed := fileExists(a.binary)
 	if runtime.GOARCH != "amd64" && runtime.GOARCH != "arm64" {
 		return SingBoxUpdateResult{}, fmt.Errorf("暂不支持 %s 架构的 sing-box 更新", runtime.GOARCH)

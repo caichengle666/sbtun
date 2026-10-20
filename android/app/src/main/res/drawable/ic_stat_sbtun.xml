@@ -1,0 +1,18 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- 通知栏单色图标：取自 logo 的 S 笔画 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="24dp"
+    android:height="24dp"
+    android:viewportWidth="424"
+    android:viewportHeight="424">
+    <group
+        android:translateX="-300"
+        android:translateY="-300">
+        <path
+            android:pathData="M640,380 H452 A66,66 0 0,0 452,512 H572 A66,66 0 0,1 572,644 H384"
+            android:strokeWidth="60"
+            android:strokeColor="#FFFFFFFF"
+            android:strokeLineCap="round"
+            android:strokeLineJoin="round" />
+    </group>
+</vector>

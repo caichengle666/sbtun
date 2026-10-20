@@ -607,3 +607,26 @@ func TestNodeServersBypassTUNAndResolveLocally(t *testing.T) {
 func BuildConfig(cfg config.Config, exeDir string) ([]byte, error) {
 	return BuildConfigWithAuth(cfg, exeDir, LocalAuth{}, nil)
 }
+
+func TestMobileInboundPassesSingBoxCheck(t *testing.T) {
+	binary := singBoxTestBinary(t)
+	cfg := testConfig(config.RoutingGlobal)
+	data, err := BuildConfigWithAuth(cfg, t.TempDir(), LocalAuth{ClashSecret: "s", ProxyUsername: "u", ProxyPassword: "p"}, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed RuntimeConfig
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	parsed.Inbounds[0] = mobileInbound(LocalAuth{ProxyUsername: "u", ProxyPassword: "p"})
+	parsed.Route["auto_detect_interface"] = false
+	data, _ = json.Marshal(parsed)
+	path := filepath.Join(t.TempDir(), "mobile.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	if output, err := exec.Command(binary, "check", "-c", path).CombinedOutput(); err != nil {
+		t.Fatalf("sing-box check failed: %v\n%s\n%s", err, output, data)
+	}
+}

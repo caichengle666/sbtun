@@ -1,5 +1,6 @@
 
 import './style.css'
+import './mobile.css'
 import logoUrl from './assets/logo.svg'
 
 const app = document.querySelector('#app')
@@ -14,8 +15,12 @@ const THEME_ICONS = { dark: '<span class="moon-icon" aria-hidden="true"></span>'
 function nextTheme() {
   return THEMES[(THEMES.findIndex(theme => theme.id === state.theme) + 1) % THEMES.length]
 }
+// 安卓 APK：VPN 由系统创建，没有流量分析（抓包要装证书）和桌面窗口。
+const IS_ANDROID = document.documentElement.dataset.platform === 'android'
+const VIEWS = IS_ANDROID ? ['overview', 'nodes', 'routing', 'rules'] : ['overview', 'nodes', 'routing', 'rules', 'capture']
+const TUN_LABEL = IS_ANDROID ? 'VPN' : 'TUN'
 const savedView = localStorage.getItem('sbtun-ui-view')
-const initialView = ['overview', 'nodes', 'routing', 'rules', 'capture'].includes(savedView) ? savedView : 'overview'
+const initialView = VIEWS.includes(savedView) ? savedView : 'overview'
 const savedNodeFilter = localStorage.getItem('sbtun-ui-node-filter') || 'all'
 const NODE_PROTOCOLS = [['hysteria2', 'Hysteria2'], ['hysteria', 'Hysteria（第一版）'], ['vless', 'VLESS'], ['vmess', 'VMess'], ['trojan', 'Trojan'], ['shadowsocks', 'Shadowsocks'], ['tuic', 'TUIC'], ['anytls', 'AnyTLS'], ['wireguard', 'WireGuard'], ['socks', 'SOCKS'], ['http', 'HTTP']]
 const TRAFFIC_SLOTS = 30
@@ -96,6 +101,7 @@ const state = {
 }
 
 const svgIcon = body => `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`
+const POWER_ICON = '<svg viewBox="0 0 24 24" aria-hidden="true"><path d="M12 3v8"/><path d="M6.3 6.8a8 8 0 1 0 11.4 0"/></svg>'
 const NAV_ICONS = {
   overview: svgIcon('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>'),
   nodes: svgIcon('<circle cx="12" cy="12" r="9"/><path d="M3 12h18M12 3a14 14 0 0 1 0 18M12 3a14 14 0 0 0 0 18"/>'),
@@ -247,18 +253,12 @@ app.innerHTML = render()
 
 function render() {
   return `
-    <main class="shell">
+    <main class="shell view-${state.view}">
       <aside class="sidebar">
         <div class="brand"><img class="brand-mark" src="${logoUrl}" alt="" /><span class="brand-name">sbtun</span></div>
         <div class="nav-caption">工作区</div>
         <nav class="nav-list">
-          ${[
-            ['overview', '运行概览'],
-            ['nodes', '节点管理'],
-            ['routing', '路由模式'],
-            ['rules', '分流规则'],
-            ['capture', '流量分析'],
-          ].map(([id, label]) => `<button class="nav-item ${state.view === id ? 'active' : ''}" data-view="${id}" title="${label}"><span class="nav-icon" aria-hidden="true">${NAV_ICONS[id]}</span><span class="nav-label">${label}</span></button>`).join('')}
+          ${VIEWS.map(id => [id, viewLabel(id)]).map(([id, label]) => `<button class="nav-item ${state.view === id ? 'active' : ''}" data-view="${id}" title="${label}"><span class="nav-icon" aria-hidden="true">${NAV_ICONS[id]}</span><span class="nav-label">${label}</span></button>`).join('')}
         </nav>
         <div class="sidebar-status">
           <div class="sidebar-status-line" title="${escapeHtml(statusLabel(state.statusState, state.statusMessage))}"><span class="dot ${dotClass(state.statusState)}"></span><span>${statusLabel(state.statusState, state.statusMessage)}</span></div>
@@ -278,7 +278,7 @@ function render() {
           <div class="topbar-actions">
             ${state.appUpdate?.has_update ? `<button id="appUpdate" class="update-pill" type="button" title="当前 v${escapeHtml(state.appUpdate.current_version)}，点击打开下载页"><span class="update-dot" aria-hidden="true"></span>新版本 v${escapeHtml(state.appUpdate.latest_version)}</button>` : ''}
             <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换主题" title="切换到${nextTheme().name}主题">${THEME_ICONS[nextTheme().id]}</button>
-            <button id="power" class="switch ${state.running ? 'on' : ''}">${state.running ? '关闭 TUN' : '开启 TUN'}</button>
+            <button id="power" data-power class="switch ${state.running ? 'on' : ''}">${powerLabel()}</button>
           </div>
         </header>
         <section class="status-bar">
@@ -299,6 +299,10 @@ function render() {
     ${renderBackupModal()}
     <div id="toast" class="toast" style="display:none"></div>
   `
+}
+
+function powerLabel() {
+  return (state.running ? '关闭 ' : '开启 ') + TUN_LABEL
 }
 
 function viewLabel(view) {
@@ -348,7 +352,7 @@ function renderOverview() {
   const rules = state.rules || []
   const enabledRules = rules.filter(rule => rule.enabled).length
   const testing = current && state.nodeTesting.has(current.id)
-  return `<div class="overview-grid">
+  return `${renderMobileHero(current, mode)}<div class="overview-grid">
       <section class="card focus-card overview-node-panel">
         <div class="focus-card-main">
           <div class="section-kicker"><i class="dot ${state.running ? 'running' : ''}"></i>${state.running ? '当前代理节点' : '当前节点'}</div>
@@ -365,7 +369,39 @@ function renderOverview() {
       <section class="card overview-route-panel"><span class="section-kicker">当前路由</span><strong>${escapeHtml(mode?.name || '未设置')}</strong><div class="route-line"><span>路由策略</span><b>${escapeHtml(mode?.desc || '请先选择路由模式')}</b></div><div class="route-line"><span>IPv6</span><b class="${state.config?.ipv6_enabled ? 'good' : ''}">${state.config?.ipv6_enabled ? '已启用' : '未启用'}</b></div><button class="btn btn-ghost overview-route-btn" data-view="routing">更改路由模式</button></section>
       <section class="card traffic-panel"><div class="section-heading"><h2>实时流量</h2><span class="muted">最近 60 秒</span></div><div class="traffic-numbers"><span>上行<strong id="trafficUp">${formatBytes(state.traffic.up)}/s</strong></span><span>下行<strong id="trafficDown">${formatBytes(state.traffic.down)}/s</strong></span></div><div class="traffic-chart" id="trafficChart" role="img" aria-label="最近 60 秒实时流量">${renderTrafficChart()}</div><div class="traffic-chart-label"><span>60 秒前</span><span>现在</span></div></section>
     </div>
-    <div class="overview-quick"><button data-view="nodes"><span>可用节点</span><strong>${nodes.length} 个　›</strong></button><button data-view="rules"><span>规则集</span><strong>已启用 ${enabledRules} / ${rules.length}　›</strong></button><button data-view="capture"><span>流量分析</span><strong>${state.captureStatus?.running ? '分析器运行中' : '分析器已停止'}　›</strong></button></div>`
+    <div class="overview-quick"><button data-view="nodes"><span>可用节点</span><strong>${nodes.length} 个　›</strong></button><button data-view="rules"><span>规则集</span><strong>已启用 ${enabledRules} / ${rules.length}　›</strong></button>${IS_ANDROID ? '' : `<button data-view="capture"><span>流量分析</span><strong>${state.captureStatus?.running ? '分析器运行中' : '分析器已停止'}　›</strong></button>`}</div>`
+}
+
+// 手机竖屏的概览顶部：大号连接按钮 + 状态 + 实时速度（宽屏时由 CSS 隐藏）。
+
+function heroState() {
+  if (state.statusState === 'starting') return ['starting', '正在连接…']
+  if (state.statusState === 'stopping') return ['starting', '正在断开…']
+  if (state.statusState === 'error') return ['error', '连接出错']
+  return state.running ? ['on', '已连接'] : ['off', '未连接']
+}
+
+function renderMobileHero(current, mode) {
+  const [cls, label] = heroState()
+  return `<section class="mobile-hero ${cls}">
+      <button class="power-orb" data-power type="button" aria-label="${powerLabel()}">${POWER_ICON}</button>
+      <div class="hero-copy">
+        <strong id="heroState">${label}</strong>
+        <span class="hero-sub">${escapeHtml(current?.name || '未选择节点')} · ${escapeHtml(mode?.name || '未设置')}</span>
+      </div>
+      <div class="hero-speed"><span>↑ <b id="heroUp">${formatBytes(state.traffic.up)}/s</b></span><span>↓ <b id="heroDown">${formatBytes(state.traffic.down)}/s</b></span></div>
+    </section>`
+}
+
+function updateMobileHero() {
+  const hero = document.querySelector('.mobile-hero')
+  if (!hero) return
+  const [cls, label] = heroState()
+  hero.className = 'mobile-hero ' + cls
+  hero.querySelector('#heroState').textContent = label
+  hero.querySelector('#heroUp').textContent = formatBytes(state.traffic.up) + '/s'
+  hero.querySelector('#heroDown').textContent = formatBytes(state.traffic.down) + '/s'
+  hero.querySelector('.power-orb').setAttribute('aria-label', powerLabel())
 }
 
 function renderNodeOptions(nodes, selectedID) {
@@ -513,7 +549,7 @@ function renderRoutingPage() {
   const matchType = RULE_MATCH_TYPES.find(item => item.id === state.customRuleForm.match_type) || RULE_MATCH_TYPES[0]
   const action = RULE_ACTIONS.find(item => item.id === state.customRuleForm.action) || RULE_ACTIONS[0]
   const diagnostics = state.diagnostics
-  return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div><div class="network-options"><div class="network-options-title">网络选项</div><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>节点失效自动切换</strong><small>当前节点连续两次测试失败时，切换到延迟最低的可用节点，优先同一订阅</small></span><span class="toggle-switch"><input id="autoSwitchToggle" type="checkbox" ${state.config?.auto_switch_disabled ? '' : 'checked'}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用 IPv6</strong><small>${escapeHtml(state.ipv6Status?.message || '正在检测设备 IPv6')}</small></span><span class="toggle-switch"><input id="ipv6Toggle" type="checkbox" ${state.config?.ipv6_enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用 WebRTC 防泄漏</strong><small>防止 WebRTC 通过直连暴露真实 IPv4/IPv6</small></span><span class="toggle-switch"><input id="webrtcProtectionToggle" type="checkbox" ${state.config?.webrtc_protection_enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用诊断信息</strong><small>显示当前 selector 和运行节点，仅用于排查问题</small></span><span class="toggle-switch"><input id="diagnosticsToggle" type="checkbox" ${state.config?.diagnostics_enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label></div></section>${state.config?.diagnostics_enabled ? `<section class="card"><h2>运行诊断</h2><div class="diagnostics-grid"><span>当前配置节点</span><strong>${escapeHtml(diagnostics?.current_node_id || '未选择')}</strong><span>实际 selector</span><strong>${escapeHtml(diagnostics?.selector || '未读取')}</strong><span>状态</span><strong>${escapeHtml(diagnostics?.message || '读取中')}</strong></div></section>` : ''}
+  return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div><div class="network-options"><div class="network-options-title">网络选项</div><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>节点失效自动切换</strong><small>当前节点连续两次测试失败时，切换到延迟最低的可用节点，优先同一订阅</small></span><span class="toggle-switch"><input id="autoSwitchToggle" type="checkbox" ${state.config?.auto_switch_disabled ? '' : 'checked'}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用 IPv6</strong><small>${escapeHtml(state.ipv6Status?.message || '正在检测设备 IPv6')}</small></span><span class="toggle-switch"><input id="ipv6Toggle" type="checkbox" ${state.config?.ipv6_enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row" data-desktop-only><span class="setting-toggle-copy"><strong>启用 WebRTC 防泄漏</strong><small>防止 WebRTC 通过直连暴露真实 IPv4/IPv6</small></span><span class="toggle-switch"><input id="webrtcProtectionToggle" type="checkbox" ${state.config?.webrtc_protection_enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用诊断信息</strong><small>显示当前 selector 和运行节点，仅用于排查问题</small></span><span class="toggle-switch"><input id="diagnosticsToggle" type="checkbox" ${state.config?.diagnostics_enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label></div></section>${state.config?.diagnostics_enabled ? `<section class="card"><h2>运行诊断</h2><div class="diagnostics-grid"><span>当前配置节点</span><strong>${escapeHtml(diagnostics?.current_node_id || '未选择')}</strong><span>实际 selector</span><strong>${escapeHtml(diagnostics?.selector || '未读取')}</strong><span>状态</span><strong>${escapeHtml(diagnostics?.message || '读取中')}</strong></div></section>` : ''}
     ${state.config?.routing_mode === 'custom' ? `<section class="card"><div class="section-heading"><div><h2>自定义分流规则</h2><p class="muted">先选择匹配对象，再填写内容和处理方式。</p></div></div><div id="customRulesPanel">${renderCustomRules()}</div><div class="rule-editor"><label class="rule-field"><span>匹配对象</span><select id="ruleMatchType" class="select">${RULE_MATCH_TYPES.map(item => `<option value="${item.id}" ${item.id === matchType.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-field"><span>匹配内容</span><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="${matchType.placeholder}" /></label><label class="rule-field"><span>处理方式</span><select id="ruleAction" class="select">${RULE_ACTIONS.map(item => `<option value="${item.id}" ${item.id === action.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><button id="addRuleBtn" class="btn btn-primary">添加规则</button><small class="rule-hint value-hint" id="ruleValueHint">${matchType.hint}</small><small class="rule-hint action-hint" id="ruleActionHint">${action.hint}</small></div><details class="rule-import" open><summary>批量导入规则</summary><div class="rule-import-body"><textarea id="ruleImport" class="input" rows="3" placeholder="每行一条，例如：proxy,domain_suffix,example.com"></textarea><button id="importRuleBtn" class="btn btn-ghost">导入</button></div></details></section>` : ''}
   </div>`
 }
@@ -941,8 +977,8 @@ function renderNodes() {
         </div>
         ${renderLatency(n.id)}
         <div class="node-actions">
-          <button class="btn btn-ghost test-node" data-id="${n.id}" ${testing ? 'disabled' : ''}>测试</button>
-          <details class="rule-menu node-menu" data-rule-menu-id="node-${n.id}"><summary aria-label="节点操作" title="更多操作">⋯</summary><div class="rule-menu-list"><button class="rule-menu-action edit-node" data-id="${n.id}">编辑</button><button class="rule-menu-action export-node" data-id="${n.id}">复制分享链接</button><button class="rule-menu-action qrcode-node" data-id="${n.id}">显示二维码</button><button class="rule-menu-action danger rm-node" data-id="${n.id}">删除</button></div></details>
+          <button class="btn btn-ghost test-node desktop-only" data-id="${n.id}" ${testing ? 'disabled' : ''}>测试</button>
+          <details class="rule-menu node-menu" data-rule-menu-id="node-${n.id}"><summary aria-label="节点操作" title="更多操作">⋯</summary><div class="rule-menu-list"><button class="rule-menu-action test-node mobile-only" data-id="${n.id}" ${testing ? 'disabled' : ''}>测试延迟</button><button class="rule-menu-action edit-node" data-id="${n.id}">编辑</button><button class="rule-menu-action export-node" data-id="${n.id}">复制分享链接</button><button class="rule-menu-action qrcode-node" data-id="${n.id}">显示二维码</button><button class="rule-menu-action danger rm-node" data-id="${n.id}">删除</button></div></details>
         </div>
       </li>`
   }
@@ -1204,8 +1240,9 @@ function updateStatusView() {
   if (trafficDown) trafficDown.textContent = formatBytes(state.traffic.down) + '/s'
   const trafficChart = document.querySelector('#trafficChart')
   if (trafficChart) trafficChart.innerHTML = renderTrafficChart()
-  power.textContent = state.running ? '关闭 TUN' : '开启 TUN'
+  power.textContent = powerLabel()
   power.className = 'switch ' + (state.running ? 'on' : '')
+  updateMobileHero()
   dot.className = 'dot ' + dotClass(state.statusState)
 }
 
@@ -1311,6 +1348,7 @@ function renderApp() {
   if (captureBody) state.captureBodyScroll[captureBody.dataset.captureBodyScroll] = { top: captureBody.scrollTop, left: captureBody.scrollLeft }
   const openRuleMenus = [...document.querySelectorAll('.rule-menu[open]')].map(menu => menu.dataset.ruleMenuId)
   document.documentElement.dataset.theme = state.theme
+  syncNativeTheme()
   app.innerHTML = render()
   bindEvents()
   openRuleMenus.forEach(id => {
@@ -1338,6 +1376,27 @@ function renderApp() {
       }
     }
   }
+}
+
+// 安卓：系统状态栏/导航栏的图标颜色跟着主题走。
+let nativeTheme = ''
+function syncNativeTheme() {
+  if (!IS_ANDROID || nativeTheme === state.theme) return
+  nativeTheme = state.theme
+  window.SbtunNative?.setTheme?.(state.theme !== 'light')
+}
+
+// 安卓返回键：先关弹窗，再回到概览；都没有时返回 false，由 APK 把应用退到后台。
+window.__sbtunBack = () => {
+  if (state.backup) closeBackup()
+  else if (state.nodeQRCode) closeNodeQRCode()
+  else if (state.nodeFormOpen || state.editingNodeId) closeNodeModal()
+  else if (state.view !== 'overview') {
+    state.view = 'overview'
+    localStorage.setItem('sbtun-ui-view', state.view)
+    renderApp()
+  } else return false
+  return true
 }
 
 function bindEvents() {
@@ -1538,10 +1597,9 @@ function bindEvents() {
       } catch (e) { showToast(e.message || String(e), 'error') }
     })
   })
-  const power = document.querySelector('#power')
-  if (power) {
+  document.querySelectorAll('[data-power]').forEach(power => {
     power.addEventListener('click', async () => {
-      power.disabled = true
+      document.querySelectorAll('[data-power]').forEach(button => { button.disabled = true })
       try {
         if (state.running) {
           await window.go.app.App.Stop()
@@ -1553,10 +1611,10 @@ function bindEvents() {
         showToast(e.message || String(e), 'error')
         await refreshStatus()
       } finally {
-        power.disabled = false
+        document.querySelectorAll('[data-power]').forEach(button => { button.disabled = false })
       }
     })
-  }
+  })
 
   document.querySelectorAll('.mode-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -2307,7 +2365,7 @@ async function setupTitlebar() {
   if (!runtime) return
   const platform = (await runtime.Environment().catch(() => ({}))).platform || ''
   document.documentElement.dataset.platform = platform
-  if (platform === 'darwin') return
+  if (platform === 'darwin' || platform === 'android') return
   const maximise = document.querySelector('[data-window="maximise"]')
   const syncMaximise = async () => {
     const maximised = await runtime.WindowIsMaximised().catch(() => false)
@@ -2336,11 +2394,11 @@ window.addEventListener('DOMContentLoaded', async () => {
     await refreshIPv6Status()
     await refreshRules()
     await refreshDiagnostics()
-    await refreshCapture()
+    if (!IS_ANDROID) await refreshCapture()
     setInterval(refreshStatus, 2000)
     setInterval(refreshConfig, 1500)
     setInterval(refreshDiagnostics, 1500)
-    setInterval(refreshCapture, 1500)
+    if (!IS_ANDROID) setInterval(refreshCapture, 1500)
     setInterval(refreshAutoSwitch, 2000)
     checkAppUpdate()
     setInterval(checkAppUpdate, APP_UPDATE_INTERVAL)

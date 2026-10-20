@@ -28,13 +28,15 @@ const (
 )
 
 type RuntimeCoordinator struct {
-	mu              sync.Mutex
-	State           *core.StateStore
-	SingBox         *singbox.Manager
-	TUN             *tun.Manager
-	Capture         *capture.Manager
-	WorkDir         string
-	Binary          string
+	mu      sync.Mutex
+	State   *core.StateStore
+	SingBox *singbox.Manager
+	TUN     *tun.Manager
+	Capture *capture.Manager
+	WorkDir string
+	Binary  string
+	// ResourceDir 放规则文件的目录，默认是 sing-box 所在目录（安卓上内核目录只读，单独指定）。
+	ResourceDir     string
 	ReadyCheck      func(context.Context) error
 	activeConfig    config.Config
 	activeConfigSet bool
@@ -254,10 +256,7 @@ func captureConfigChanged(before, after config.Config) bool {
 }
 
 func (r *RuntimeCoordinator) SyncConfig(cfg config.Config) (string, error) {
-	exeDir := filepath.Dir(r.Binary)
-	if exeDir == "." || exeDir == "" {
-		exeDir, _ = os.Getwd()
-	}
+	exeDir := r.resourceDir()
 	data, err := singbox.BuildConfigWithAuth(cfg, exeDir, r.LocalAuth, r.resolver.resolve(cfg.Nodes))
 	if err != nil {
 		return "", err
@@ -270,6 +269,17 @@ func (r *RuntimeCoordinator) SyncConfig(cfg config.Config) (string, error) {
 		return "", fmt.Errorf("写入运行配置失败: %w", err)
 	}
 	return configPath, nil
+}
+
+func (r *RuntimeCoordinator) resourceDir() string {
+	if r.ResourceDir != "" {
+		return r.ResourceDir
+	}
+	dir := filepath.Dir(r.Binary)
+	if dir == "." || dir == "" {
+		dir, _ = os.Getwd()
+	}
+	return dir
 }
 
 func (r *RuntimeCoordinator) cleanupTUN() error {

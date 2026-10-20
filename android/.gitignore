@@ -1,0 +1,7 @@
+.gradle/
+build/
+local.properties
+# CI 构建时生成
+app/libs/
+app/src/main/jniLibs/
+app/src/main/assets/

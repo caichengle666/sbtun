@@ -85,13 +85,15 @@ func (a *App) StartMonitoring() {
 func (a *App) startupCore(ctx context.Context) {
 	a.ctx = ctx
 	a.initPaths()
+	a.initRuntime("")
+}
+
+// initRuntime 创建运行时和规则管理器；resourceDir 为空时规则放在 sing-box 所在目录。
+func (a *App) initRuntime(resourceDir string) {
 	a.runtime = NewRuntimeCoordinator(a.workDir, a.binary)
 	a.runtime.ReadyCheck = a.checkReady
-	exeDir := filepath.Dir(a.binary)
-	if exeDir == "." || exeDir == "" {
-		exeDir, _ = os.Getwd()
-	}
-	a.rulesManager = rules.NewManager(filepath.Join(exeDir, "rules"))
+	a.runtime.ResourceDir = resourceDir
+	a.rulesManager = rules.NewManager(filepath.Join(a.runtime.resourceDir(), "rules"))
 }
 
 // Shutdown stops the proxy before Wails tears down the application process.

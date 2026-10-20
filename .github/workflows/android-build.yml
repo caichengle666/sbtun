@@ -1,0 +1,181 @@
+name: Android 构建
+
+on:
+  push:
+    branches: [main]
+    tags: ['v*', '0.*']
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+concurrency:
+  group: android-build-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build-android:
+    runs-on: ubuntu-latest
+    steps:
+      - name: 拉取代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Go
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.26.x'
+          cache: false
+
+      - name: 安装 Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '22.x'
+          cache: ''
+
+      - name: 安装 Java
+        uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+
+      - name: 安装 Gradle
+        uses: gradle/actions/setup-gradle@v4
+        with:
+          gradle-version: '8.11.1'
+
+      - name: 安装 gomobile
+        run: |
+          set -euo pipefail
+          version=$(awk '$1 == "golang.org/x/mobile" { print $2 }' mobile/go.mod)
+          test -n "$version"
+          go install "golang.org/x/mobile/cmd/gomobile@$version" "golang.org/x/mobile/cmd/gobind@$version"
+          echo "$(go env GOPATH)/bin" >> "$GITHUB_PATH"
+          echo "ANDROID_NDK_HOME=$ANDROID_NDK_LATEST_HOME" >> "$GITHUB_ENV"
+
+      - name: 编译 Go 绑定库
+        working-directory: mobile
+        run: |
+          set -euo pipefail
+          gomobile init
+          mkdir -p ../android/app/libs
+          gomobile bind -target=android/arm64,android/arm,android/amd64 -androidapi 24 -ldflags='-s -w' -o ../android/app/libs/sbtun.aar .
+
+      - name: 构建前端
+        run: |
+          set -euo pipefail
+          (cd frontend && npm install && npm run build)
+          web=android/app/src/main/assets/web
+          rm -rf "$web"
+          mkdir -p "$web"
+          cp -r frontend/dist/. "$web/"
+          cp android/bridge/android-bridge.js "$web/"
+          sed -i '0,/<head>/s##<head>\n  <script src="./android-bridge.js"></script>#' "$web/index.html"
+          grep -q 'android-bridge.js' "$web/index.html"
+
+      - name: 下载最新 sing-box
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          release=$(curl -fsSL -H "Accept: application/vnd.github+json" -H "Authorization: Bearer $GH_TOKEN" https://api.github.com/repos/SagerNet/sing-box/releases/latest)
+          for pair in arm64:arm64-v8a arm:armeabi-v7a amd64:x86_64; do
+            arch=${pair%%:*}
+            abi=${pair#*:}
+            asset=$(printf '%s' "$release" | jq -c --arg suffix "-android-$arch.tar.gz" '[.assets[] | select(.name | endswith($suffix))][0]')
+            url=$(printf '%s' "$asset" | jq -r '.browser_download_url // empty')
+            digest=$(printf '%s' "$asset" | jq -r '.digest // empty' | sed 's/^sha256://')
+            test -n "$url" && test -n "$digest"
+            curl -fL "$url" -o "$RUNNER_TEMP/sing-box-$arch.tar.gz"
+            echo "$digest  $RUNNER_TEMP/sing-box-$arch.tar.gz" | sha256sum -c -
+            mkdir -p "$RUNNER_TEMP/sing-box-$arch" "android/app/src/main/jniLibs/$abi"
+            tar -xzf "$RUNNER_TEMP/sing-box-$arch.tar.gz" -C "$RUNNER_TEMP/sing-box-$arch"
+            bin=$(find "$RUNNER_TEMP/sing-box-$arch" -type f -name sing-box | head -n 1)
+            test -n "$bin"
+            cp "$bin" "android/app/src/main/jniLibs/$abi/libsingbox.so"
+          done
+
+      - name: 下载分流规则集
+        run: |
+          set -euo pipefail
+          rules=android/app/src/main/assets/rules
+          mkdir -p "$rules"
+          download_rule() {
+            local raw_url="$1"
+            local fallback_url="$2"
+            local output="$3"
+            curl -fL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 "$raw_url" -o "$output" ||
+              curl -fL --retry 5 --retry-all-errors --retry-delay 2 --connect-timeout 15 "$fallback_url" -o "$output"
+          }
+          download_rule \
+            https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-cn.srs \
+            https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-geolocation-cn.srs \
+            "$rules/geosite-geolocation-cn.srs"
+          download_rule \
+            'https://raw.githubusercontent.com/SagerNet/sing-geosite/rule-set/geosite-geolocation-%21cn.srs' \
+            'https://cdn.jsdelivr.net/gh/SagerNet/sing-geosite@rule-set/geosite-geolocation-%21cn.srs' \
+            "$rules/geosite-geolocation-!cn.srs"
+          download_rule \
+            https://raw.githubusercontent.com/SagerNet/sing-geoip/rule-set/geoip-cn.srs \
+            https://cdn.jsdelivr.net/gh/SagerNet/sing-geoip@rule-set/geoip-cn.srs \
+            "$rules/geoip-cn.srs"
+
+      - name: 准备签名
+        env:
+          KEYSTORE_BASE64: ${{ secrets.ANDROID_KEYSTORE_BASE64 }}
+          KEYSTORE_PASSWORD: ${{ secrets.ANDROID_KEYSTORE_PASSWORD }}
+          KEY_ALIAS: ${{ secrets.ANDROID_KEY_ALIAS }}
+          KEY_PASSWORD: ${{ secrets.ANDROID_KEY_PASSWORD }}
+        run: |
+          set -euo pipefail
+          ks="$RUNNER_TEMP/sbtun.jks"
+          if [ -n "$KEYSTORE_BASE64" ]; then
+            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$ks"
+          else
+            echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，本次使用临时签名，安装包无法覆盖升级其他构建。"
+            KEYSTORE_PASSWORD=$(openssl rand -hex 16)
+            KEY_PASSWORD="$KEYSTORE_PASSWORD"
+            KEY_ALIAS=sbtun
+            echo "::add-mask::$KEYSTORE_PASSWORD"
+            keytool -genkeypair -keystore "$ks" -storetype PKCS12 -storepass "$KEYSTORE_PASSWORD" -keypass "$KEY_PASSWORD" \
+              -alias "$KEY_ALIAS" -keyalg RSA -keysize 2048 -validity 10000 -dname "CN=sbtun"
+          fi
+          {
+            echo "SBTUN_KEYSTORE_FILE=$ks"
+            echo "SBTUN_KEYSTORE_PASSWORD=$KEYSTORE_PASSWORD"
+            echo "SBTUN_KEY_ALIAS=$KEY_ALIAS"
+            echo "SBTUN_KEY_PASSWORD=$KEY_PASSWORD"
+          } >> "$GITHUB_ENV"
+
+      - name: 构建 APK
+        run: gradle -p android assembleRelease
+
+      - name: 整理安装包
+        run: |
+          set -euo pipefail
+          mkdir -p dist
+          for abi in arm64-v8a armeabi-v7a x86_64 universal; do
+            cp "android/app/build/outputs/apk/release/app-$abi-release.apk" "dist/sbtun-android-$abi.apk"
+          done
+          (cd dist && sha256sum *.apk)
+
+      - name: 上传构建产物
+        continue-on-error: true
+        uses: actions/upload-artifact@v4
+        with:
+          name: sbtun-android
+          path: dist/*.apk
+          if-no-files-found: error
+          retention-days: 3
+
+      - name: 创建并上传 GitHub Release
+        if: startsWith(github.ref, 'refs/tags/')
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          tag="$GITHUB_REF_NAME"
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" dist/*.apk --clobber
+          else
+            # Builds run in parallel; if another workflow created the release first, upload instead.
+            gh release create "$tag" dist/*.apk --title "sbtun $tag" --generate-notes || gh release upload "$tag" dist/*.apk --clobber
+          fi

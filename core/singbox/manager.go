@@ -7,6 +7,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"sync"
 	"time"
 )
@@ -55,6 +56,10 @@ func (m *Manager) Start(ctx context.Context, binary, configPath string) error {
 	m.stopping = false
 	configureProcess(cmd)
 	cmd.Dir = filepath.Dir(binary)
+	if runtime.GOOS == "android" {
+		// APK 里的内核目录只读，cache.db 要写在数据目录。
+		cmd.Dir = filepath.Dir(configPath)
+	}
 	logFile := filepath.Join(filepath.Dir(configPath), "sing-box.log")
 	f, err := os.OpenFile(logFile, os.O_CREATE|os.O_WRONLY|os.O_TRUNC, 0o644)
 	if err != nil {

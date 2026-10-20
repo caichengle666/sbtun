@@ -7,6 +7,7 @@ import (
 	"net/netip"
 	"os"
 	"path/filepath"
+	"runtime"
 	"sort"
 	"strconv"
 	"strings"
@@ -70,6 +71,9 @@ func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth, resol
 	if exclude := nodeBypassPrefixes(cfg.Nodes, resolved, cfg.IPv6Enabled); len(exclude) > 0 {
 		tunInbound["route_exclude_address"] = exclude
 	}
+	if runtime.GOOS == "android" {
+		tunInbound = mobileInbound(auth)
+	}
 	inbounds := []map[string]any{tunInbound}
 	if cfg.CaptureEnabled && len(normalizeCaptureDomains(cfg.CaptureDomains)) > 0 {
 		upstream := map[string]any{
@@ -103,6 +107,18 @@ func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth, resol
 		return nil, fmt.Errorf("生成 sing-box 配置失败: %w", err)
 	}
 	return data, nil
+}
+
+// MobileProxyPort 是安卓版 sing-box 的本地入站端口。安卓上 TUN 由系统 VpnService 创建，
+// APK 把 TUN 流量经 tun2socks 转到这个端口；标签仍叫 tun-in，路由规则不用改。
+const MobileProxyPort = 10853
+
+func mobileInbound(auth LocalAuth) map[string]any {
+	in := map[string]any{"type": "mixed", "tag": "tun-in", "listen": "127.0.0.1", "listen_port": MobileProxyPort}
+	if auth.proxyEnabled() {
+		in["users"] = []map[string]any{{"username": auth.ProxyUsername, "password": auth.ProxyPassword}}
+	}
+	return in
 }
 
 func buildSelector(nodes []config.Node, currentID string) ([]map[string]any, error) {
@@ -244,7 +260,8 @@ func routeForMode(mode config.RoutingMode, custom, filterRules []config.Rule, ca
 		ruleSetConfigs = append(ruleSetConfigs, map[string]any{"type": "local", "tag": set.ID, "format": "binary", "path": filepath.Join(exeDir, "rules", filepath.Base(set.Path))})
 	}
 	return map[string]any{
-		"auto_detect_interface":   true,
+		// 安卓上 sing-box 进程已被 VPN 排除，不需要（也未必有权限）监听网卡变化。
+		"auto_detect_interface":   runtime.GOOS != "android",
 		"default_domain_resolver": "dns-local",
 		"rule_set":                ruleSetConfigs,
 		"rules":                   base,

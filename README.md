@@ -93,6 +93,17 @@ sudo /Applications/sbtun.app/Contents/MacOS/sbtun-cli help
 > [!NOTE]
 > macOS 上开启 TUN 时，sbtun 会把所有网络服务的 DNS 临时设为 `172.18.0.2`，由 TUN 接管 DNS，关闭 TUN 或退出时恢复原设置。如果程序被强制结束导致无法上网，重新打开 sbtun，或运行 `sudo sbtun-cli run` 后再停止，就会恢复 DNS。macOS 版没有菜单栏图标，关闭窗口即退出并关闭 TUN。
 
+### Android
+
+1. 在 **Releases** 页面下载 APK：大多数手机用 `sbtun-android-arm64-v8a.apk`，老的 32 位手机用 `armeabi-v7a`，不确定就用 `universal`（体积大一些）。需要 Android 7.0 及以上。
+2. 安装后打开，点概览页中间的连接按钮，第一次会弹出系统的 VPN 授权，允许即可。
+3. 连接后通知栏会常驻“sbtun 已连接”，可以直接在通知里断开。
+
+安卓版界面和桌面版一样（节点、订阅、路由模式、分流规则、自动切换、云端备份），手机竖屏用底部标签栏，平板和横屏用侧栏。没有流量分析（抓包需要安装证书）和 WebRTC 防泄漏开关，内核随 APK 一起更新。
+
+> [!NOTE]
+> 安卓上 VPN 由系统创建，sbtun 用 tun2socks 把流量转给内置的 sing-box。sbtun 自己（包括订阅更新、节点测速、云端备份）不走 VPN，直接联网。
+
 ### 首次使用
 
 1. 打开“节点管理”，导入单个节点链接、订阅地址，或手动填写协议参数。导入的订阅会显示在节点列表上方，可随时一键更新。
@@ -112,6 +123,7 @@ sudo /Applications/sbtun.app/Contents/MacOS/sbtun-cli help
 | Windows | 支持 | 支持 | amd64、arm64 |
 | Linux | 支持 | 支持 | amd64、arm64 |
 | macOS | 支持 | 支持 | Intel（amd64）、Apple 芯片（arm64） |
+| Android 7.0+ | 支持 | — | arm64-v8a、armeabi-v7a、x86_64 |
 
 ## 支持的节点类型
 
