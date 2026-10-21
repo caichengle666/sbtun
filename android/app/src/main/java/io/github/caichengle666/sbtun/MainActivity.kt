@@ -83,10 +83,10 @@ class MainActivity : ComponentActivity() {
             val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
             val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
             val density = resources.displayMetrics.density
-            fun css(name: String, px: Int) = "s.setProperty('--safe-$name','${(px / density).toInt()}px');"
+            fun css(name: String, px: Int) = "s.setProperty('--$name','${(px / density).toInt()}px');"
             // 键盘高度单独给 --keyboard-h，并打上 data-keyboard，页面据此藏起底部标签栏，不跟着键盘重排。
-            safeArea = "(r=>{const s=r.style;" + css("top", bars.top) + css("bottom", bars.bottom) +
-                css("left", bars.left) + css("right", bars.right) + css("keyboard-h", ime.bottom) +
+            safeArea = "(r=>{const s=r.style;" + css("safe-top", bars.top) + css("safe-bottom", bars.bottom) +
+                css("safe-left", bars.left) + css("safe-right", bars.right) + css("keyboard-h", ime.bottom) +
                 "r.toggleAttribute('data-keyboard'," + (ime.bottom > bars.bottom) + ")})(document.documentElement)"
             (view as WebView).evaluateJavascript(safeArea, null)
             WindowInsetsCompat.CONSUMED

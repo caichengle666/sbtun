@@ -124,6 +124,7 @@
   .node-filters { flex-wrap: nowrap; max-width: calc(100% + 32px); margin: 0 -16px 12px; padding: 0 16px; overflow-x: auto; scrollbar-width: none; }
   .node-item { grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 10px; min-height: 60px; padding: 10px 10px 10px 14px; border-radius: 12px; }
   .node-name { font-size: 15px; }
+  .node-server, .node-meta .node-server { max-width: none; }
   .node-meta { font-size: 12px; }
   .node-menu summary { width: 40px; height: 40px; }
 

@@ -1180,7 +1180,6 @@ async function refreshAutoSwitch() {
       changed = true
     }
     if (changed) renderApp()
-    // The toast element is part of the rendered page, so show it after rendering.
     if (newEvent) showToast(event.message, event.ok ? 'success' : 'error')
   } catch (e) {
     console.error('read auto switch status failed:', e)

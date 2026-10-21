@@ -116,18 +116,19 @@ textarea.input { resize: vertical; }
 .mode-btn:hover { border-color: #d946ef; }
 .mode-btn.active { border-color: #22d3ee; color: #e2e8f0; background: #162338; }
 .mode-desc { display: block; margin-top: 6px; color: #64748b; font-size: 11px; }
-.network-options { display: grid; gap: 0; margin-top: 18px; border-top: 1px solid #25284a; }
-.network-options-title { padding: 14px 0 4px; color: #64748b; font-size: 11px; letter-spacing: .04em; }
-.setting-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; padding: 12px 0; border-bottom: 1px solid #1b2035; cursor: pointer; }
+.input::placeholder { color: var(--quiet, #64748b); opacity: 1; }
+.network-options { display: grid; gap: 0; margin-top: 18px; border-top: 1px solid var(--border, #25284a); }
+.network-options-title { padding: 14px 0 4px; color: var(--quiet, #64748b); font-size: 11px; letter-spacing: .04em; }
+.setting-toggle-row { display: flex; align-items: center; justify-content: space-between; gap: 16px; min-width: 0; padding: 12px 0; border-bottom: 1px solid var(--border, #1b2035); cursor: pointer; }
 .setting-toggle-row:last-child { border-bottom: 0; }
 .setting-toggle-copy { display: grid; gap: 4px; min-width: 0; }
-.setting-toggle-copy strong { color: #e2e8f0; font-size: 13px; font-weight: 600; }
-.setting-toggle-copy small { color: #94a3b8; font-size: 11px; line-height: 1.45; }
+.setting-toggle-copy strong { color: var(--text, #e2e8f0); font-size: 13px; font-weight: 600; }
+.setting-toggle-copy small { color: var(--muted, #94a3b8); font-size: 11px; line-height: 1.45; }
 .toggle-switch { position: relative; display: inline-flex; flex: 0 0 auto; width: 42px; height: 24px; }
 .toggle-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.toggle-switch > span { position: relative; display: block; width: 42px; height: 24px; border-radius: 999px; background: #334155; transition: background .18s ease; }
+.toggle-switch > span { position: relative; display: block; width: 42px; height: 24px; border-radius: 999px; background: color-mix(in srgb, var(--quiet, #64748b) 55%, transparent); transition: background .18s ease; }
 .toggle-switch > span::after { content: ''; position: absolute; top: 4px; left: 4px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .18s ease; }
-.toggle-switch input:checked + span { background: #0ea5e9; }
+.toggle-switch input:checked + span { background: var(--accent, #0ea5e9); }
 .toggle-switch input:checked + span::after { transform: translateX(18px); }
 .toggle-switch input:focus-visible + span { outline: 2px solid #22d3ee; outline-offset: 2px; }
 .rule-item { min-height: 58px; }
@@ -373,8 +374,8 @@ textarea.input { resize: vertical; }
 :root[data-theme="light"] .capture-settings-summary { border-color: var(--border); }
 
 .theme-toggle { display: grid; place-items: center; width: 38px; height: 38px; flex: 0 0 38px; padding: 0; border: 1px solid #25284a; border-radius: 8px; color: #facc15; background: transparent; font-size: 20px; line-height: 1; cursor: pointer; }
-.moon-icon { position: relative; display: block; width: 18px; height: 18px; border-radius: 50%; background: currentColor; transform: translate(3px, -2px); }
-.moon-icon::after { content: ''; position: absolute; top: -2px; left: 7px; width: 15px; height: 15px; border-radius: 50%; background: var(--bg); }
+/* 月牙用内阴影画，不依赖背景色（毛玻璃主题背景是渐变） */
+.moon-icon { display: block; width: 17px; height: 17px; border-radius: 50%; box-shadow: inset -5px -3px 0 0 currentColor; transform: rotate(-20deg); }
 .theme-toggle:hover { border-color: #22d3ee; }
 :root[data-theme="light"] .theme-toggle { border-color: var(--border); color: var(--accent); }
 :root[data-theme="light"] .theme-toggle:hover { border-color: var(--accent); }
@@ -613,6 +614,7 @@ h2 { color: var(--text); letter-spacing: 0; }
 .node-item, .mode-btn, .rules-summary-item, .rule-set-row, .dns-filter-editor, .dns-filter-table, .rule-editor { border-color: var(--border); background: var(--raised); }
 .node-item.active, .mode-btn.active, .capture-row.active, .rule-set-row:hover { border-color: var(--accent); background: var(--accent-bg); }
 .node-item.active, .mode-btn.active, .capture-row.active { color: var(--text); }
+.mode-btn.active .mode-desc { color: var(--muted); }
 .node-name, .rules-summary-item strong, .rule-set-title strong, .rule-set-form h3, .dns-filter-row strong { color: var(--text); }
 .node-server, .rules-summary-item small, .rule-set-file, .rule-set-date, .rules-summary-note { color: var(--quiet); }
 .filter-btn { border-color: var(--border); background: var(--raised); color: var(--muted); }
