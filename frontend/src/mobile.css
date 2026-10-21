@@ -1,13 +1,18 @@
 /* 手机竖屏（≤760px）和安卓 APK 的样式。桌面宽屏不受影响。 */
 
-:root { --safe-top: 0px; --safe-right: 0px; --safe-bottom: 0px; --safe-left: 0px; --tabbar-h: 64px; }
+:root { --safe-top: 0px; --safe-right: 0px; --safe-bottom: 0px; --safe-left: 0px; --keyboard-h: 0px; --tabbar-h: 64px; }
 .mobile-hero, .mobile-only { display: none; }
 
 /* 安卓 APK：没有桌面标题栏；内容避开状态栏、刘海和导航栏 */
 :root[data-platform="android"] { --titlebar-h: 0px; -webkit-tap-highlight-color: transparent; }
 :root[data-platform="android"] .titlebar,
 :root[data-platform="android"] [data-desktop-only] { display: none; }
-:root[data-platform="android"] body { padding: var(--safe-top) var(--safe-right) var(--safe-bottom) var(--safe-left); -webkit-user-select: none; user-select: none; }
+:root[data-platform="android"] body { padding: var(--safe-top) var(--safe-right) max(var(--safe-bottom), var(--keyboard-h)) var(--safe-left); -webkit-user-select: none; user-select: none; }
+/* 安卓 WebView 对固定背景和大面积模糊重绘很慢，键盘弹出时会画花，这里不用 */
+:root[data-platform="android"][data-theme="glass"] body { background-attachment: scroll; }
+/* 键盘弹出时藏起底部标签栏，弹窗和提示抬到键盘上方 */
+:root[data-keyboard] .sidebar { display: none; }
+:root[data-keyboard] .workspace { padding-bottom: 20px; }
 :root[data-platform="android"] :is(input, textarea, .qrcode-link) { -webkit-user-select: text; user-select: text; }
 :root[data-platform="android"] .shell { min-height: calc(100vh - var(--safe-top) - var(--safe-bottom)); }
 :root[data-platform="android"] :is(.btn, .switch, .theme-toggle, .filter-btn, .nav-item) { touch-action: manipulation; }
@@ -29,6 +34,7 @@
     background: color-mix(in srgb, var(--side) 90%, transparent);
     -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%);
   }
+  :root[data-platform="android"] .sidebar { background: linear-gradient(var(--side), var(--side)), var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
   .brand, .nav-caption, .sidebar-status { display: none; }
   .nav-list { display: grid; grid-auto-columns: minmax(0, 1fr); grid-auto-flow: column; gap: 4px; overflow: visible; }
   .nav-item,
@@ -133,7 +139,7 @@
   .modal { z-index: 40; align-items: end; padding: 0; }
   .modal-panel, .backup-modal, .qrcode-modal {
     width: 100%; max-height: calc(100vh - var(--safe-top) - 24px);
-    padding-bottom: var(--safe-bottom); border-width: 1px 0 0; border-radius: 20px 20px 0 0;
+    padding-bottom: max(var(--safe-bottom), var(--keyboard-h)); border-width: 1px 0 0; border-radius: 20px 20px 0 0;
     animation: sheet-up .22s ease-out;
   }
   .modal-panel::before { content: ''; align-self: center; width: 36px; height: 4px; margin-top: 8px; border-radius: 2px; background: var(--border); }
@@ -146,6 +152,8 @@
 
   .toast { bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 16px); max-width: calc(100vw - 32px); border-radius: 12px; text-align: center; }
 }
+
+:root[data-keyboard] .toast { bottom: calc(var(--keyboard-h) + 16px); }
 
 @keyframes orb-pulse { 50% { box-shadow: 0 0 0 14px color-mix(in srgb, var(--amber) 14%, transparent), inset 0 0 0 1px var(--border); } }
 @keyframes sheet-up { from { transform: translateY(24px); opacity: .6; } }
