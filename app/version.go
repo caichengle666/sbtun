@@ -1,6 +1,6 @@
 package app
 
-const version = "0.3.26"
+const version = "0.3.27"
 
 // Version returns the application version used by CLI and diagnostics.
 func Version() string { return version }

@@ -13,10 +13,10 @@
 /* 键盘弹出时藏起底部标签栏，弹窗和提示抬到键盘上方 */
 :root[data-keyboard] .sidebar { display: none; }
 :root[data-keyboard] .workspace { padding-bottom: 20px; }
-:root[data-platform="android"] :is(input, textarea, .qrcode-link) { -webkit-user-select: text; user-select: text; }
+:root[data-platform="android"] input, :root[data-platform="android"] textarea, :root[data-platform="android"] .qrcode-link { -webkit-user-select: text; user-select: text; }
 :root[data-platform="android"] .shell { min-height: calc(100vh - var(--safe-top) - var(--safe-bottom)); }
-:root[data-platform="android"] :is(.btn, .switch, .theme-toggle, .filter-btn, .nav-item) { touch-action: manipulation; }
-:root[data-platform="android"] :is(.btn, .input, .select) { min-height: 40px; }
+:root[data-platform="android"] .btn, :root[data-platform="android"] .switch, :root[data-platform="android"] .theme-toggle, :root[data-platform="android"] .filter-btn, :root[data-platform="android"] .nav-item { touch-action: manipulation; }
+:root[data-platform="android"] .btn, :root[data-platform="android"] .input, :root[data-platform="android"] .select { min-height: 40px; }
 
 @media (max-width: 760px) {
   .desktop-only { display: none; }
@@ -28,7 +28,7 @@
   /* 底部标签栏 */
   .sidebar,
   :root[data-theme] .sidebar {
-    position: fixed; inset: auto 0 0; z-index: 30;
+    position: fixed; top: auto; right: 0; bottom: 0; left: 0; z-index: 30;
     width: auto; height: auto; padding: 6px max(8px, var(--safe-right)) calc(6px + var(--safe-bottom)) max(8px, var(--safe-left));
     border: 0; border-top: 1px solid var(--border);
     background: color-mix(in srgb, var(--side) 90%, transparent);
@@ -118,7 +118,8 @@
   .node-batch-actions { flex-wrap: nowrap; justify-content: flex-start; max-width: calc(100% + 32px); margin: 0 -16px; padding: 2px 16px; overflow-x: auto; scrollbar-width: none; }
   .node-batch-actions::-webkit-scrollbar, .node-filters::-webkit-scrollbar { display: none; }
   .node-batch-actions .btn { flex: 0 0 auto; }
-  #toggleNodeForm { order: -1; }
+  #toggleNodeForm { order: -2; }
+  [data-scan-qr] { order: -1; }
   .node-tools-row > .input { flex: 1 1 100%; max-width: none; }
   .node-tool-select { flex: 1 1 0; min-width: 0; }
   .node-filters { flex-wrap: nowrap; max-width: calc(100% + 32px); margin: 0 -16px 12px; padding: 0 16px; overflow-x: auto; scrollbar-width: none; }

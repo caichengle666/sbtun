@@ -117,7 +117,7 @@ class MainActivity : ComponentActivity() {
         val loc = IntArray(2).also(web::getLocationInWindow)
         val windowH = window.decorView.height
         if (windowH == 0 || web.height == 0) return
-        val gap = windowH - (loc[1] + web.height) // WebView 底边到窗口底边的距离
+        val gap = maxOf(0, windowH - (loc[1] + web.height)) // WebView 底边到窗口底边的距离
         fun covered(px: Int) = maxOf(0, px - gap)
         val keyboard = ime.bottom > bars.bottom
         val shrunk = gap > bars.bottom + 50 // 系统还没把 WebView 恢复原高

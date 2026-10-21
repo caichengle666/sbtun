@@ -423,7 +423,7 @@ function renderNodesPage() {
   const selected = selectedNodeIDs().length
   const subtitle = selected ? `已选 ${selected} 个 · 共 ${nodes.length} 个节点` : `${nodes.length} 个节点 · 点击节点即可切换`
   return `<section class="page-stack">
-      <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">${subtitle}</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="openBackup" title="备份到 WebDAV 或从云端恢复">云端备份</button><button class="btn btn-ghost" id="toggleSelectNodes" ${visibleIDs.length ? '' : 'disabled'}>${allSelected ? '取消全选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes" ${state.batchTesting || !visibleIDs.length ? 'disabled' : ''}>${state.batchTesting ? '测试中…' : selected ? '测试选中' : '测试全部'}</button><button class="btn btn-ghost" id="batchExportNodes" ${selected ? '' : 'disabled'}>导出选中</button><button class="btn btn-danger" id="batchDeleteNodes" ${selected ? '' : 'disabled'}>删除选中</button><button class="btn btn-primary" id="toggleNodeForm">导入 / 添加</button></span></div>
+      <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">${subtitle}</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="openBackup" title="备份到 WebDAV 或从云端恢复">云端备份</button><button class="btn btn-ghost" id="toggleSelectNodes" ${visibleIDs.length ? '' : 'disabled'}>${allSelected ? '取消全选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes" ${state.batchTesting || !visibleIDs.length ? 'disabled' : ''}>${state.batchTesting ? '测试中…' : selected ? '测试选中' : '测试全部'}</button><button class="btn btn-ghost" id="batchExportNodes" ${selected ? '' : 'disabled'}>导出选中</button><button class="btn btn-danger" id="batchDeleteNodes" ${selected ? '' : 'disabled'}>删除选中</button>${IS_ANDROID ? '<button class="btn btn-ghost" data-scan-qr>扫码导入</button>' : ''}<button class="btn btn-primary" id="toggleNodeForm">导入 / 添加</button></span></div>
       ${renderSubscriptions()}
       <div id="nodePanel">${renderNodes()}</div>
   </section>`
@@ -445,7 +445,7 @@ function renderNodeModal() {
       <header class="modal-header"><h2 id="nodeModalTitle">${editing ? '编辑节点' : '添加节点'}</h2><button class="icon-btn" data-close-node-modal aria-label="关闭" title="关闭">×</button></header>
       ${editing ? '' : `<div class="modal-tabs" role="tablist"><button class="modal-tab ${tab === 'link' ? 'active' : ''}" data-node-form-tab="link" role="tab">粘贴链接导入</button><button class="modal-tab ${tab === 'manual' ? 'active' : ''}" data-node-form-tab="manual" role="tab">手动填写</button></div>`}
       <div class="modal-body">${body}</div>
-      <footer class="modal-footer"><button class="btn btn-ghost" data-close-node-modal>取消</button>${tab === 'link' ? `${IS_ANDROID ? '<button id="scanQRBtn" class="btn btn-ghost">扫码</button>' : ''}<button id="importBtn" class="btn btn-primary">导入</button>` : `<button id="addNodeBtn" class="btn btn-primary">${editing ? '保存修改' : '添加节点'}</button>`}</footer>
+      <footer class="modal-footer"><button class="btn btn-ghost" data-close-node-modal>取消</button>${tab === 'link' ? `${IS_ANDROID ? '<button class="btn btn-ghost" data-scan-qr>扫码</button>' : ''}<button id="importBtn" class="btn btn-primary">导入</button>` : `<button id="addNodeBtn" class="btn btn-primary">${editing ? '保存修改' : '添加节点'}</button>`}</footer>
     </section>
   </div>`
 }
@@ -1336,6 +1336,26 @@ async function refreshRules() {
   } catch (e) {
     console.error('list rules failed:', e)
   }
+}
+
+// 安卓扫码：识别到的内容放进“粘贴链接导入”，然后直接导入。
+async function scanAndImport() {
+  let text = ''
+  try {
+    text = (await window.runtime.ScanQRCode()).trim()
+  } catch (e) {
+    showToast('扫码失败：' + (e.message || e), 'error')
+    return
+  }
+  if (!text) return
+  const keep = state.nodeFormOpen && state.nodeFormTab === 'link' ? state.manualForm.url.trim() : ''
+  if (!keep) resetManualForm()
+  state.manualForm.url = [keep, text].filter(Boolean).join('\n')
+  state.editingNodeId = ''
+  state.nodeFormTab = 'link'
+  state.nodeFormOpen = true
+  renderApp()
+  document.querySelector('#importBtn')?.click()
 }
 
 function renderApp() {
@@ -2277,20 +2297,7 @@ function bindEvents() {
     }
   })
 
-  // 安卓扫码：识别到的内容追加到输入框，然后直接导入。
-  document.querySelector('#scanQRBtn')?.addEventListener('click', async () => {
-    let text = ''
-    try {
-      text = (await window.runtime.ScanQRCode()).trim()
-    } catch (e) {
-      showToast('扫码失败：' + (e.message || e), 'error')
-      return
-    }
-    if (!text) return
-    state.manualForm.url = [state.manualForm.url.trim(), text].filter(Boolean).join('\n')
-    renderApp()
-    document.querySelector('#importBtn')?.click()
-  })
+  document.querySelectorAll('[data-scan-qr]').forEach(button => button.addEventListener('click', scanAndImport))
 
   const importBtn = document.querySelector('#importBtn')
   if (importBtn) {

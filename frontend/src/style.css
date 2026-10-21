@@ -127,7 +127,7 @@ textarea.input { resize: vertical; }
 .setting-toggle-copy small { color: var(--muted, #94a3b8); font-size: 11px; line-height: 1.45; }
 .toggle-switch { position: relative; display: inline-flex; flex: 0 0 auto; width: 42px; height: 24px; }
 .toggle-switch input { position: absolute; width: 1px; height: 1px; opacity: 0; }
-.toggle-switch > span { position: relative; display: block; width: 42px; height: 24px; border-radius: 999px; background: color-mix(in srgb, var(--quiet, #64748b) 55%, transparent); transition: background .18s ease; }
+.toggle-switch > span { position: relative; display: block; width: 42px; height: 24px; border-radius: 999px; background: rgba(100, 116, 139, .55); background: color-mix(in srgb, var(--quiet, #64748b) 55%, transparent); transition: background .18s ease; }
 .toggle-switch > span::after { content: ''; position: absolute; top: 4px; left: 4px; width: 16px; height: 16px; border-radius: 50%; background: #fff; transition: transform .18s ease; }
 .toggle-switch input:checked + span { background: var(--accent, #0ea5e9); }
 .toggle-switch input:checked + span::after { transform: translateX(18px); }
@@ -824,15 +824,15 @@ h2 { color: var(--text); letter-spacing: 0; }
     var(--bg);
   background-attachment: fixed;
 }
-:root[data-theme="glass"] :is(.sidebar, .status-bar, .card, .toast, .modal-panel, .capture-body-modal-panel, .rule-menu-list) {
+:root[data-theme="glass"] .sidebar, :root[data-theme="glass"] .status-bar, :root[data-theme="glass"] .card, :root[data-theme="glass"] .toast, :root[data-theme="glass"] .modal-panel, :root[data-theme="glass"] .capture-body-modal-panel, :root[data-theme="glass"] .rule-menu-list {
   border-color: var(--border);
   -webkit-backdrop-filter: var(--glass-blur);
   backdrop-filter: var(--glass-blur);
   box-shadow: var(--shadow), inset 0 1px 0 rgba(255, 255, 255, .08);
 }
-:root[data-theme="glass"] :is(.modal-panel, .capture-body-modal-panel, .rule-menu-list, .toast) { background: rgba(22, 28, 48, .72); }
-:root[data-theme="glass"] :is(.modal-backdrop, .capture-body-modal-backdrop) { background: rgba(5, 8, 20, .4); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
-:root[data-theme="glass"] :is(.btn-primary, .filter-btn.active, .switch:not(.on)) { color: #062420; }
+:root[data-theme="glass"] .modal-panel, :root[data-theme="glass"] .capture-body-modal-panel, :root[data-theme="glass"] .rule-menu-list, :root[data-theme="glass"] .toast { background: rgba(22, 28, 48, .72); }
+:root[data-theme="glass"] .modal-backdrop, :root[data-theme="glass"] .capture-body-modal-backdrop { background: rgba(5, 8, 20, .4); -webkit-backdrop-filter: blur(4px); backdrop-filter: blur(4px); }
+:root[data-theme="glass"] .btn-primary, :root[data-theme="glass"] .filter-btn.active, :root[data-theme="glass"] .switch:not(.on) { color: #062420; }
 :root[data-theme="glass"] option { background: #1a2034; color: var(--text); }
 @supports not ((backdrop-filter: blur(1px)) or (-webkit-backdrop-filter: blur(1px))) {
   :root[data-theme="glass"] { --side: rgba(20, 26, 44, .86); --panel: rgba(24, 30, 50, .86); }
@@ -840,7 +840,7 @@ h2 { color: var(--text); letter-spacing: 0; }
 .glass-icon { display: block; width: 17px; height: 17px; border: 1.5px solid currentColor; border-radius: 5px; background: linear-gradient(135deg, rgba(255, 255, 255, .55), rgba(255, 255, 255, .08)); }
 
 :root { --titlebar-h: 34px; }
-.titlebar { position: fixed; inset: 0 0 auto; z-index: 50; display: flex; align-items: center; height: var(--titlebar-h); padding-left: 14px; border-bottom: 1px solid var(--border); background: var(--side); color: var(--muted); font-size: 12px; user-select: none; -webkit-user-select: none; }
+.titlebar { position: fixed; top: 0; right: 0; bottom: auto; left: 0; z-index: 50; display: flex; align-items: center; height: var(--titlebar-h); padding-left: 14px; border-bottom: 1px solid var(--border); background: var(--side); color: var(--muted); font-size: 12px; user-select: none; -webkit-user-select: none; }
 .titlebar-brand { display: flex; align-items: center; gap: 8px; }
 .titlebar-logo { width: 16px; height: 16px; border-radius: 4px; }
 .window-controls { display: flex; height: 100%; margin-left: auto; }
