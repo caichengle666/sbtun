@@ -21,7 +21,7 @@ func BuildHealthConfig(node config.Node, listenPort int) ([]byte, error) {
 			"listen": "127.0.0.1", "listen_port": listenPort,
 		}},
 		"outbounds": append(outbounds, map[string]any{"type": "direct", "tag": "direct"}, map[string]any{"type": "block", "tag": "block"}),
-		"route":     map[string]any{"final": "proxy"},
+		"route":     map[string]any{"final": "proxy", "default_domain_resolver": "dns-local"},
 	}
 	if len(endpoints) > 0 {
 		result["endpoints"] = endpoints
