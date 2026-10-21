@@ -39,7 +39,7 @@ func subscriptionName(link string) string {
 func (a *App) ImportSubscription(link string) (int, error) {
 	link = normalizeNodeLink(link)
 	// 下载订阅可能耗时，放在锁外完成。
-	nodes, err := a.parseSubscription(link)
+	nodes, usage, err := a.parseSubscription(link)
 	if err != nil {
 		return 0, err
 	}
@@ -51,7 +51,7 @@ func (a *App) ImportSubscription(link string) (int, error) {
 	if !isSubscriptionURL(link) {
 		return a.addNodesLocked(nodes)
 	}
-	sub := config.Subscription{ID: subscriptionID(link), Name: subscriptionName(link), URL: link}
+	sub := config.Subscription{ID: subscriptionID(link), Name: subscriptionName(link), URL: link, Usage: usage}
 	result, err := a.applySubscriptionLocked(sub, nodes)
 	return result.Added, err
 }
@@ -89,7 +89,8 @@ func (a *App) UpdateSubscription(id string) (SubscriptionUpdateDTO, error) {
 	if err != nil {
 		return SubscriptionUpdateDTO{ID: id}, err
 	}
-	nodes, err := a.parseSubscription(sub.URL)
+	nodes, usage, err := a.parseSubscription(sub.URL)
+	sub.Usage = usage
 	if err == nil && len(nodes) == 0 {
 		err = errors.New("订阅中未识别到任何节点")
 	}

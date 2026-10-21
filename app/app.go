@@ -716,7 +716,7 @@ func (a *App) UpdateNode(id string, node config.Node) error {
 
 // UpdateNodeFromLink replaces all node parameters parsed from a share link.
 func (a *App) UpdateNodeFromLink(id, link string) error {
-	nodes, err := a.parseSubscription(link)
+	nodes, _, err := a.parseSubscription(link)
 	if err != nil {
 		return err
 	}

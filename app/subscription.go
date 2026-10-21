@@ -721,33 +721,35 @@ type httpStatusError struct{ code int }
 func (e httpStatusError) Error() string { return fmt.Sprintf("订阅 HTTP %d", e.code) }
 
 func fetchURL(link, userAgent string) (string, error) {
-	return fetchURLWith(&http.Client{Timeout: 15 * time.Second}, link, userAgent)
+	body, _, err := fetchURLWith(&http.Client{Timeout: 15 * time.Second}, link, userAgent)
+	return body, err
 }
 
-func fetchURLWith(client *http.Client, link, userAgent string) (string, error) {
+// fetchURLWith 下载订阅正文，同时返回响应头里的流量信息（没有则为 nil）。
+func fetchURLWith(client *http.Client, link, userAgent string) (string, *config.SubscriptionUsage, error) {
 	req, err := http.NewRequest(http.MethodGet, link, nil)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	req.Header.Set("User-Agent", userAgent)
 	resp, err := client.Do(req)
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return "", httpStatusError{resp.StatusCode}
+		return "", nil, httpStatusError{resp.StatusCode}
 	}
 	if resp.ContentLength > maxSubscriptionBytes {
-		return "", fmt.Errorf("订阅内容过大: %d 字节，上限 %d 字节", resp.ContentLength, maxSubscriptionBytes)
+		return "", nil, fmt.Errorf("订阅内容过大: %d 字节，上限 %d 字节", resp.ContentLength, maxSubscriptionBytes)
 	}
 	buf := new(strings.Builder)
 	n, err := io.Copy(buf, io.LimitReader(resp.Body, maxSubscriptionBytes+1))
 	if err != nil {
-		return "", err
+		return "", nil, err
 	}
 	if n > maxSubscriptionBytes {
-		return "", fmt.Errorf("订阅内容超过 %d 字节上限", maxSubscriptionBytes)
+		return "", nil, fmt.Errorf("订阅内容超过 %d 字节上限", maxSubscriptionBytes)
 	}
-	return buf.String(), nil
+	return buf.String(), parseSubscriptionUsage(resp.Header.Get("Subscription-Userinfo")), nil
 }

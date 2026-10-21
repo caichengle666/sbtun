@@ -482,9 +482,10 @@ function renderSubscriptions() {
     const count = nodes.filter(n => n.subscription === s.id).length
     const updated = s.updated_at ? '更新于 ' + new Date(s.updated_at).toLocaleString('zh-CN') : '尚未更新'
     const updating = state.subUpdating === s.id || state.subUpdating === '*'
+    const usage = subscriptionUsage(s.usage)
     return `<li class="node-item subscription-item">
         <span class="badge proxy">订阅</span>
-        <div class="node-info"><div class="node-row"><span class="node-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</span><span class="node-server">${count} 个节点 · ${escapeHtml(updated)}</span></div></div>
+        <div class="node-info"><div class="node-row"><span class="node-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</span><span class="node-server">${count} 个节点 · ${escapeHtml(updated)}</span></div>${usage ? `<div class="sub-usage${usage.warn ? ' warn' : ''}">${escapeHtml(usage.text)}</div>` : ''}</div>
         <div class="node-actions"><button class="btn btn-ghost update-sub" data-id="${escapeHtml(s.id)}" ${busy ? 'disabled' : ''}>${updating ? '更新中...' : '更新'}</button><button class="btn btn-danger rm-sub" data-id="${escapeHtml(s.id)}" ${busy ? 'disabled' : ''}>删除</button></div>
       </li>`
   }).join('')
@@ -898,8 +899,30 @@ function formatBytes(value) {
   const n = Number(value)
   if (!Number.isFinite(n) || n < 0) return '—'
   if (n < 1024) return n + ' B'
-  if (n < 1024 * 1024) return (n / 1024).toFixed(1) + ' KB'
-  return (n / 1024 / 1024).toFixed(1) + ' MB'
+  const units = ['KB', 'MB', 'GB', 'TB', 'PB']
+  let v = n / 1024
+  let i = 0
+  while (v >= 1024 && i < units.length - 1) { v /= 1024; i++ }
+  return (v >= 100 ? v.toFixed(0) : v.toFixed(1)) + ' ' + units[i]
+}
+
+// 与 Go 端 SubscriptionUsageText 一致：剩余流量与到期时间；已过期、7 天内到期或剩余不足 10% 时 warn。
+function subscriptionUsage(u) {
+  if (!u) return null
+  const parts = []
+  let warn = false
+  if (u.total > 0) {
+    const left = u.total - u.upload - u.download
+    if (left <= 0) { parts.push('流量已用完'); warn = true }
+    else { parts.push(`剩余 ${formatBytes(left)} / 共 ${formatBytes(u.total)}`); warn = left * 10 < u.total }
+  }
+  if (u.expire > 0) {
+    const left = u.expire * 1000 - Date.now()
+    if (left <= 0) { parts.push('已过期'); warn = true }
+    else if (left < 7 * 86400000) { parts.push(`${Math.floor(left / 86400000) + 1} 天后到期`); warn = true }
+    else parts.push(new Date(u.expire * 1000).toLocaleDateString('zh-CN') + ' 到期')
+  }
+  return parts.length ? { text: parts.join(' · '), warn } : null
 }
 
 function dotClass(s) {

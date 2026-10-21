@@ -153,8 +153,10 @@ func (a *App) RestoreFromWebDAV(name string) (string, error) {
 	}
 	var warnings []string
 	fetched := make(map[string][]config.Node, len(payload.Config.Subscriptions))
+	usages := make(map[string]*config.SubscriptionUsage, len(payload.Config.Subscriptions))
 	for _, sub := range payload.Config.Subscriptions {
-		nodes, err := a.parseSubscription(sub.URL)
+		nodes, usage, err := a.parseSubscription(sub.URL)
+		usages[sub.ID] = usage
 		if err == nil && len(nodes) == 0 {
 			err = errors.New("没有识别到节点")
 		}
@@ -179,6 +181,7 @@ func (a *App) RestoreFromWebDAV(name string) (string, error) {
 		for i, sub := range restored.Subscriptions {
 			restored.Nodes, _ = mergeSubscriptionNodes(restored.Nodes, sub.ID, fetched[sub.ID])
 			restored.Subscriptions[i].UpdatedAt = time.Now().UTC().Format(time.RFC3339)
+			restored.Subscriptions[i].Usage = usages[sub.ID]
 		}
 		if payload.CurrentNode != "" {
 			restored.CurrentNodeID = payload.CurrentNode
@@ -227,7 +230,7 @@ func (a *App) webDAVSettings() (config.WebDAVSettings, error) {
 }
 
 // buildBackup 生成备份内容和内容指纹。订阅节点不进备份，指纹也忽略当前选中的节点和
-// 订阅更新时间：切换节点、订阅节点变了都不算变化，只有手动节点、订阅地址、规则、设置变了才算。
+// 订阅更新时间和流量：切换节点、订阅节点变了都不算变化，只有手动节点、订阅地址、规则、设置变了才算。
 func (a *App) buildBackup() (backupPayload, string, error) {
 	// 规则集列表由 operationMu 保护。
 	a.operationMu.Lock()
@@ -253,6 +256,7 @@ func (a *App) buildBackupLocked() (backupPayload, string, error) {
 	cfg.Subscriptions = append([]config.Subscription(nil), cfg.Subscriptions...)
 	for i := range cfg.Subscriptions {
 		cfg.Subscriptions[i].UpdatedAt = ""
+		cfg.Subscriptions[i].Usage = nil
 	}
 	payload.Config = cfg
 	if a.rulesManager != nil {

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/http"
 	"time"
 
 	"github.com/caichengle666/sbtun/config"
@@ -12,12 +13,17 @@ import (
 // 直连下载订阅失败（被墙、连接被重置）时，最多换几个已有节点代理下载。
 const subscriptionProxyTries = 3
 
-// parseSubscription 和包级同名函数一样，但订阅地址直连不通时会经已有节点下载。
+// parseSubscription 和包级同名函数一样，但订阅地址直连不通时会经已有节点下载，
+// 并返回订阅响应头里的流量与到期信息（单个节点链接或机场没给时为 nil）。
 // 安卓上 App 自身不走 VPN，开着 VPN 也是直连，所以这一步在各平台都需要。
-func (a *App) parseSubscription(link string) ([]config.Node, error) {
+func (a *App) parseSubscription(link string) ([]config.Node, *config.SubscriptionUsage, error) {
 	fetcher := &proxiedFetcher{app: a}
 	defer fetcher.close()
-	return parseSubscriptionWith(link, fetcher.fetch)
+	nodes, err := parseSubscriptionWith(link, fetcher.fetch)
+	if err != nil {
+		return nil, nil, err
+	}
+	return nodes, fetcher.usage, nil
 }
 
 type proxiedFetcher struct {
@@ -25,13 +31,15 @@ type proxiedFetcher struct {
 	direct    error // 直连失败的原因；失败过就不再直连
 	proxy     *nodeProxy
 	proxyNode string
+	usage     *config.SubscriptionUsage // 最近一次成功下载的流量信息，即最终被解析的那份
 }
 
 func (f *proxiedFetcher) fetch(link, userAgent string) (string, error) {
 	if f.direct == nil {
-		body, err := fetchURL(link, userAgent)
+		body, usage, err := fetchURLWith(&http.Client{Timeout: 15 * time.Second}, link, userAgent)
 		var status httpStatusError
 		if err == nil || errors.As(err, &status) {
+			f.usage = usage
 			return body, err
 		}
 		f.direct = err
@@ -69,7 +77,9 @@ func (f *proxiedFetcher) fetchVia(link, userAgent string) (string, error) {
 	if err := f.proxy.waitReady(5 * time.Second); err != nil {
 		return "", err
 	}
-	return fetchURLWith(f.proxy.client, link, userAgent)
+	body, usage, err := fetchURLWith(f.proxy.client, link, userAgent)
+	f.usage = usage
+	return body, err
 }
 
 func (f *proxiedFetcher) close() {

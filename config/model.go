@@ -81,6 +81,16 @@ type Subscription struct {
 	Name      string `json:"name"`
 	URL       string `json:"url"`
 	UpdatedAt string `json:"updated_at,omitempty"`
+	// Usage 来自订阅响应头 subscription-userinfo；机场没给就是 nil。
+	Usage *SubscriptionUsage `json:"usage,omitempty"`
+}
+
+// SubscriptionUsage 是订阅的流量与到期信息。字节数；Expire 为 Unix 秒，0 表示长期有效或未知。
+type SubscriptionUsage struct {
+	Upload   int64 `json:"upload"`
+	Download int64 `json:"download"`
+	Total    int64 `json:"total"`
+	Expire   int64 `json:"expire,omitempty"`
 }
 
 func Default() Config {

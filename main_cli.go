@@ -710,7 +710,14 @@ func runSubsCommand(application *app.App, args []string) error {
 			if t, err := time.Parse(time.RFC3339, sub.UpdatedAt); err == nil {
 				updated = "更新于 " + t.Local().Format("2006-01-02 15:04")
 			}
-			fmt.Printf("%d\t%s\t%d 个节点\t%s\n", i+1, sub.Name, count, updated)
+			line := fmt.Sprintf("%d\t%s\t%d 个节点\t%s", i+1, sub.Name, count, updated)
+			if usage, warn := app.SubscriptionUsageText(sub.Usage, time.Now()); usage != "" {
+				if warn {
+					usage = "⚠ " + usage
+				}
+				line += "\t" + usage
+			}
+			fmt.Println(line)
 		}
 		return nil
 	}

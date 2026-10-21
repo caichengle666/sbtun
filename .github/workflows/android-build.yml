@@ -129,7 +129,14 @@ jobs:
           set -euo pipefail
           ks="$RUNNER_TEMP/sbtun.jks"
           if [ -n "$KEYSTORE_BASE64" ]; then
-            printf '%s' "$KEYSTORE_BASE64" | base64 -d > "$ks"
+            if [ -z "$KEYSTORE_PASSWORD" ]; then
+              echo "::error::已配置 ANDROID_KEYSTORE_BASE64，但缺少 ANDROID_KEYSTORE_PASSWORD。"
+              exit 1
+            fi
+            # 别名和密钥密码可省略：默认别名 sbtun，密钥密码与密钥库密码相同（PKCS12 通常如此）。
+            KEY_ALIAS="${KEY_ALIAS:-sbtun}"
+            KEY_PASSWORD="${KEY_PASSWORD:-$KEYSTORE_PASSWORD}"
+            printf '%s' "$KEYSTORE_BASE64" | tr -d ' \r\n' | base64 -d > "$ks"
           else
             echo "::warning::未配置 ANDROID_KEYSTORE_BASE64，本次使用临时签名，安装包无法覆盖升级其他构建。"
             KEYSTORE_PASSWORD=$(openssl rand -hex 16)

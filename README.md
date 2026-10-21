@@ -101,6 +101,8 @@ sudo /Applications/sbtun.app/Contents/MacOS/sbtun-cli help
 
 安卓版界面和桌面版一样（节点、订阅、路由模式、分流规则、自动切换、云端备份），手机竖屏用底部标签栏，平板和横屏用侧栏。没有流量分析（抓包需要安装证书）和 WebRTC 防泄漏开关，内核随 APK 一起更新。
 
+自己构建时，在仓库 Settings → Secrets and variables → Actions 里添加 `ANDROID_KEYSTORE_BASE64`（PKCS12 密钥库的 base64）和 `ANDROID_KEYSTORE_PASSWORD`，之后每次构建签名一致，新版可以直接覆盖安装。别名默认 `sbtun`，可用 `ANDROID_KEY_ALIAS`、`ANDROID_KEY_PASSWORD` 另行指定。没配置时用临时签名，升级前要先卸载旧版。
+
 > [!NOTE]
 > 安卓上 VPN 由系统创建，sbtun 用 tun2socks 把流量转给内置的 sing-box。sbtun 自己（包括订阅更新、节点测速、云端备份）不走 VPN，直接联网。
 
@@ -148,6 +150,8 @@ VLESS、VMess、Trojan 链接也能识别 Shadowrocket 导出的写法（`peer=`
 订阅地址除了常见的 base64 分享链接列表，也能直接识别 Clash / Mihomo YAML（`proxies:`）、sing-box JSON（`outbounds` / `endpoints`）、SIP008（Shadowsocks 的 JSON 订阅）和 Surge / Loon / Quantumult X 的节点配置行，自动挑出其中支持的节点，分组、规则等内容会被忽略。单独一行 Surge / Loon / Quantumult X 节点配置也可以直接粘贴导入。
 
 下载订阅时依次用 Clash Meta、sing-box、v2rayN 的 User-Agent，哪个拿到节点就用哪个（很多机场按 UA 决定返回什么格式）；网络不通时不会重复尝试。订阅更新后，如果当前节点的参数变了，会继续选中同名（或同地址）的节点。自动更新在 sbtun 运行期间每 10 分钟检查一次，到期的订阅才下载；下载失败保留原节点，一小时后再试。
+
+机场在订阅响应头里给出流量和到期信息（`subscription-userinfo`）时，订阅卡片和 `sbtun subs` 会显示剩余流量、总量和到期日；已过期、7 天内到期或剩余流量不足 10% 时醒目提示。每次更新订阅时刷新。
 
 sing-box 不支持的内容会跳过：ShadowsocksR、Snell、xhttp / kcp 等传输、带 TLS 的 SOCKS、TUIC v4、shadow-tls 等 SS 插件。生成运行配置时每个节点会先做一遍校验，参数明显不合法（如 2022 密钥长度不对、REALITY 公钥无效）的备用节点会被跳过，不影响当前节点启动。
 
