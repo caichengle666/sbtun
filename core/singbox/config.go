@@ -92,7 +92,7 @@ func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth, resol
 	result := RuntimeConfig{
 		Schema:    "https://sing-box.sagernet.org/schema.json",
 		Log:       map[string]any{"level": "info", "timestamp": true},
-		DNS:       buildDNS(cfg.DNSMode, cfg.RoutingMode, NodeDomains(cfg.Nodes)),
+		DNS:       buildDNS(cfg.DNSMode, cfg.RoutingMode, NodeDomains(cfg.Nodes), hasRuleSet(activeRuleSets(cfg.RoutingMode, exeDir), "geosite-cn")),
 		Inbounds:  inbounds,
 		Outbounds: outbounds,
 		Endpoints: endpoints,
@@ -162,7 +162,18 @@ func findNode(nodes []config.Node, id string) (config.Node, bool) {
 	return config.Node{}, false
 }
 
-func buildDNS(mode config.DNSMode, routeMode config.RoutingMode, nodeDomains []string) map[string]any {
+func hasRuleSet(sets []configuredRuleSet, id string) bool {
+	for _, set := range sets {
+		if set.ID == id {
+			return true
+		}
+	}
+	return false
+}
+
+// buildDNS 生成 DNS 配置。geositeCN 表示 route 里确实有 geosite-cn 规则集（启用且文件存在），
+// 否则 DNS 规则不能引用它，sing-box 会报 rule-set not found 拒绝整份配置。
+func buildDNS(mode config.DNSMode, routeMode config.RoutingMode, nodeDomains []string, geositeCN bool) map[string]any {
 	servers := []map[string]any{
 		{"type": "udp", "tag": "dns-local", "server": "223.5.5.5", "server_port": 53, "detour": "direct"},
 		{"type": "udp", "tag": "dns-local-standby", "server": "119.29.29.29", "server_port": 53, "detour": "direct"},
@@ -183,10 +194,10 @@ func buildDNS(mode config.DNSMode, routeMode config.RoutingMode, nodeDomains []s
 		rules = append(rules, map[string]any{"domain": nodeDomains, "server": "dns-local"})
 	}
 	if mode == config.DNSAuto && routeMode == config.RoutingSmart {
-		rules = append(rules,
-			map[string]any{"rule_set": []string{"geosite-cn"}, "server": "dns-local"},
-			map[string]any{"ip_is_private": true, "server": "dns-local"},
-		)
+		if geositeCN {
+			rules = append(rules, map[string]any{"rule_set": []string{"geosite-cn"}, "server": "dns-local"})
+		}
+		rules = append(rules, map[string]any{"ip_is_private": true, "server": "dns-local"})
 	}
 	if mode == config.DNSCustom {
 		final = "dns-remote"
@@ -404,21 +415,32 @@ func parsePort(s string) int {
 }
 
 func buildOutbound(n config.Node) (map[string]any, error) {
-	protocol := strings.ToLower(strings.TrimSpace(n.Protocol))
-	switch protocol {
+	var out map[string]any
+	switch protocol := strings.ToLower(strings.TrimSpace(n.Protocol)); protocol {
 	case "hysteria2":
-		return buildHysteria2(map[string]any{"tag": "proxy"}, n), nil
+		out = buildHysteria2(map[string]any{"tag": "proxy"}, n)
 	case "hysteria":
-		return buildHysteria(map[string]any{"tag": "proxy"}, n), nil
+		out = buildHysteria(map[string]any{"tag": "proxy"}, n)
 	case "wireguard":
 		return buildWireGuard(n)
 	case "vless", "vmess", "trojan", "shadowsocks", "socks", "http", "tuic", "anytls":
+		out = buildStandardOutbound(protocol, n)
 	default:
 		return nil, fmt.Errorf("暂不支持的节点协议: %s", n.Protocol)
 	}
+	// 单节点校验：sing-box 必然拒绝的取值在这里报错，由 buildSelector 跳过该节点。
+	if err := checkOutbound(out); err != nil {
+		return nil, err
+	}
+	return out, nil
+}
+
+func buildStandardOutbound(protocol string, n config.Node) map[string]any {
 	out := map[string]any{"type": protocol, "tag": "proxy", "server": n.Server, "server_port": n.Port, "domain_resolver": "dns-local"}
+	// TLS 类参数只在 tls 开关打开时生效：security=none 的链接常带着 sni/fp，不能因此开 TLS。
+	tlsOn := protocol == "tuic" || protocol == "anytls" || settingOn(n.Settings["tls"]) || n.Settings["reality_public_key"] != ""
 	for k, v := range n.Settings {
-		if strings.HasPrefix(k, "transport_") {
+		if strings.HasPrefix(k, "transport_") || isTLSKey(k) && !tlsOn {
 			continue
 		}
 		addSetting(out, k, v)
@@ -441,10 +463,20 @@ func buildOutbound(n config.Node) (map[string]any, error) {
 		if protocol == "tuic" && tls["alpn"] == nil {
 			tls["alpn"] = []string{"h3"}
 		}
-		return out, nil
 	}
 	addTransport(out, n.Settings)
-	return out, nil
+	keepOutboundFields(out)
+	return out
+}
+
+func settingOn(v string) bool { return v == "1" || strings.EqualFold(v, "true") }
+
+func isTLSKey(k string) bool {
+	switch k {
+	case "server_name", "insecure", "alpn", "utls_fingerprint", "reality_public_key", "reality_short_id":
+		return true
+	}
+	return false
 }
 
 // buildWireGuard 生成 sing-box 1.11+ 的 WireGuard endpoint（旧的 wireguard 出站已废弃）。
@@ -548,6 +580,9 @@ func buildHysteria2(out map[string]any, n config.Node) map[string]any {
 			out["server_ports"] = normalizePortRanges(v)
 		}
 		if v := n.Settings["hop_interval"]; v != "" {
+			if _, err := strconv.Atoi(v); err == nil {
+				v += "s" // 链接里常写纯数字秒数，sing-box 要求带单位
+			}
 			out["hop_interval"] = v
 		}
 		if v := n.Settings["network"]; v == "tcp" || v == "udp" {
@@ -614,8 +649,14 @@ func parseBandwidth(s string) int {
 
 func addSetting(out map[string]any, key, value string) {
 	switch key {
-	case "uuid", "password", "method", "flow", "security", "network", "username", "version", "packet_encoding", "plugin", "plugin_opts", "path", "congestion_control", "udp_relay_mode":
+	case "uuid", "password", "network", "username", "version", "packet_encoding", "plugin", "plugin_opts", "path", "congestion_control", "udp_relay_mode":
 		out[key] = value
+	case "method", "security":
+		out[key] = strings.ToLower(value)
+	case "flow":
+		if value != "none" {
+			out[key] = value
+		}
 	case "alter_id":
 		if v, err := strconv.Atoi(value); err == nil {
 			out[key] = v
@@ -662,9 +703,15 @@ func addSetting(out map[string]any, key, value string) {
 				reality = map[string]any{"enabled": true}
 				tls["reality"] = reality
 			}
+			if key == "reality_public_key" {
+				// sing-box 只认 base64url 无填充写法，标准 base64 公钥顺手转换。
+				value = strings.NewReplacer("+", "-", "/", "_").Replace(strings.TrimRight(value, "="))
+			}
 			reality[strings.TrimPrefix(key, "reality_")] = value
 		case "utls_fingerprint":
-			tls["utls"] = map[string]any{"enabled": true, "fingerprint": value}
+			if fp := utlsFingerprint(value); fp != "" {
+				tls["utls"] = map[string]any{"enabled": true, "fingerprint": fp}
+			}
 		}
 	case "obfs_type":
 		out["obfs"] = map[string]any{"type": value}
@@ -678,30 +725,47 @@ func addSetting(out map[string]any, key, value string) {
 	}
 }
 
+// addTransport 按传输类型只写 sing-box 认识的字段：gRPC 没有 host/path，多写一个字段整份配置都会被拒。
 func addTransport(out map[string]any, settings map[string]string) {
 	typeName := settings["transport_type"]
 	if typeName == "" {
 		typeName = settings["transport"]
 	}
-	if typeName == "" {
-		return
-	}
 	transport := map[string]any{"type": typeName}
-	if path := settings["transport_path"]; path != "" {
-		transport["path"] = path
-	}
-	if host := settings["transport_host"]; host != "" {
-		switch typeName {
-		case "ws", "httpupgrade":
-			transport["headers"] = map[string]any{"Host": host}
-		default:
-			transport["host"] = host
+	path, host := settings["transport_path"], settings["transport_host"]
+	switch typeName {
+	case "ws", "httpupgrade":
+		if path != "" {
+			transport["path"] = path
 		}
-	}
-	if service := settings["transport_service_name"]; service != "" && typeName == "grpc" {
-		transport["service_name"] = service
+		if host != "" {
+			transport["headers"] = map[string]any{"Host": host}
+		}
+	case "http":
+		if path != "" {
+			transport["path"] = path
+		}
+		if host != "" {
+			transport["host"] = splitList(host)
+		}
+	case "grpc":
+		if service := firstNonEmpty(settings["transport_service_name"], strings.TrimPrefix(path, "/")); service != "" {
+			transport["service_name"] = service
+		}
+	case "quic":
+	default:
+		return // 未设置或不认识的传输类型不写
 	}
 	out["transport"] = transport
+}
+
+func firstNonEmpty(values ...string) string {
+	for _, v := range values {
+		if v != "" {
+			return v
+		}
+	}
+	return ""
 }
 
 func splitList(value string) []string {
@@ -709,10 +773,15 @@ func splitList(value string) []string {
 	return parts
 }
 
+// normalizePortRanges 把 "443,2000-3000" 转成 sing-box 的 ["443:443","2000:3000"]；单个端口也必须写成范围。
 func normalizePortRanges(value string) []string {
 	parts := strings.FieldsFunc(value, func(r rune) bool { return r == ',' || r == ' ' })
 	for i, part := range parts {
-		parts[i] = strings.Replace(part, "-", ":", 1)
+		part = strings.Replace(part, "-", ":", 1)
+		if !strings.Contains(part, ":") {
+			part += ":" + part
+		}
+		parts[i] = part
 	}
 	return parts
 }

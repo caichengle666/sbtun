@@ -16,6 +16,8 @@ import mobile.Mobile
 class SbtunVpnService : VpnService() {
     companion object {
         private const val ACTION_STOP = "io.github.caichengle666.sbtun.STOP"
+        // 只有应用自己（VpnPlatform）拉起服务时才带这个标记。
+        const val EXTRA_FROM_APP = "io.github.caichengle666.sbtun.FROM_APP"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "vpn"
 
@@ -46,13 +48,27 @@ class SbtunVpnService : VpnService() {
             stopAsync()
             return START_NOT_STICKY
         }
+        if (intent?.getBooleanExtra(EXTRA_FROM_APP, false) != true) {
+            // 系统拉起（始终开启的 VPN、在系统设置里点 sbtun）：Go 侧没有连接，不能挂"已连接"通知。
+            // 已经连接时忽略；否则满足前台期限后立即退出。
+            if (current !== this) {
+                runCatching { enterForeground() }
+                ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
+                stopSelf()
+            }
+            return START_NOT_STICKY
+        }
+        enterForeground()
+        attach(this)
+        return START_NOT_STICKY
+    }
+
+    private fun enterForeground() {
         if (Build.VERSION.SDK_INT >= 34) {
             startForeground(NOTIFICATION_ID, notification(), ServiceInfo.FOREGROUND_SERVICE_TYPE_SPECIAL_USE)
         } else {
             startForeground(NOTIFICATION_ID, notification())
         }
-        attach(this)
-        return START_NOT_STICKY
     }
 
     // 用户在系统设置里关掉 VPN，或被其他 VPN 应用顶掉。

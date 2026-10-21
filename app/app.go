@@ -10,6 +10,7 @@ import (
 	"os"
 	"path/filepath"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/caichengle666/sbtun/config"
@@ -27,7 +28,8 @@ type App struct {
 	runtime         *RuntimeCoordinator
 	rulesManager    *rules.Manager
 	trayIcon        []byte
-	trayEnd         func()
+	trayEnd         atomic.Pointer[func()] // 托盘协程写、Shutdown 读，用原子指针避免数据竞争
+	closing         bool                   // Shutdown 已开始，由 operationMu 保护；之后不再启动或重载代理
 	shutdownOnce    sync.Once
 	operationMu     sync.Mutex
 	trafficMu       sync.RWMutex
@@ -55,8 +57,9 @@ func (a *App) SetTrayIcon(icon []byte) {
 func (a *App) Startup(ctx context.Context) {
 	a.startupCore(ctx)
 	// The GUI holds the single-instance lock, so leftovers from a killed run
-	// (system DNS on macOS) can be undone before TUN is turned on.
+	// (system DNS on macOS, an orphaned sing-box) can be undone before TUN is turned on.
 	_ = a.runtime.TUN.RecoverStale()
+	singbox.CleanupStale(a.workDir, a.binary)
 	_ = a.ClearStopRequest()
 	go func() {
 		if a.WaitForStopRequest(ctx) {
@@ -99,14 +102,18 @@ func (a *App) initRuntime(resourceDir string) {
 }
 
 // Shutdown stops the proxy before Wails tears down the application process.
+// 持有 operationMu 停止，避免与正在进行的保存/订阅更新/自动切换交错后把代理重新拉起。
 func (a *App) Shutdown(ctx context.Context) {
 	a.shutdownOnce.Do(func() {
+		a.operationMu.Lock()
+		a.closing = true
 		a.stopSelectorSync()
 		if a.runtime != nil {
 			_ = a.runtime.Stop()
 		}
-		if a.trayEnd != nil {
-			a.trayEnd()
+		a.operationMu.Unlock()
+		if end := a.trayEnd.Load(); end != nil {
+			(*end)()
 		}
 	})
 }
@@ -391,6 +398,7 @@ func trafficTotals(client http.Client) (uint64, uint64) {
 	return totals.Up, totals.Down
 }
 
+// GetConfig 给界面读取配置，读取失败时返回空配置；需要区分错误的地方用 LoadConfig。
 func (a *App) GetConfig() config.Config {
 	cfg, _ := a.LoadConfig()
 	return cfg
@@ -444,7 +452,13 @@ func (a *App) startLocked() error {
 	return a.startWithConfigLocked(cfg)
 }
 
+// errClosing 表示程序正在退出，拒绝再启动或重载代理。
+var errClosing = errors.New("sbtun 正在退出")
+
 func (a *App) startWithConfigLocked(cfg config.Config) error {
+	if a.closing {
+		return errClosing
+	}
 	if a.runtime == nil {
 		return errors.New("运行时未初始化")
 	}
@@ -467,6 +481,9 @@ func (a *App) startWithConfigLocked(cfg config.Config) error {
 }
 
 func (a *App) mutateConfigAndSyncLocked(mutate func(before config.Config, next *config.Config) error, reload bool) error {
+	if a.closing {
+		return errClosing
+	}
 	if a.manager == nil {
 		return errors.New("配置管理器未初始化")
 	}
@@ -497,6 +514,14 @@ func (a *App) applyRuntimeConfigLocked(next config.Config, wasRunning, reload bo
 		return nil
 	}
 	if reload && wasRunning {
+		// 生成的 sing-box 配置没变（如订阅定时更新只改了 UpdatedAt）就不重启，避免断开所有连接；
+		// 运行中的选择器可能被手动切过，按配置再对齐一次。
+		if same, err := a.runtime.SyncIfUnchanged(next); err != nil {
+			return fmt.Errorf("生成运行配置失败: %w", err)
+		} else if same {
+			a.startSelectorSync(next.CurrentNodeID)
+			return nil
+		}
 		if err := a.runtime.Reload(a.ctx, next); err != nil {
 			return fmt.Errorf("重载运行配置失败: %w", err)
 		}
@@ -521,7 +546,10 @@ func (a *App) rollbackConfigAndRuntimeLocked(before config.Config, wasRunning bo
 	}
 	if wasRunning {
 		if a.runtime.State.IsRunning() {
-			if err := a.runtime.Reload(a.ctx, before); err != nil {
+			// 新配置校验失败时旧进程没动过，配置一致就不必再重启一次。
+			if same, err := a.runtime.SyncIfUnchanged(before); err == nil && same {
+				a.startSelectorSync(before.CurrentNodeID)
+			} else if err := a.runtime.Reload(a.ctx, before); err != nil {
 				rollbackErrs = append(rollbackErrs, fmt.Errorf("恢复运行配置失败: %w", err))
 			} else {
 				a.startSelectorSync(before.CurrentNodeID)
@@ -688,7 +716,7 @@ func (a *App) UpdateNode(id string, node config.Node) error {
 
 // UpdateNodeFromLink replaces all node parameters parsed from a share link.
 func (a *App) UpdateNodeFromLink(id, link string) error {
-	nodes, err := parseSubscription(link)
+	nodes, err := a.parseSubscription(link)
 	if err != nil {
 		return err
 	}
@@ -719,6 +747,9 @@ func (a *App) TestNodes(ids []string) []NodeHealthDTO {
 }
 
 func (a *App) reloadIfRunningLocked() error {
+	if a.closing {
+		return errClosing
+	}
 	if a.runtime == nil || a.runtime.State == nil || !a.runtime.State.IsRunning() {
 		return nil
 	}

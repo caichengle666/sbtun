@@ -23,9 +23,10 @@ func AcquireSingleInstance() (func(), error) {
 		file.Close()
 		return nil, fmt.Errorf("sbtun 已经在运行")
 	}
+	// 释放时不删锁文件：解锁和删除之间别的进程可能已锁住旧 inode，
+	// 删掉路径后第三个进程又能在新文件上加锁，出现两个实例。
 	return func() {
 		_ = syscall.Flock(int(file.Fd()), syscall.LOCK_UN)
 		_ = file.Close()
-		_ = os.Remove(path)
 	}, nil
 }

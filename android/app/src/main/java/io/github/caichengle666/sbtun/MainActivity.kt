@@ -31,8 +31,8 @@ class MainActivity : ComponentActivity() {
     private lateinit var web: WebView
     private var safeArea = "" // 最近一次计算出的安全区 JS，页面加载完后补发
     private var lastInsets: WindowInsetsCompat? = null
-    private var vpnConsent: CompletableFuture<Boolean>? = null
-    private var qrResult: CompletableFuture<String>? = null
+    @Volatile private var vpnConsent: CompletableFuture<Boolean>? = null
+    @Volatile private var qrResult: CompletableFuture<String>? = null
 
     private val vpnPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         vpnConsent?.complete(it.resultCode == RESULT_OK)
@@ -124,8 +124,11 @@ class MainActivity : ComponentActivity() {
         val density = resources.displayMetrics.density
         fun css(name: String, px: Int) = "s.setProperty('--$name','${(px / density).toInt()}px');"
         // 键盘高度单独给 --keyboard-h，并打上 data-keyboard，页面据此藏起底部标签栏，不跟着键盘重排。
-        val js = "(r=>{const s=r.style;" + css("safe-top", bars.top) + css("safe-bottom", covered(bars.bottom)) +
-            css("safe-left", bars.left) + css("safe-right", bars.right) + css("keyboard-h", if (keyboard) covered(ime.bottom) else 0) +
+        // --bottom-pad 是导航栏和键盘中较大的那个：旧 WebView（Chrome 79 以下）不认 CSS max()，在这里算好。
+        val safeBottom = covered(bars.bottom)
+        val kb = if (keyboard) covered(ime.bottom) else 0
+        val js = "(r=>{const s=r.style;" + css("safe-top", bars.top) + css("safe-bottom", safeBottom) +
+            css("safe-left", bars.left) + css("safe-right", bars.right) + css("keyboard-h", kb) + css("bottom-pad", maxOf(safeBottom, kb)) +
             "r.toggleAttribute('data-keyboard'," + (keyboard || shrunk) + ")})(document.documentElement)"
         if (js == safeArea) return
         safeArea = js
@@ -161,11 +164,13 @@ class MainActivity : ComponentActivity() {
     }
 
     // 在后台线程调用：需要时弹出系统 VPN 授权框并等待用户选择。
+    // 已有授权框在等待时不再弹第二个，直接等同一个结果，免得前一次调用永远等不到。
     fun ensureVpnPermission(): Boolean {
         val intent = VpnService.prepare(this) ?: return true
         val consent = CompletableFuture<Boolean>()
+        val pending = synchronized(this) { vpnConsent?.takeIf { !it.isDone } ?: consent.also { vpnConsent = it } }
+        if (pending !== consent) return pending.get()
         runOnUiThread {
-            vpnConsent = consent
             try {
                 vpnPermission.launch(intent)
             } catch (e: Exception) {
@@ -176,10 +181,12 @@ class MainActivity : ComponentActivity() {
     }
 
     // 在后台线程调用：打开摄像头扫二维码，返回识别到的文字，取消时返回空串。相机权限由扫码界面自己申请。
+    // 扫码界面已打开时不重复打开，直接等同一个结果。
     fun scanQRCode(): String {
         val result = CompletableFuture<String>()
+        val pending = synchronized(this) { qrResult?.takeIf { !it.isDone } ?: result.also { qrResult = it } }
+        if (pending !== result) return pending.get()
         runOnUiThread {
-            qrResult = result
             try {
                 qrScanner.launch(
                     ScanOptions()

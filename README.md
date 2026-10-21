@@ -141,15 +141,15 @@ sudo /Applications/sbtun.app/Contents/MacOS/sbtun-cli help
 | SOCKS | 支持 | 支持 |
 | HTTP/HTTPS | 支持 | 支持 |
 
-VLESS、VMess 和 Trojan 可配置 TLS、SNI、ALPN、uTLS 及 WebSocket、HTTP、gRPC、HTTPUpgrade 等传输参数；Hysteria2 支持端口跳跃与 Salamander 混淆等参数；TUIC 支持拥塞控制与 UDP 转发模式；WireGuard 按 sing-box 1.11+ 的 endpoint 方式生成。
+VLESS、VMess 和 Trojan 可配置 TLS、SNI、ALPN、uTLS 及 WebSocket、HTTP/2（`h2`）、gRPC、HTTPUpgrade 等传输参数，`security=none` 的链接不会开启 TLS；Hysteria2 支持端口跳跃（含 `host:443,20000-30000` 多端口写法、省略端口默认 443）、`user:pass` 认证与 Salamander 混淆等参数；Shadowsocks-2022 链接按 SIP002 的百分号编码写法导入导出；`https://` 代理链接按开启 TLS 的 HTTP 代理处理；TUIC 支持拥塞控制与 UDP 转发模式；WireGuard 按 sing-box 1.11+ 的 endpoint 方式生成。
 
 VLESS、VMess、Trojan 链接也能识别 Shadowrocket 导出的写法（`peer=`、`obfs=websocket`、`obfsParam=` 等参数）。Hysteria 第一版只支持 udp 协议（faketcp、wechat-video 会跳过），没写上下行带宽时按上行 20 Mbps、下行 100 Mbps。
 
 订阅地址除了常见的 base64 分享链接列表，也能直接识别 Clash / Mihomo YAML（`proxies:`）、sing-box JSON（`outbounds` / `endpoints`）、SIP008（Shadowsocks 的 JSON 订阅）和 Surge / Loon / Quantumult X 的节点配置行，自动挑出其中支持的节点，分组、规则等内容会被忽略。单独一行 Surge / Loon / Quantumult X 节点配置也可以直接粘贴导入。
 
-下载订阅时依次用 Clash Meta、sing-box、v2rayN 的 User-Agent，哪个拿到节点就用哪个（很多机场按 UA 决定返回什么格式）；网络不通时不会重复尝试。订阅更新后，如果当前节点的参数变了，会继续选中同名节点。自动更新在 sbtun 运行期间每 10 分钟检查一次，到期的订阅才下载；下载失败保留原节点，一小时后再试。
+下载订阅时依次用 Clash Meta、sing-box、v2rayN 的 User-Agent，哪个拿到节点就用哪个（很多机场按 UA 决定返回什么格式）；网络不通时不会重复尝试。订阅更新后，如果当前节点的参数变了，会继续选中同名（或同地址）的节点。自动更新在 sbtun 运行期间每 10 分钟检查一次，到期的订阅才下载；下载失败保留原节点，一小时后再试。
 
-sing-box 不支持的内容会跳过：ShadowsocksR、Snell、xhttp 传输、带 TLS 的 SOCKS、TUIC v4、shadow-tls 等 SS 插件。
+sing-box 不支持的内容会跳过：ShadowsocksR、Snell、xhttp / kcp 等传输、带 TLS 的 SOCKS、TUIC v4、shadow-tls 等 SS 插件。生成运行配置时每个节点会先做一遍校验，参数明显不合法（如 2022 密钥长度不对、REALITY 公钥无效）的备用节点会被跳过，不影响当前节点启动。
 
 ---
 

@@ -39,7 +39,7 @@ func subscriptionName(link string) string {
 func (a *App) ImportSubscription(link string) (int, error) {
 	link = normalizeNodeLink(link)
 	// 下载订阅可能耗时，放在锁外完成。
-	nodes, err := parseSubscription(link)
+	nodes, err := a.parseSubscription(link)
 	if err != nil {
 		return 0, err
 	}
@@ -85,11 +85,11 @@ func (a *App) addNodesLocked(nodes []config.Node) (int, error) {
 
 // UpdateSubscription 重新下载订阅并用最新节点替换该订阅原有节点。
 func (a *App) UpdateSubscription(id string) (SubscriptionUpdateDTO, error) {
-	sub, ok := a.findSubscription(id)
-	if !ok {
-		return SubscriptionUpdateDTO{ID: id}, fmt.Errorf("订阅不存在: %s", id)
+	sub, err := a.findSubscription(id)
+	if err != nil {
+		return SubscriptionUpdateDTO{ID: id}, err
 	}
-	nodes, err := parseSubscription(sub.URL)
+	nodes, err := a.parseSubscription(sub.URL)
 	if err == nil && len(nodes) == 0 {
 		err = errors.New("订阅中未识别到任何节点")
 	}
@@ -99,15 +99,20 @@ func (a *App) UpdateSubscription(id string) (SubscriptionUpdateDTO, error) {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
 	// 下载期间订阅可能已被删除。
-	if _, ok := a.findSubscription(id); !ok {
-		return SubscriptionUpdateDTO{ID: id}, fmt.Errorf("订阅不存在: %s", id)
+	if _, err := a.findSubscription(id); err != nil {
+		return SubscriptionUpdateDTO{ID: id}, err
 	}
 	return a.applySubscriptionLocked(sub, nodes)
 }
 
 // UpdateAllSubscriptions 依次更新全部订阅；单个失败不影响其他订阅。
+// 配置读不出来时返回一条带错误的结果，不能当成“没有订阅”静默返回。
 func (a *App) UpdateAllSubscriptions() []SubscriptionUpdateDTO {
-	subs := a.GetConfig().Subscriptions
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return []SubscriptionUpdateDTO{{Name: "读取配置", Error: err.Error()}}
+	}
+	subs := cfg.Subscriptions
 	results := make([]SubscriptionUpdateDTO, 0, len(subs))
 	for _, sub := range subs {
 		result, err := a.UpdateSubscription(sub.ID)
@@ -149,13 +154,18 @@ func (a *App) RemoveSubscription(id string) error {
 	}, true)
 }
 
-func (a *App) findSubscription(id string) (config.Subscription, bool) {
-	for _, sub := range a.GetConfig().Subscriptions {
+// findSubscription 查找订阅；配置读取失败时返回真实错误，而不是“订阅不存在”。
+func (a *App) findSubscription(id string) (config.Subscription, error) {
+	cfg, err := a.LoadConfig()
+	if err != nil {
+		return config.Subscription{}, fmt.Errorf("读取配置失败: %w", err)
+	}
+	for _, sub := range cfg.Subscriptions {
 		if sub.ID == id {
-			return sub, true
+			return sub, nil
 		}
 	}
-	return config.Subscription{}, false
+	return config.Subscription{}, fmt.Errorf("订阅不存在: %s", id)
 }
 
 func (a *App) applySubscriptionLocked(sub config.Subscription, fresh []config.Node) (SubscriptionUpdateDTO, error) {
@@ -306,7 +316,7 @@ func uniqueNodeID(base, fp string, taken map[string]struct{}) string {
 	}
 }
 
-// keepCurrentNodeByName：当前选中的订阅节点参数变了（ID 跟着变）时，改选同一订阅里同名的节点，
+// keepCurrentNodeByName：当前选中的订阅节点参数变了（ID 跟着变）时，改选同一订阅里对应的节点，
 // 不让选中跳到列表第一个。
 func keepCurrentNodeByName(before config.Config, next *config.Config, subID string) {
 	var current *config.Node
@@ -323,11 +333,26 @@ func keepCurrentNodeByName(before config.Config, next *config.Config, subID stri
 			return
 		}
 	}
+	// 依次尝试：同名同地址、同名、同地址（名称也变了，比如以前没有名称的 vmess 节点）。
+	var sameName, sameAddr string
 	for _, n := range next.Nodes {
-		if n.Subscription == subID && n.Name == current.Name {
+		if n.Subscription != subID {
+			continue
+		}
+		addr := n.Protocol == current.Protocol && strings.EqualFold(n.Server, current.Server) && n.Port == current.Port
+		if n.Name == current.Name && addr {
 			next.CurrentNodeID = n.ID
 			return
 		}
+		if n.Name == current.Name && sameName == "" {
+			sameName = n.ID
+		}
+		if addr && sameAddr == "" {
+			sameAddr = n.ID
+		}
+	}
+	if id := firstNonEmpty(sameName, sameAddr); id != "" {
+		next.CurrentNodeID = id
 	}
 }
 

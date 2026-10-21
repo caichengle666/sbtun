@@ -200,11 +200,7 @@ func parseConfigLine(line string) (config.Node, bool) {
 			delete(s, key)
 		}
 	}
-	if (protocol == "vmess" || protocol == "vless" || protocol == "socks" || protocol == "http") && s["tls"] != "true" {
-		for _, key := range []string{"server_name", "insecure", "alpn", "utls_fingerprint"} {
-			delete(s, key)
-		}
-	}
+	clearTLSKeysIfOff(protocol, s)
 	name := l.name
 	if name == "" {
 		name = protocol + "-" + l.server
@@ -278,14 +274,14 @@ func surgeNode(l configLine) (string, map[string]string, bool) {
 		// Surge：username=uuid；Loon：VMess,地址,端口,加密方式,"uuid"
 		if l.get("username", "uuid") != "" {
 			s["uuid"] = l.get("username", "uuid")
-			s["security"] = firstNonEmpty(l.get("encrypt-method", "method"), l.arg(0), "auto")
+			s["security"] = firstNonEmpty(l.get("encrypt-method", "method"), l.arg(0))
 		} else {
 			s["uuid"] = firstNonEmpty(l.arg(1), l.arg(0))
 			if len(l.pos) >= 2 {
 				s["security"] = l.arg(0)
 			}
 		}
-		s["security"] = vmessSecurity(firstNonEmpty(s["security"], "auto"))
+		s["security"] = vmessSecurity(s["security"])
 		s["alter_id"] = firstNonEmpty(l.get("alterid", "alter-id"), "0")
 		if l.enabled("tls", "over-tls") {
 			s["tls"] = "true"
@@ -440,7 +436,7 @@ func quantumultNode(l configLine) (string, map[string]string, bool) {
 		return "shadowsocks", s, true
 	case "qx-vmess":
 		s["uuid"] = l.get("password")
-		s["security"] = vmessSecurity(firstNonEmpty(l.get("method"), "auto"))
+		s["security"] = vmessSecurity(l.get("method"))
 		s["alter_id"] = "0"
 		if s["uuid"] == "" || !transport() {
 			return "", nil, false
@@ -485,11 +481,14 @@ func quantumultNode(l configLine) (string, map[string]string, bool) {
 	return "", nil, false
 }
 
-// vmessSecurity 把 Surge/QX 的加密方式名换成 sing-box 认识的名字。
+// vmessSecurity 把各家的 vmess 加密方式名换成 sing-box 认识的名字；auto 是默认值，返回空不存，
+// 这样同一节点从分享链接、Clash、Surge/QX 导入后参数一致，导出再导入指纹也不变。
 func vmessSecurity(method string) string {
 	switch strings.ToLower(method) {
 	case "chacha20-ietf-poly1305", "chacha20-poly1305":
 		return "chacha20-poly1305"
+	case "auto":
+		return ""
 	}
 	return strings.ToLower(method)
 }

@@ -11,17 +11,25 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode"
 
 	"github.com/caichengle666/sbtun/config"
 )
 
 func parseSubscription(link string) ([]config.Node, error) {
+	return parseSubscriptionWith(link, fetchURL)
+}
+
+// subscriptionFetch 下载订阅正文，可以换成经节点代理下载的实现。
+type subscriptionFetch func(link, userAgent string) (string, error)
+
+func parseSubscriptionWith(link string, fetch subscriptionFetch) ([]config.Node, error) {
 	link = normalizeNodeLink(link)
 	if err := ValidateNodeSource(link); err != nil {
 		return nil, err
 	}
 	if isSubscriptionURL(link) {
-		return parseSubscriptionBody(link)
+		return parseSubscriptionBody(link, fetch)
 	}
 	node, err := parseSubscriptionLine(link)
 	if err != nil {
@@ -33,16 +41,29 @@ func parseSubscription(link string) ([]config.Node, error) {
 	return []config.Node{node}, nil
 }
 
-// isSubscriptionURL reports whether an http(s) link is a remote subscription
-// rather than an HTTP proxy node: proxy nodes carry an explicit port and no
-// path or query.
+// proxyLinkParams 是 http(s) 代理链接自己的查询参数（parseHTTPStyle 认识的）。
+var proxyLinkParams = map[string]bool{"tls": true, "sni": true, "insecure": true, "allowInsecure": true, "allow_insecure": true, "path": true}
+
+// isSubscriptionURL 判断 http(s) 链接是远程订阅还是 HTTP 代理节点：代理节点写明端口、
+// 没有路径，查询串里只有代理参数。
 func isSubscriptionURL(link string) bool {
 	link = normalizeNodeLink(link)
 	if !hasScheme(link, "http", "https") {
 		return false
 	}
 	parsed, err := url.Parse(link)
-	return err == nil && (parsed.Port() == "" || parsed.Path != "" && parsed.Path != "/" || parsed.RawQuery != "")
+	if err != nil {
+		return false
+	}
+	if parsed.Port() == "" || parsed.Path != "" && parsed.Path != "/" {
+		return true
+	}
+	for key := range parsed.Query() {
+		if !proxyLinkParams[key] {
+			return true
+		}
+	}
+	return false
 }
 
 // ValidateNodeSource checks whether input can be parsed without performing network access.
@@ -68,10 +89,10 @@ var subscriptionUserAgents = []string{
 	"v2rayN/7.10.0",
 }
 
-func parseSubscriptionBody(link string) ([]config.Node, error) {
+func parseSubscriptionBody(link string, fetch subscriptionFetch) ([]config.Node, error) {
 	var lastErr error
 	for _, ua := range subscriptionUserAgents {
-		body, err := fetchURL(link, ua)
+		body, err := fetch(link, ua)
 		if err != nil {
 			lastErr = fmt.Errorf("下载订阅失败: %w", err)
 			var status httpStatusError
@@ -186,14 +207,16 @@ func hasScheme(link string, schemes ...string) bool {
 	return false
 }
 
+// tryBase64Decode 解码标准或 URL 安全的 base64，忽略空白（有的机场按 76 列换行）和填充。
 func tryBase64Decode(s string) (string, error) {
-	s = strings.TrimSpace(s)
-	s = strings.ReplaceAll(s, "-", "+")
-	s = strings.ReplaceAll(s, "_", "/")
-	if m := len(s) % 4; m != 0 {
-		s += strings.Repeat("=", 4-m)
-	}
-	data, err := base64.StdEncoding.DecodeString(s)
+	s = strings.Map(func(r rune) rune {
+		if unicode.IsSpace(r) {
+			return -1
+		}
+		return r
+	}, s)
+	s = strings.NewReplacer("-", "+", "_", "/").Replace(strings.TrimRight(s, "="))
+	data, err := base64.RawStdEncoding.DecodeString(s)
 	if err != nil {
 		return "", err
 	}
@@ -260,8 +283,10 @@ func parseVMess(link string) (config.Node, error) {
 	}
 	set("alter_id", cfg.Aid)
 	// "type" 是伪装类型（none/http），不是加密方式，不能拿来当 security。
-	set("security", cfg.Scy)
-	setLinkTransport(settings, string(cfg.Net))
+	set("security", looseString(vmessSecurity(string(cfg.Scy))))
+	if err := setLinkTransport(settings, string(cfg.Net)); err != nil {
+		return config.Node{}, err
+	}
 	set("transport_host", cfg.Host)
 	if settings["transport_type"] == "grpc" {
 		set("transport_service_name", cfg.Path)
@@ -277,9 +302,10 @@ func parseVMess(link string) (config.Node, error) {
 	if cfg.AllowInsecure == "1" || strings.EqualFold(string(cfg.AllowInsecure), "true") {
 		settings["insecure"] = "true"
 	}
+	clearTLSKeysIfOff("vmess", settings)
 	return config.Node{
 		ID:       "vmess-" + string(cfg.Add) + "-" + string(cfg.Port),
-		Name:     string(cfg.Ps),
+		Name:     firstNonEmpty(string(cfg.Ps), "vmess-"+string(cfg.Add)),
 		Protocol: "vmess",
 		Server:   string(cfg.Add),
 		Port:     port,
@@ -305,7 +331,9 @@ func parseVLess(link string) (config.Node, error) {
 	settings := map[string]string{"uuid": u.User.Username()}
 	vals := u.Query()
 	shadowrocketQuery(vals)
-	setLinkTransport(settings, vals.Get("type"))
+	if err := setLinkTransport(settings, vals.Get("type")); err != nil {
+		return config.Node{}, err
+	}
 	if vals.Get("host") != "" {
 		settings["transport_host"] = vals.Get("host")
 	}
@@ -342,6 +370,7 @@ func parseVLess(link string) (config.Node, error) {
 	if vals.Get("fp") != "" {
 		settings["utls_fingerprint"] = vals.Get("fp")
 	}
+	clearTLSKeysIfOff("vless", settings)
 	name := u.Fragment
 	if name == "" {
 		name = "vless-" + u.Hostname()
@@ -375,7 +404,9 @@ func parseTrojan(link string) (config.Node, error) {
 	settings := map[string]string{"password": password}
 	vals := u.Query()
 	shadowrocketQuery(vals) // Shadowrocket 写法：peer=、obfs=websocket、obfsParam=
-	setLinkTransport(settings, vals.Get("type"))
+	if err := setLinkTransport(settings, vals.Get("type")); err != nil {
+		return config.Node{}, err
+	}
 	if vals.Get("host") != "" {
 		settings["transport_host"] = vals.Get("host")
 	}
@@ -401,6 +432,7 @@ func parseTrojan(link string) (config.Node, error) {
 	if queryEnabled(vals, "insecure", "allowInsecure", "allow_insecure") {
 		settings["insecure"] = "true"
 	}
+	clearTLSKeysIfOff("trojan", settings)
 	name := u.Fragment
 	if name == "" {
 		name = "trojan-" + u.Hostname()
@@ -438,6 +470,9 @@ func parseShadowsocks(link string) (config.Node, error) {
 	address = strings.TrimSuffix(address, "/")
 	if decoded, err := tryBase64Decode(userPart); err == nil && strings.Contains(decoded, ":") {
 		userPart = decoded
+	} else if unescaped, err := url.PathUnescape(userPart); err == nil {
+		// SIP002：2022 系列方法的 userinfo 用百分号编码而不是 base64。
+		userPart = unescaped
 	}
 	method, password, ok := strings.Cut(userPart, ":")
 	if !ok || method == "" || password == "" {
@@ -480,21 +515,37 @@ func parseShadowsocks(link string) (config.Node, error) {
 	}, nil
 }
 
+// parseHysteria2 按官方 URI 规范解析：auth 可以是 user:pass，端口可以是 "443,20000-30000"
+// 这样的多端口写法（首个端口作主端口，整体作跳跃端口），省略端口时默认 443。
 func parseHysteria2(link string) (config.Node, error) {
-	u, err := url.Parse(link)
+	rest := strings.TrimPrefix(link, "hysteria2://")
+	end := strings.IndexAny(rest, "/?#")
+	if end < 0 {
+		end = len(rest)
+	}
+	authority := rest[:end]
+	hostStart := strings.LastIndex(authority, "@") + 1
+	hostPort, hopPorts := authority[hostStart:], ""
+	if i := strings.LastIndex(hostPort, ":"); i >= 0 && !strings.HasSuffix(hostPort, "]") && strings.ContainsAny(hostPort[i+1:], ",-") {
+		hopPorts = hostPort[i+1:]
+		first := strings.FieldsFunc(hopPorts, func(r rune) bool { return r == ',' || r == '-' })
+		if len(first) == 0 {
+			return config.Node{}, fmt.Errorf("hysteria2 端口无效: %s", hopPorts)
+		}
+		hostPort = hostPort[:i+1] + first[0]
+	}
+	u, err := url.Parse("hysteria2://" + authority[:hostStart] + hostPort + rest[end:])
 	if err != nil {
 		return config.Node{}, fmt.Errorf("hysteria2 解析失败: %w", err)
 	}
-	if u.Port() == "" {
-		return config.Node{}, fmt.Errorf("hysteria2 缺少端口")
-	}
-	port, err := parsePort(u.Port())
+	portText := firstNonEmpty(u.Port(), "443")
+	port, err := parsePort(portText)
 	if err != nil {
 		return config.Node{}, fmt.Errorf("hysteria2 端口无效: %w", err)
 	}
 	password := u.User.Username()
-	if _, hasPass := u.User.Password(); hasPass {
-		password, _ = u.User.Password()
+	if p, ok := u.User.Password(); ok {
+		password += ":" + p // userpass 认证：整个 user:pass 就是认证串
 	}
 	settings := map[string]string{"password": password}
 	vals := u.Query()
@@ -522,12 +573,15 @@ func parseHysteria2(link string) (config.Node, error) {
 			settings[name] = v
 		}
 	}
+	if hopPorts != "" && settings["server_ports"] == "" {
+		settings["server_ports"] = hopPorts
+	}
 	name := u.Fragment
 	if name == "" {
 		name = "hysteria2-" + u.Hostname()
 	}
 	return config.Node{
-		ID:       "hysteria2-" + u.Host,
+		ID:       "hysteria2-" + net.JoinHostPort(u.Hostname(), portText),
 		Name:     name,
 		Protocol: "hysteria2",
 		Server:   u.Hostname(),
@@ -583,7 +637,7 @@ func parseHTTPStyle(link string) (config.Node, error) {
 		}
 	}
 	vals := u.Query()
-	if vals.Get("tls") == "1" || strings.EqualFold(vals.Get("tls"), "true") {
+	if strings.EqualFold(u.Scheme, "https") || vals.Get("tls") == "1" || strings.EqualFold(vals.Get("tls"), "true") {
 		settings["tls"] = "true"
 	}
 	if vals.Get("sni") != "" {
@@ -592,9 +646,13 @@ func parseHTTPStyle(link string) (config.Node, error) {
 	if queryEnabled(vals, "insecure", "allowInsecure", "allow_insecure") {
 		settings["insecure"] = "true"
 	}
-	if vals.Get("path") != "" {
+	if vals.Get("path") != "" && protocol == "http" {
 		settings["path"] = vals.Get("path")
 	}
+	if protocol == "socks" && settings["tls"] == "true" {
+		return config.Node{}, errors.New("sing-box 的 SOCKS 出站不支持 TLS")
+	}
+	clearTLSKeysIfOff(protocol, settings)
 	name := u.Fragment
 	if name == "" {
 		name = protocol + "-" + u.Hostname()
@@ -618,12 +676,38 @@ func parsePort(s string) (uint16, error) {
 	return p, nil
 }
 
-func setLinkTransport(settings map[string]string, value string) {
-	switch strings.ToLower(strings.TrimSpace(value)) {
-	case "tcp", "udp":
-		settings["network"] = strings.ToLower(strings.TrimSpace(value))
-	case "ws", "http", "grpc", "httpupgrade":
-		settings["transport_type"] = strings.ToLower(strings.TrimSpace(value))
+// setLinkTransport 处理分享链接里的传输方式（vmess 的 net、vless/trojan 的 type）。
+// tcp/raw 就是不加传输层；h2 对应 sing-box 的 http 传输；xhttp、kcp 等 sing-box 不支持的报错，
+// 不能悄悄当成 TCP 导入。
+func setLinkTransport(settings map[string]string, value string) error {
+	switch v := strings.ToLower(strings.TrimSpace(value)); v {
+	case "", "none", "tcp", "raw":
+	case "h2", "http":
+		settings["transport_type"] = "http"
+	case "ws", "grpc", "httpupgrade":
+		settings["transport_type"] = v
+	default:
+		return fmt.Errorf("暂不支持的传输方式: %s", v)
+	}
+	return nil
+}
+
+// tlsKeys 是只在开启 TLS 时才有意义的节点参数。
+var tlsKeys = []string{"server_name", "insecure", "alpn", "utls_fingerprint", "reality_public_key", "reality_short_id"}
+
+// clearTLSKeysIfOff：vmess/vless/trojan/http/socks 未开启 TLS 时删掉 sni、fp 等参数。
+// 很多面板导出的明文链接也带 sni=，留着会被当成开了 TLS（生成配置时还会按 tls 开关再过滤一次）。
+func clearTLSKeysIfOff(protocol string, s map[string]string) {
+	switch protocol {
+	case "vmess", "vless", "trojan", "http", "socks":
+	default:
+		return
+	}
+	if s["tls"] == "true" {
+		return
+	}
+	for _, key := range tlsKeys {
+		delete(s, key)
 	}
 }
 
@@ -637,7 +721,10 @@ type httpStatusError struct{ code int }
 func (e httpStatusError) Error() string { return fmt.Sprintf("订阅 HTTP %d", e.code) }
 
 func fetchURL(link, userAgent string) (string, error) {
-	client := &http.Client{Timeout: 15 * time.Second}
+	return fetchURLWith(&http.Client{Timeout: 15 * time.Second}, link, userAgent)
+}
+
+func fetchURLWith(client *http.Client, link, userAgent string) (string, error) {
 	req, err := http.NewRequest(http.MethodGet, link, nil)
 	if err != nil {
 		return "", err

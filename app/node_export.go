@@ -60,6 +60,10 @@ func nodeShareLink(node config.Node) (string, error) {
 			return "", fmt.Errorf("缺少加密方式或密码")
 		}
 		credentials := base64.RawURLEncoding.EncodeToString([]byte(method + ":" + password))
+		if strings.HasPrefix(method, "2022-") {
+			// SIP002：2022 系列方法的 userinfo 必须用百分号编码，不能用 base64。
+			credentials = url.UserPassword(method, password).String()
+		}
 		query := ""
 		if plugin := node.Settings["plugin"]; plugin != "" {
 			if opts := node.Settings["plugin_opts"]; opts != "" {
@@ -87,11 +91,11 @@ func nodeShareLink(node config.Node) (string, error) {
 
 func vmessShareLink(node config.Node) (string, error) {
 	transport := node.Settings["transport_type"]
-	if transport == "" {
-		transport = node.Settings["network"]
-	}
-	if transport == "" {
+	switch transport {
+	case "":
 		transport = "tcp"
+	case "http":
+		transport = "h2" // v2rayN 把 HTTP/2 传输写作 h2
 	}
 	security := node.Settings["security"]
 	if security == "" {
@@ -150,8 +154,12 @@ func trojanShareLink(node config.Node) string {
 	setTransportQuery(q, node.Settings)
 	setQuery(q, "sni", node.Settings["server_name"])
 	setQuery(q, "alpn", node.Settings["alpn"])
+	setQuery(q, "fp", node.Settings["utls_fingerprint"])
+	// trojan 链接不写 security 时默认 TLS，明文节点必须写明 none。
 	if settingEnabled(node.Settings, "tls") {
 		q.Set("security", "tls")
+	} else {
+		q.Set("security", "none")
 	}
 	if settingEnabled(node.Settings, "insecure") {
 		q.Set("insecure", "1")
@@ -262,7 +270,7 @@ func httpStyleShareLink(node config.Node) (string, error) {
 		}
 	}
 	q := url.Values{}
-	if settingEnabled(node.Settings, "tls") {
+	if scheme != "https" && settingEnabled(node.Settings, "tls") {
 		q.Set("tls", "1")
 	}
 	setQuery(q, "sni", node.Settings["server_name"])
@@ -275,11 +283,7 @@ func httpStyleShareLink(node config.Node) (string, error) {
 }
 
 func setTransportQuery(q url.Values, settings map[string]string) {
-	transport := settings["transport_type"]
-	if transport == "" {
-		transport = settings["network"]
-	}
-	setQuery(q, "type", transport)
+	setQuery(q, "type", settings["transport_type"])
 	setQuery(q, "host", settings["transport_host"])
 	setQuery(q, "path", settings["transport_path"])
 	setQuery(q, "serviceName", settings["transport_service_name"])

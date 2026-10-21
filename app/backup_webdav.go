@@ -154,7 +154,7 @@ func (a *App) RestoreFromWebDAV(name string) (string, error) {
 	var warnings []string
 	fetched := make(map[string][]config.Node, len(payload.Config.Subscriptions))
 	for _, sub := range payload.Config.Subscriptions {
-		nodes, err := parseSubscription(sub.URL)
+		nodes, err := a.parseSubscription(sub.URL)
 		if err == nil && len(nodes) == 0 {
 			err = errors.New("没有识别到节点")
 		}

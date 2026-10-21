@@ -1,13 +1,13 @@
 /* 手机竖屏（≤760px）和安卓 APK 的样式。桌面宽屏不受影响。 */
 
-:root { --safe-top: 0px; --safe-right: 0px; --safe-bottom: 0px; --safe-left: 0px; --keyboard-h: 0px; --tabbar-h: 64px; }
+:root { --safe-top: 0px; --safe-right: 0px; --safe-bottom: 0px; --safe-left: 0px; --keyboard-h: 0px; --bottom-pad: 0px; --tabbar-h: 64px; }
 .mobile-hero, .mobile-only { display: none; }
 
 /* 安卓 APK：没有桌面标题栏；内容避开状态栏、刘海和导航栏 */
 :root[data-platform="android"] { --titlebar-h: 0px; -webkit-tap-highlight-color: transparent; }
 :root[data-platform="android"] .titlebar,
 :root[data-platform="android"] [data-desktop-only] { display: none; }
-:root[data-platform="android"] body { padding: var(--safe-top) var(--safe-right) max(var(--safe-bottom), var(--keyboard-h)) var(--safe-left); -webkit-user-select: none; user-select: none; }
+:root[data-platform="android"] body { padding: var(--safe-top) var(--safe-right) var(--bottom-pad) var(--safe-left); -webkit-user-select: none; user-select: none; }
 /* 安卓 WebView 对固定背景和大面积模糊重绘很慢，键盘弹出时会画花，这里不用 */
 :root[data-platform="android"][data-theme="glass"] body { background-attachment: scroll; }
 /* 键盘弹出时藏起底部标签栏，弹窗和提示抬到键盘上方 */
@@ -29,9 +29,9 @@
   .sidebar,
   :root[data-theme] .sidebar {
     position: fixed; top: auto; right: 0; bottom: 0; left: 0; z-index: 30;
-    width: auto; height: auto; padding: 6px max(8px, var(--safe-right)) calc(6px + var(--safe-bottom)) max(8px, var(--safe-left));
+    width: auto; height: auto; padding: 6px calc(8px + var(--safe-right)) calc(6px + var(--safe-bottom)) calc(8px + var(--safe-left));
     border: 0; border-top: 1px solid var(--border);
-    background: color-mix(in srgb, var(--side) 90%, transparent);
+    background: var(--side);
     -webkit-backdrop-filter: blur(18px) saturate(150%); backdrop-filter: blur(18px) saturate(150%);
   }
   :root[data-platform="android"] .sidebar { background: linear-gradient(var(--side), var(--side)), var(--bg); -webkit-backdrop-filter: none; backdrop-filter: none; }
@@ -68,7 +68,7 @@
   .mobile-hero {
     display: grid; justify-items: center; gap: 16px; margin: 4px 0 14px; padding: 30px 20px 22px;
     border: 1px solid var(--border); border-radius: 24px; text-align: center;
-    background: radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 70%), var(--panel);
+    background: radial-gradient(120% 80% at 50% 0%, var(--accent-bg), transparent 70%), var(--panel);
   }
   :root[data-theme="glass"] .mobile-hero { -webkit-backdrop-filter: var(--glass-blur); backdrop-filter: var(--glass-blur); }
   .power-orb {
@@ -82,7 +82,7 @@
   .power-orb:disabled { cursor: progress; }
   .mobile-hero.on .power-orb {
     color: #062420; background: var(--accent);
-    box-shadow: 0 0 0 10px color-mix(in srgb, var(--accent) 16%, transparent), 0 0 0 22px color-mix(in srgb, var(--accent) 7%, transparent), 0 14px 40px color-mix(in srgb, var(--accent) 40%, transparent);
+    box-shadow: 0 0 0 10px var(--accent-bg), 0 14px 40px rgba(0, 0, 0, .25);
   }
   :root[data-theme="light"] .mobile-hero.on .power-orb { color: #fff; }
   .mobile-hero.starting .power-orb { color: var(--amber); animation: orb-pulse 1.4s ease-in-out infinite; }
@@ -120,8 +120,10 @@
   .node-batch-actions .btn { flex: 0 0 auto; }
   #toggleNodeForm { order: -2; }
   [data-scan-qr] { order: -1; }
-  .node-tools-row > .input { flex: 1 1 100%; max-width: none; }
-  .node-tool-select { flex: 1 1 0; min-width: 0; }
+  /* 用 grid 排：旧内核不认 flex gap，grid gap 可以 */
+  .node-tools-row { display: grid; grid-template-columns: minmax(0, 1fr) minmax(0, 1fr); }
+  .node-tools-row > .input { grid-column: 1 / -1; max-width: none; }
+  .node-tool-select { width: 100%; min-width: 0; }
   .node-filters { flex-wrap: nowrap; max-width: calc(100% + 32px); margin: 0 -16px 12px; padding: 0 16px; overflow-x: auto; scrollbar-width: none; }
   .node-item { grid-template-columns: auto minmax(0, 1fr) auto auto; gap: 10px; min-height: 60px; padding: 10px 10px 10px 14px; border-radius: 12px; }
   .node-name { font-size: 15px; }
@@ -141,7 +143,7 @@
   .modal { z-index: 40; align-items: end; padding: 0; }
   .modal-panel, .backup-modal, .qrcode-modal {
     width: 100%; max-height: calc(100vh - var(--safe-top) - 24px);
-    padding-bottom: max(var(--safe-bottom), var(--keyboard-h)); border-width: 1px 0 0; border-radius: 20px 20px 0 0;
+    padding-bottom: var(--bottom-pad); border-width: 1px 0 0; border-radius: 20px 20px 0 0;
     animation: sheet-up .22s ease-out;
   }
   .modal-panel::before { content: ''; align-self: center; width: 36px; height: 4px; margin-top: 8px; border-radius: 2px; background: var(--border); }
@@ -150,14 +152,60 @@
   .modal-body { padding: 16px; }
   .modal-footer { padding: 12px 16px; }
   .modal-footer .btn { flex: 1; }
-  .qrcode-image { width: min(260px, 70vw); height: min(260px, 70vw); }
+  .qrcode-image { width: 260px; height: 260px; max-width: 70vw; max-height: 70vw; }
 
   .toast { bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 16px); max-width: calc(100vw - 32px); border-radius: 12px; text-align: center; }
 }
 
 :root[data-keyboard] .toast { bottom: calc(var(--keyboard-h) + 16px); }
 
-@keyframes orb-pulse { 50% { box-shadow: 0 0 0 14px color-mix(in srgb, var(--amber) 14%, transparent), inset 0 0 0 1px var(--border); } }
+@keyframes orb-pulse { 50% { box-shadow: 0 0 0 14px var(--amber-bg), inset 0 0 0 1px var(--border); } }
 @keyframes sheet-up { from { transform: translateY(24px); opacity: .6; } }
 @media (prefers-reduced-motion: reduce) { .modal-panel, .mobile-hero .power-orb { animation: none; } }
 :root[data-platform="android"] .overview-quick { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+
+/* color-mix 只给支持的内核（Chrome 111+）；旧内核用上面的普通颜色 */
+@supports (color: color-mix(in srgb, red 50%, blue)) {
+  @media (max-width: 760px) {
+    .sidebar, :root[data-theme] .sidebar { background: color-mix(in srgb, var(--side) 90%, transparent); }
+    :root[data-platform="android"] .sidebar { background: linear-gradient(var(--side), var(--side)), var(--bg); }
+    .mobile-hero { background: radial-gradient(120% 80% at 50% 0%, color-mix(in srgb, var(--accent) 14%, transparent), transparent 70%), var(--panel); }
+    .mobile-hero.on .power-orb { box-shadow: 0 0 0 10px color-mix(in srgb, var(--accent) 16%, transparent), 0 0 0 22px color-mix(in srgb, var(--accent) 7%, transparent), 0 14px 40px color-mix(in srgb, var(--accent) 40%, transparent); }
+  }
+  @keyframes orb-pulse { 50% { box-shadow: 0 0 0 14px color-mix(in srgb, var(--amber) 14%, transparent), inset 0 0 0 1px var(--border); } }
+}
+
+/* 旧内核（Chrome < 84）不认 flex 容器的 gap：main.js 检测后给根元素加 no-flex-gap，这里用 margin 补间距 */
+.no-flex-gap .traffic-bar-pair > :not(:last-child) { margin-right: 1px; }
+.no-flex-gap .traffic-chart > :not(:last-child) { margin-right: 3px; }
+.no-flex-gap .node-actions > :not(:last-child), .no-flex-gap .modal-tabs > :not(:last-child) { margin-right: 4px; }
+.no-flex-gap .sidebar-versions > :not(:last-child) { margin-right: 5px; }
+.no-flex-gap .rules-tabs > :not(:last-child), .no-flex-gap .rule-form-actions > :not(:last-child), .no-flex-gap .overview-tags > :not(:last-child),
+.no-flex-gap .node-batch-actions > *, .no-flex-gap .node-filters > * { margin-right: 6px; }
+.no-flex-gap .topbar-actions > :not(:last-child), .no-flex-gap .status-bar > :not(:last-child), .no-flex-gap .node-row > :not(:last-child),
+.no-flex-gap .node-meta > :not(:last-child), .no-flex-gap .rule-set-title > :not(:last-child), .no-flex-gap .node-group-header > :not(:last-child),
+.no-flex-gap .modal-footer > :not(:last-child), .no-flex-gap .overview-node-side > :not(:last-child), .no-flex-gap .node-tools-row > :not(:last-child),
+.no-flex-gap .check-field > input, .no-flex-gap .section-kicker > .dot, .no-flex-gap .update-pill > .update-dot { margin-right: 8px; }
+.no-flex-gap .sidebar-status-line > :not(:last-child) { margin-right: 9px; }
+.no-flex-gap .brand > :not(:last-child), .no-flex-gap .row > :not(:last-child), .no-flex-gap .rule-import-body > :not(:last-child), .no-flex-gap .topbar > :not(:last-child) { margin-right: 10px; }
+.no-flex-gap .nav-icon { margin-right: 11px; }
+.no-flex-gap .setting-field > :not(:last-child), .no-flex-gap .rules-toolbar > :not(:last-child), .no-flex-gap .route-line > :not(:last-child) { margin-right: 12px; }
+.no-flex-gap .modal-header > :not(:last-child), .no-flex-gap .setting-toggle-row > :not(:last-child), .no-flex-gap .section-heading > :not(:last-child) { margin-right: 16px; }
+.no-flex-gap .traffic-numbers > :not(:last-child) { margin-right: 23px; }
+.no-flex-gap .node-info > :not(:last-child) { margin-bottom: 2px; }
+.no-flex-gap .node-list > :not(:last-child) { margin-bottom: 4px; }
+.no-flex-gap .qrcode-body > :not(:last-child) { margin-bottom: 12px; }
+@media (min-width: 761px) and (max-width: 1000px) { .no-flex-gap .nav-icon { margin-right: 0; } }
+@media (max-width: 760px) {
+  .no-flex-gap .nav-icon { margin: 0 0 4px; }
+  .no-flex-gap .hero-speed > :not(:last-child) { margin-right: 24px; }
+  .no-flex-gap .node-tools-row > * { margin: 0; }
+  .no-flex-gap .overview-node-side > :not(:last-child) { margin: 0 0 8px; }
+  .no-flex-gap .rules-page-heading > :not(:last-child) { margin: 0 0 10px; }
+  .no-flex-gap .node-page-heading > :not(:last-child) { margin: 0 0 12px; }
+  .no-flex-gap .focus-card > :not(:last-child) { margin: 0 0 16px; }
+}
+@media (max-width: 480px) {
+  .no-flex-gap .row > :not(:last-child) { margin: 0 0 10px; }
+  .no-flex-gap .setting-field > :not(:last-child) { margin: 0 0 5px; }
+}

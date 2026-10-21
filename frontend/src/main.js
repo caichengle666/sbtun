@@ -37,8 +37,6 @@ const state = {
   appUpdate: null,
   autoSwitch: null,
   singBoxUpdating: false,
-  singBoxUpdateMessage: '',
-  singBoxUpdateState: 'idle',
   statusState: 'stopped',
   statusMessage: '',
   runtimeNodeID: '',
@@ -57,8 +55,9 @@ const state = {
   ruleFilter: 'all',
   ruleUpdating: '',
   allRulesUpdating: false,
-  ruleMenuDocumentBound: false,
+  documentEventsBound: false,
   dnsFilterFormOpen: false,
+  filterRuleForm: { match_type: 'domain_suffix', value: '' },
   nodeSwitching: false,
   subUpdating: '',
   nodeHealth: loadNodeHealth(),
@@ -97,7 +96,11 @@ const state = {
   captureSettingsOpen: localStorage.getItem('sbtun-ui-capture-settings-open') !== 'false',
   view: initialView,
   statusRefreshing: false,
-  configRefreshing: false,
+  configReading: 0,
+  // 进行中的操作（防重复点击），render 里据此输出 disabled
+  busy: new Set(),
+  // 用户正在输入时推迟的后台重绘
+  renderPending: false,
 }
 
 const svgIcon = body => `<svg viewBox="0 0 24 24" width="17" height="17" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${body}</svg>`
@@ -248,6 +251,19 @@ const NODE_FIELDS = {
   ],
 }
 
+// 旧内核（Chrome < 84）不支持 flex 容器的 gap，检测后由 CSS 用 margin 兜底
+function supportsFlexGap() {
+  const box = document.createElement('div')
+  box.style.cssText = 'display:flex;flex-direction:column;row-gap:1px;position:absolute;visibility:hidden'
+  box.appendChild(document.createElement('div'))
+  box.appendChild(document.createElement('div'))
+  document.body.appendChild(box)
+  const ok = box.scrollHeight === 1
+  document.body.removeChild(box)
+  return ok
+}
+if (!supportsFlexGap()) document.documentElement.classList.add('no-flex-gap')
+
 document.documentElement.dataset.theme = state.theme
 app.innerHTML = render()
 
@@ -261,11 +277,12 @@ function render() {
           ${VIEWS.map(id => [id, viewLabel(id)]).map(([id, label]) => `<button class="nav-item ${state.view === id ? 'active' : ''}" data-view="${id}" title="${label}"><span class="nav-icon" aria-hidden="true">${NAV_ICONS[id]}</span><span class="nav-label">${label}</span></button>`).join('')}
         </nav>
         <div class="sidebar-status">
-          <div class="sidebar-status-line" title="${escapeHtml(statusLabel(state.statusState, state.statusMessage))}"><span class="dot ${dotClass(state.statusState)}"></span><span>${statusLabel(state.statusState, state.statusMessage)}</span></div>
+          <div class="sidebar-status-line" title="${escapeHtml(statusLabel(state.statusState, state.statusMessage))}"><span class="dot ${dotClass(state.statusState)}"></span><span>${escapeHtml(statusLabel(state.statusState, state.statusMessage))}</span></div>
           <div class="sidebar-versions">
             ${state.version ? `<span class="app-version" title="管理器版本 v${escapeHtml(state.version)}">程序 v${escapeHtml(state.version)}</span>` : ''}
             <span class="app-version" title="sing-box 内核版本 ${state.singBoxVersion ? 'v' + escapeHtml(state.singBoxVersion) : '读取中'}">内核 ${state.singBoxVersion ? 'v' + escapeHtml(state.singBoxVersion) : '--'}</span>
           </div>
+          ${IS_ANDROID ? '' : `<button id="updateSingBox" class="btn btn-ghost kernel-update-btn" title="检查 sing-box 官方稳定版并更新（同 sbtun kernel update）" ${state.singBoxUpdating ? 'disabled' : ''}>${state.singBoxUpdating ? '正在检查更新…' : '更新内核'}</button>`}
         </div>
       </aside>
 
@@ -278,12 +295,12 @@ function render() {
           <div class="topbar-actions">
             ${state.appUpdate?.has_update ? `<button id="appUpdate" class="update-pill" type="button" title="当前 v${escapeHtml(state.appUpdate.current_version)}，点击打开下载页"><span class="update-dot" aria-hidden="true"></span>新版本 v${escapeHtml(state.appUpdate.latest_version)}</button>` : ''}
             <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换主题" title="切换到${nextTheme().name}主题">${THEME_ICONS[nextTheme().id]}</button>
-            <button id="power" data-power class="switch ${state.running ? 'on' : ''}">${powerLabel()}</button>
+            <button id="power" data-power class="switch ${state.running ? 'on' : ''}" ${busyAttr('power')}>${powerLabel()}</button>
           </div>
         </header>
         <section class="status-bar">
           <span class="dot ${dotClass(state.statusState)}"></span>
-          <strong id="statusText">${statusLabel(state.statusState, state.statusMessage)}</strong>
+          <strong id="statusText">${escapeHtml(statusLabel(state.statusState, state.statusMessage))}</strong>
           ${state.running && state.selectorSyncState !== 'idle' ? `<span class="badge selector-sync ${state.selectorSyncState}" title="${escapeHtml(state.selectorSyncMessage)}">${selectorSyncLabel(state.selectorSyncState)}</span>` : ''}
           ${renderAutoSwitchBadge()}
           <span class="status-context" id="statusNode">节点：${escapeHtml(state.config?.nodes?.find(node => node.id === activeNodeID())?.name || '未选择')}</span>
@@ -383,7 +400,7 @@ function heroState() {
 function renderMobileHero(current, mode) {
   const [cls, label] = heroState()
   return `<section class="mobile-hero ${cls}">
-      <button class="power-orb" data-power type="button" aria-label="${powerLabel()}">${POWER_ICON}</button>
+      <button class="power-orb" data-power type="button" aria-label="${powerLabel()}" ${busyAttr('power')}>${POWER_ICON}</button>
       <div class="hero-copy">
         <strong id="heroState">${label}</strong>
         <span class="hero-sub">${escapeHtml(current?.name || '未选择节点')} · ${escapeHtml(mode?.name || '未设置')}</span>
@@ -400,12 +417,14 @@ function updateMobileHero() {
   hero.querySelector('#heroState').textContent = label
   hero.querySelector('#heroUp').textContent = formatBytes(state.traffic.up) + '/s'
   hero.querySelector('#heroDown').textContent = formatBytes(state.traffic.down) + '/s'
-  hero.querySelector('.power-orb').setAttribute('aria-label', powerLabel())
+  const orb = hero.querySelector('.power-orb')
+  orb.setAttribute('aria-label', powerLabel())
+  orb.disabled = state.busy.has('power')
 }
 
 function renderNodeOptions(nodes, selectedID) {
   const groups = nodeGroups(nodes, 'subscription')
-  return groups.map(group => `<optgroup label="${escapeHtml(group.label)}">${group.nodes.map(n => `<option value="${n.id}" ${n.id === selectedID ? 'selected' : ''}>${escapeHtml(n.name)}</option>`).join('')}</optgroup>`).join('')
+  return groups.map(group => `<optgroup label="${escapeHtml(group.label)}">${group.nodes.map(n => `<option value="${escapeHtml(n.id)}" ${n.id === selectedID ? 'selected' : ''}>${escapeHtml(n.name)}</option>`).join('')}</optgroup>`).join('')
 }
 
 function renderTrafficChart() {
@@ -423,7 +442,7 @@ function renderNodesPage() {
   const selected = selectedNodeIDs().length
   const subtitle = selected ? `已选 ${selected} 个 · 共 ${nodes.length} 个节点` : `${nodes.length} 个节点 · 点击节点即可切换`
   return `<section class="page-stack">
-      <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">${subtitle}</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="openBackup" title="备份到 WebDAV 或从云端恢复">云端备份</button><button class="btn btn-ghost" id="toggleSelectNodes" ${visibleIDs.length ? '' : 'disabled'}>${allSelected ? '取消全选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes" ${state.batchTesting || !visibleIDs.length ? 'disabled' : ''}>${state.batchTesting ? '测试中…' : selected ? '测试选中' : '测试全部'}</button><button class="btn btn-ghost" id="batchExportNodes" ${selected ? '' : 'disabled'}>导出选中</button><button class="btn btn-danger" id="batchDeleteNodes" ${selected ? '' : 'disabled'}>删除选中</button>${IS_ANDROID ? '<button class="btn btn-ghost" data-scan-qr>扫码导入</button>' : ''}<button class="btn btn-primary" id="toggleNodeForm">导入 / 添加</button></span></div>
+      <div class="section-heading node-page-heading"><div><h2>节点列表</h2><p class="muted">${subtitle}</p></div><span class="node-batch-actions"><button class="btn btn-ghost" id="openBackup" title="备份到 WebDAV 或从云端恢复">云端备份</button><button class="btn btn-ghost" id="toggleSelectNodes" ${visibleIDs.length ? '' : 'disabled'}>${allSelected ? '取消全选' : '全选'}</button><button class="btn btn-ghost" id="batchTestNodes" ${state.batchTesting || !visibleIDs.length ? 'disabled' : ''}>${state.batchTesting ? '测试中…' : selected ? '测试选中' : '测试全部'}</button><button class="btn btn-ghost" id="batchExportNodes" ${selected && !state.busy.has('export') ? '' : 'disabled'}>导出选中</button><button class="btn btn-danger" id="batchDeleteNodes" ${selected && !state.busy.has('delete') ? '' : 'disabled'}>删除选中</button>${IS_ANDROID ? `<button class="btn btn-ghost" data-scan-qr ${busyAttr('scan')}>扫码导入</button>` : ''}<button class="btn btn-primary" id="toggleNodeForm">导入 / 添加</button></span></div>
       ${renderSubscriptions()}
       <div id="nodePanel">${renderNodes()}</div>
   </section>`
@@ -432,9 +451,13 @@ function renderNodesPage() {
 function renderNodeModal() {
   if (!state.nodeFormOpen && !state.editingNodeId) return ''
   const editing = Boolean(state.editingNodeId)
-  const tab = editing ? 'manual' : state.nodeFormTab
+  const tab = state.nodeFormTab
+  const importing = state.busy.has('import')
   const body = tab === 'link'
-    ? `<p class="muted modal-hint">粘贴节点分享链接（vless:// vmess:// trojan:// ss:// hy2:// hysteria:// tuic:// anytls:// wg:// 等，可多行，一行一个），或订阅地址（支持 Base64、Clash YAML、sing-box JSON）。</p>
+    ? editing
+      ? `<p class="muted modal-hint">粘贴这个节点新的分享链接（只能一条），保存后用链接里的参数整体替换，节点所属订阅不变。</p>
+      <textarea id="nodeUrl" class="input node-url-input" rows="4" placeholder="vless:// vmess:// trojan:// ss:// hy2:// …">${escapeHtml(state.manualForm.url)}</textarea>`
+      : `<p class="muted modal-hint">粘贴节点分享链接（vless:// vmess:// trojan:// ss:// hy2:// hysteria:// tuic:// anytls:// wg:// 等，可多行，一行一个），或订阅地址（支持 Base64、Clash YAML、sing-box JSON）。</p>
       <textarea id="nodeUrl" class="input node-url-input" rows="6" placeholder="每行一个链接或订阅地址">${escapeHtml(state.manualForm.url)}</textarea>`
     : `<div class="row"><select id="nodeProtocol" class="select">${NODE_PROTOCOLS.map(([id, label]) => `<option value="${id}" ${state.manualProtocol === id ? 'selected' : ''}>${label}</option>`).join('')}</select></div>
       <div class="row"><input id="nodeName" class="input" value="${escapeHtml(state.manualForm.name)}" placeholder="节点名称" /></div>
@@ -443,9 +466,9 @@ function renderNodeModal() {
   return `<div class="modal" id="nodeModal" role="dialog" aria-modal="true" aria-labelledby="nodeModalTitle"><div class="modal-backdrop" data-close-node-modal></div>
     <section class="modal-panel node-modal" id="node-import">
       <header class="modal-header"><h2 id="nodeModalTitle">${editing ? '编辑节点' : '添加节点'}</h2><button class="icon-btn" data-close-node-modal aria-label="关闭" title="关闭">×</button></header>
-      ${editing ? '' : `<div class="modal-tabs" role="tablist"><button class="modal-tab ${tab === 'link' ? 'active' : ''}" data-node-form-tab="link" role="tab">粘贴链接导入</button><button class="modal-tab ${tab === 'manual' ? 'active' : ''}" data-node-form-tab="manual" role="tab">手动填写</button></div>`}
+      <div class="modal-tabs" role="tablist"><button class="modal-tab ${tab === 'link' ? 'active' : ''}" data-node-form-tab="link" role="tab">${editing ? '粘贴链接替换' : '粘贴链接导入'}</button><button class="modal-tab ${tab === 'manual' ? 'active' : ''}" data-node-form-tab="manual" role="tab">手动填写</button></div>
       <div class="modal-body">${body}</div>
-      <footer class="modal-footer"><button class="btn btn-ghost" data-close-node-modal>取消</button>${tab === 'link' ? `${IS_ANDROID ? '<button class="btn btn-ghost" data-scan-qr>扫码</button>' : ''}<button id="importBtn" class="btn btn-primary">导入</button>` : `<button id="addNodeBtn" class="btn btn-primary">${editing ? '保存修改' : '添加节点'}</button>`}</footer>
+      <footer class="modal-footer"><button class="btn btn-ghost" data-close-node-modal>取消</button>${tab === 'link' ? `${IS_ANDROID && !editing ? `<button class="btn btn-ghost" data-scan-qr ${busyAttr('scan')}>扫码</button>` : ''}<button id="importBtn" class="btn btn-primary" ${importing ? 'disabled' : ''}>${importing ? (editing ? '保存中…' : '导入中…') : editing ? '保存修改' : '导入'}</button>` : `<button id="addNodeBtn" class="btn btn-primary" ${busyAttr('node')}>${editing ? '保存修改' : '添加节点'}</button>`}</footer>
     </section>
   </div>`
 }
@@ -462,7 +485,7 @@ function renderSubscriptions() {
     return `<li class="node-item subscription-item">
         <span class="badge proxy">订阅</span>
         <div class="node-info"><div class="node-row"><span class="node-name" title="${escapeHtml(s.name)}">${escapeHtml(s.name)}</span><span class="node-server">${count} 个节点 · ${escapeHtml(updated)}</span></div></div>
-        <div class="node-actions"><button class="btn btn-ghost update-sub" data-id="${s.id}" ${busy ? 'disabled' : ''}>${updating ? '更新中...' : '更新'}</button><button class="btn btn-danger rm-sub" data-id="${s.id}" ${busy ? 'disabled' : ''}>删除</button></div>
+        <div class="node-actions"><button class="btn btn-ghost update-sub" data-id="${escapeHtml(s.id)}" ${busy ? 'disabled' : ''}>${updating ? '更新中...' : '更新'}</button><button class="btn btn-danger rm-sub" data-id="${escapeHtml(s.id)}" ${busy ? 'disabled' : ''}>删除</button></div>
       </li>`
   }).join('')
   const cfg = state.config || {}
@@ -490,20 +513,20 @@ function renderTransportFields() {
 }
 
 function renderSettingInput(key, label, placeholder) {
-  return `<label class="setting-field"><span>${label}</span><input data-setting="${key}" class="input" value="${escapeHtml(state.manualForm[key] || '')}" placeholder="${placeholder}" /></label>`
+  return `<label class="setting-field"><span>${label}</span><input id="setting-${key}" data-setting="${key}" class="input" value="${escapeHtml(state.manualForm[key] || '')}" placeholder="${placeholder}" /></label>`
 }
 
 function renderNodeField(field) {
   const value = state.manualForm[field.key] ?? ''
   if (field.type === 'checkbox') {
-    return `<label class="check-field"><input data-setting="${field.key}" type="checkbox" ${value ? 'checked' : ''} /> ${field.label}</label>`
+    return `<label class="check-field"><input id="setting-${field.key}" data-setting="${field.key}" type="checkbox" ${value ? 'checked' : ''} /> ${field.label}</label>`
   }
   if (field.type === 'select') {
     // 导入的值不在预设选项里时也要显示出来，否则保存时会被改成第一个选项。
     const options = value && !field.options.some(([key]) => key === value) ? [...field.options, [value, value]] : field.options
-    return `<label class="setting-field"><span>${field.label}</span><select data-setting="${field.key}" class="select">${options.map(([key, label]) => `<option value="${escapeHtml(key)}" ${value === key ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}</select></label>`
+    return `<label class="setting-field"><span>${field.label}</span><select id="setting-${field.key}" data-setting="${field.key}" class="select">${options.map(([key, label]) => `<option value="${escapeHtml(key)}" ${value === key ? 'selected' : ''}>${escapeHtml(label)}</option>`).join('')}</select></label>`
   }
-  return `<label class="setting-field"><span>${field.label}</span><input data-setting="${field.key}" class="input" type="${field.type || 'text'}" value="${escapeHtml(value)}" placeholder="${field.placeholder || ''}" ${field.required ? 'required' : ''} /></label>`
+  return `<label class="setting-field"><span>${field.label}</span><input id="setting-${field.key}" data-setting="${field.key}" class="input" type="${field.type || 'text'}" value="${escapeHtml(value)}" placeholder="${field.placeholder || ''}" ${field.required ? 'required' : ''} /></label>`
 }
 
 function buildManualSettings(protocol, password) {
@@ -552,8 +575,8 @@ function renderRoutingPage() {
   const matchType = RULE_MATCH_TYPES.find(item => item.id === state.customRuleForm.match_type) || RULE_MATCH_TYPES[0]
   const action = RULE_ACTIONS.find(item => item.id === state.customRuleForm.action) || RULE_ACTIONS[0]
   const diagnostics = state.diagnostics
-  return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div><div class="network-options"><div class="network-options-title">网络选项</div><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>节点失效自动切换</strong><small>当前节点连续两次测试失败时，切换到延迟最低的可用节点，优先同一订阅</small></span><span class="toggle-switch"><input id="autoSwitchToggle" type="checkbox" ${state.config?.auto_switch_disabled ? '' : 'checked'}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用 IPv6</strong><small>${escapeHtml(state.ipv6Status?.message || '正在检测设备 IPv6')}</small></span><span class="toggle-switch"><input id="ipv6Toggle" type="checkbox" ${state.config?.ipv6_enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row" data-desktop-only><span class="setting-toggle-copy"><strong>启用 WebRTC 防泄漏</strong><small>防止 WebRTC 通过直连暴露真实 IPv4/IPv6</small></span><span class="toggle-switch"><input id="webrtcProtectionToggle" type="checkbox" ${state.config?.webrtc_protection_enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用诊断信息</strong><small>显示当前 selector 和运行节点，仅用于排查问题</small></span><span class="toggle-switch"><input id="diagnosticsToggle" type="checkbox" ${state.config?.diagnostics_enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label></div></section>${state.config?.diagnostics_enabled ? `<section class="card"><h2>运行诊断</h2><div class="diagnostics-grid"><span>当前配置节点</span><strong>${escapeHtml(diagnostics?.current_node_id || '未选择')}</strong><span>实际 selector</span><strong>${escapeHtml(diagnostics?.selector || '未读取')}</strong><span>状态</span><strong>${escapeHtml(diagnostics?.message || '读取中')}</strong></div></section>` : ''}
-    ${state.config?.routing_mode === 'custom' ? `<section class="card"><div class="section-heading"><div><h2>自定义分流规则</h2><p class="muted">先选择匹配对象，再填写内容和处理方式。</p></div></div><div id="customRulesPanel">${renderCustomRules()}</div><div class="rule-editor"><label class="rule-field"><span>匹配对象</span><select id="ruleMatchType" class="select">${RULE_MATCH_TYPES.map(item => `<option value="${item.id}" ${item.id === matchType.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-field"><span>匹配内容</span><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="${matchType.placeholder}" /></label><label class="rule-field"><span>处理方式</span><select id="ruleAction" class="select">${RULE_ACTIONS.map(item => `<option value="${item.id}" ${item.id === action.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><button id="addRuleBtn" class="btn btn-primary">添加规则</button><small class="rule-hint value-hint" id="ruleValueHint">${matchType.hint}</small><small class="rule-hint action-hint" id="ruleActionHint">${action.hint}</small></div><details class="rule-import" open><summary>批量导入规则</summary><div class="rule-import-body"><textarea id="ruleImport" class="input" rows="3" placeholder="每行一条，例如：proxy,domain_suffix,example.com"></textarea><button id="importRuleBtn" class="btn btn-ghost">导入</button></div></details></section>` : ''}
+  return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div><div class="network-options"><div class="network-options-title">网络选项</div><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>节点失效自动切换</strong><small>当前节点连续两次测试失败时，切换到延迟最低的可用节点，优先同一订阅</small></span><span class="toggle-switch"><input id="autoSwitchToggle" type="checkbox" ${state.config?.auto_switch_disabled ? '' : 'checked'}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用 IPv6</strong><small>${escapeHtml(state.ipv6Status?.message || '正在检测设备 IPv6')}</small></span><span class="toggle-switch"><input id="ipv6Toggle" type="checkbox" ${state.config?.ipv6_enabled ? 'checked' : ''} ${busyAttr('ipv6')}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row" data-desktop-only><span class="setting-toggle-copy"><strong>启用 WebRTC 防泄漏</strong><small>防止 WebRTC 通过直连暴露真实 IPv4/IPv6</small></span><span class="toggle-switch"><input id="webrtcProtectionToggle" type="checkbox" ${state.config?.webrtc_protection_enabled ? 'checked' : ''} ${busyAttr('webrtc')}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用诊断信息</strong><small>显示当前 selector 和运行节点，仅用于排查问题</small></span><span class="toggle-switch"><input id="diagnosticsToggle" type="checkbox" ${state.config?.diagnostics_enabled ? 'checked' : ''} ${busyAttr('diagnostics')}><span aria-hidden="true"></span></span></label></div></section>${state.config?.diagnostics_enabled ? `<section class="card"><h2>运行诊断</h2><div class="diagnostics-grid"><span>当前配置节点</span><strong>${escapeHtml(diagnostics?.current_node_id || '未选择')}</strong><span>实际 selector</span><strong>${escapeHtml(diagnostics?.selector || '未读取')}</strong><span>状态</span><strong>${escapeHtml(diagnostics?.message || '读取中')}</strong></div></section>` : ''}
+    ${state.config?.routing_mode === 'custom' ? `<section class="card"><div class="section-heading"><div><h2>自定义分流规则</h2><p class="muted">先选择匹配对象，再填写内容和处理方式。</p></div></div><div id="customRulesPanel">${renderCustomRules()}</div><div class="rule-editor"><label class="rule-field"><span>匹配对象</span><select id="ruleMatchType" class="select">${RULE_MATCH_TYPES.map(item => `<option value="${item.id}" ${item.id === matchType.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-field"><span>匹配内容</span><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="${matchType.placeholder}" /></label><label class="rule-field"><span>处理方式</span><select id="ruleAction" class="select">${RULE_ACTIONS.map(item => `<option value="${item.id}" ${item.id === action.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><button id="addRuleBtn" class="btn btn-primary" ${busyAttr('customRule')}>添加规则</button><small class="rule-hint value-hint" id="ruleValueHint">${matchType.hint}</small><small class="rule-hint action-hint" id="ruleActionHint">${action.hint}</small></div><details class="rule-import" open><summary>批量导入规则</summary><div class="rule-import-body"><textarea id="ruleImport" class="input" rows="3" placeholder="每行一条，例如：proxy,domain_suffix,example.com"></textarea><button id="importRuleBtn" class="btn btn-ghost" ${busyAttr('importRule')}>导入</button></div></details></section>` : ''}
   </div>`
 }
 
@@ -575,21 +598,21 @@ function renderRulesPage() {
       <div class="rule-layout">
         <div class="rule-list-column">
           <div id="rulesPanel">${renderRules()}</div>
-          <div class="rules-toolbar"><span class="rules-summary-note">启用的规则集会参与当前路由模式，更新失败时保留旧文件。</span><button id="updateAllRules" class="btn btn-primary">${state.allRulesUpdating ? '更新中...' : '更新全部规则集'}</button></div>
+          <div class="rules-toolbar"><span class="rules-summary-note">启用的规则集会参与当前路由模式，更新失败时保留旧文件。</span><button id="updateAllRules" class="btn btn-primary" ${state.ruleUpdating || state.allRulesUpdating ? 'disabled' : ''}>${state.allRulesUpdating ? '更新中...' : '更新全部规则集'}</button></div>
         </div>
         <aside class="rule-set-form card">
           <h3>${state.editingRuleSetID ? '编辑规则集' : '添加规则集'}</h3>
           <p class="muted">添加 sing-box SRS 或 DNS 域名规则集 URL。</p>
           <label class="rule-form-field"><span>规则集名称</span><input id="ruleSetName" class="input" value="${escapeHtml(state.ruleSetForm.name)}" placeholder="例如 广告过滤规则" /></label>
           <label class="rule-form-field"><span>规则集 URL</span><input id="ruleSetURL" class="input" value="${escapeHtml(state.ruleSetForm.url)}" placeholder="https://example.com/rules.srs" /></label>
-          <div class="rule-form-actions"><button id="addRuleSetBtn" class="btn btn-primary">${state.editingRuleSetID ? '保存修改' : '添加规则集'}</button>${state.editingRuleSetID ? '<button id="cancelEditRuleSet" class="btn btn-ghost">取消</button>' : '<a class="btn btn-ghost rule-source-link" href="https://github.com/razaxq/dns-blocklists-sing-box/blob/main/README_zh.md" target="_blank" rel="noopener noreferrer">查找规则集</a><button id="restoreDefaultRules" class="btn btn-ghost">恢复默认规则</button>'}</div>
+          <div class="rule-form-actions"><button id="addRuleSetBtn" class="btn btn-primary" ${busyAttr('ruleSet')}>${state.editingRuleSetID ? '保存修改' : '添加规则集'}</button>${state.editingRuleSetID ? '<button id="cancelEditRuleSet" class="btn btn-ghost">取消</button>' : `<a class="btn btn-ghost rule-source-link" href="https://github.com/razaxq/dns-blocklists-sing-box/blob/main/README_zh.md" target="_blank" rel="noopener noreferrer">查找规则集</a><button id="restoreDefaultRules" class="btn btn-ghost" ${busyAttr('ruleSet')}>恢复默认规则</button>`}</div>
         </aside>
       </div>
     </section>
     ` : `
     <section class="card dns-filter-card">
       <div class="section-heading"><div><h2>手动 DNS 过滤规则</h2><p class="muted">单独添加域名或 IP，命中后直接阻断。优先级高于规则集。</p></div><button id="openFilterRuleBtn" class="btn btn-primary">添加过滤规则</button></div>
-      ${state.dnsFilterFormOpen ? `<div class="dns-filter-editor"><label class="rule-form-field"><span>匹配对象</span><select id="filterRuleMatchType" class="select">${RULE_MATCH_TYPES.filter(item => item.id !== 'port').map(item => `<option value="${item.id}">${item.label}</option>`).join('')}</select></label><label class="rule-form-field"><span>匹配内容</span><input id="filterRuleValue" class="input" placeholder="例如 ads.example.com" /></label><div class="rule-form-actions"><button id="addFilterRuleBtn" class="btn btn-primary">添加规则</button><button id="cancelFilterRuleBtn" class="btn btn-ghost">取消</button></div></div>` : ''}
+      ${state.dnsFilterFormOpen ? `<div class="dns-filter-editor"><label class="rule-form-field"><span>匹配对象</span><select id="filterRuleMatchType" class="select">${RULE_MATCH_TYPES.filter(item => item.id !== 'port').map(item => `<option value="${item.id}" ${item.id === state.filterRuleForm.match_type ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-form-field"><span>匹配内容</span><input id="filterRuleValue" class="input" value="${escapeHtml(state.filterRuleForm.value)}" placeholder="例如 ads.example.com" /></label><div class="rule-form-actions"><button id="addFilterRuleBtn" class="btn btn-primary" ${busyAttr('filterRule')}>添加规则</button><button id="cancelFilterRuleBtn" class="btn btn-ghost">取消</button></div></div>` : ''}
       ${renderDNSFilterRules()}
       <div class="rules-toolbar dns-filter-toolbar"><span class="rules-summary-note">共 ${(state.config?.dns_filter_rules || []).length} 条手动过滤规则</span></div>
     </section>
@@ -608,17 +631,17 @@ function renderCapturePage() {
     <section class="card capture-status-panel">
       <div><span class="section-kicker">抓包状态</span><strong class="capture-status-title">${escapeHtml(status.message || (status.running ? '分析器运行中' : '分析器未运行'))}</strong></div>
       <div class="capture-status-metrics"><span><i class="dot ${status.running ? 'running' : ''}"></i>分析器 ${status.running ? '运行中' : '未运行'}</span><span><i class="dot ${state.running ? 'running' : dotClass(state.statusState)}"></i>TUN ${state.running ? '运行中' : '未运行'}</span><span>记录 <strong>${state.captureFlows.length}</strong>/${status.max_flows || '—'}</span><span>路由 <strong>${escapeHtml(mode)}</strong></span><span class="${status.unsaved ? 'capture-unsaved' : ''}">${status.unsaved ? '有未保存内容' : '已写入磁盘'}</span></div>
-      <label class="capture-toggle"><span>启用分析</span><span class="toggle-switch"><input id="captureEnabled" type="checkbox" ${enabled ? 'checked' : ''}><span aria-hidden="true"></span></span></label>
+      <label class="capture-toggle"><span>启用分析</span><span class="toggle-switch"><input id="captureEnabled" type="checkbox" ${enabled ? 'checked' : ''} ${busyAttr('capture')}><span aria-hidden="true"></span></span></label>
     </section>
     <details class="card capture-settings" id="captureSettings" ${state.captureSettingsOpen ? 'open' : ''}>
       <summary class="capture-settings-summary"><div><h2>抓包规则与证书</h2><p class="muted">每行一个域名或关键词；输入 * 抓取全部 HTTP/HTTPS 请求。</p></div><span class="capture-settings-actions" aria-hidden="true">⌄</span></summary>
-      <div class="capture-settings-content"><div class="section-heading"><span></span><button id="saveCapture" class="btn btn-primary">保存并应用</button></div>
+      <div class="capture-settings-content"><div class="section-heading"><span></span><button id="saveCapture" class="btn btn-primary" ${busyAttr('capture')}>保存并应用</button></div>
       <textarea id="captureDomains" class="input" rows="4" placeholder="例如 example.com、google；输入 * 抓取全部 HTTP/HTTPS">${escapeHtml(domains)}</textarea>
-      <div class="capture-settings-footer"><div class="capture-cert"><span class="badge ${status.certificate_installed ? 'direct' : ''}">${status.certificate_installed ? `证书已安装（${escapeHtml(status.certificate_level || '未知级别')}）` : '证书未安装'}</span>${status.user_certificate_supported ? '<select id="captureCertLevel" class="input capture-cert-level"><option value="system">系统级</option><option value="user">当前用户</option></select>' : '<span class="muted">Linux 使用系统级证书</span>'}<button id="installCaptureCA" class="btn btn-ghost">安装系统证书</button><button id="uninstallCaptureCA" class="btn btn-ghost">卸载系统证书</button></div><span class="capture-storage" title="${escapeHtml(status.storage_path || '')}">${escapeHtml(status.storage_path || 'capture.json')}</span></div>
+      <div class="capture-settings-footer"><div class="capture-cert"><span class="badge ${status.certificate_installed ? 'direct' : ''}">${status.certificate_installed ? `证书已安装（${escapeHtml(status.certificate_level || '未知级别')}）` : '证书未安装'}</span>${status.user_certificate_supported ? '<select id="captureCertLevel" class="input capture-cert-level"><option value="system">系统级</option><option value="user">当前用户</option></select>' : '<span class="muted">Linux 使用系统级证书</span>'}<button id="installCaptureCA" class="btn btn-ghost" ${busyAttr('captureCA')}>安装系统证书</button><button id="uninstallCaptureCA" class="btn btn-ghost" ${busyAttr('captureCA')}>卸载系统证书</button></div><span class="capture-storage" title="${escapeHtml(status.storage_path || '')}">${escapeHtml(status.storage_path || 'capture.json')}</span></div>
       </div>
     </details>
     <section class="card capture-records">
-      <div class="section-heading capture-records-heading"><div><h2>请求记录</h2><p class="muted">显示 ${visibleFlows.length} 条，共 ${state.captureFlows.length} 条</p></div><div class="capture-record-actions"><button id="saveCaptureFile" class="btn btn-ghost">保存记录</button><button id="clearCapture" class="btn btn-danger">删除全部</button></div></div>
+      <div class="section-heading capture-records-heading"><div><h2>请求记录</h2><p class="muted">显示 ${visibleFlows.length} 条，共 ${state.captureFlows.length} 条</p></div><div class="capture-record-actions"><button id="saveCaptureFile" class="btn btn-ghost" ${busyAttr('captureFile')}>保存记录</button><button id="clearCapture" class="btn btn-danger" ${busyAttr('captureFile')}>删除全部</button></div></div>
       <div class="capture-filters"><input id="captureSearch" class="input" value="${escapeHtml(state.captureSearch)}" placeholder="搜索 URL、Host 或方法"><div class="capture-filter-group">${[['all', '全部'], ['error', '错误'], ['2xx', '2xx'], ['4xx5xx', '4xx/5xx']].map(([id, label]) => `<button class="filter-btn ${state.captureFilter === id ? 'active' : ''}" data-capture-filter="${id}">${label}</button>`).join('')}</div></div>
       <div class="capture-list" id="captureList">
         <div class="capture-list-head"><span>方法</span><span>Host / Path</span><span>状态</span><span>出口</span><span>耗时</span></div>
@@ -687,7 +710,7 @@ function renderNodeQRCodeModal() {
   return `<div class="modal" id="nodeQRCodeModal" role="dialog" aria-modal="true" aria-labelledby="nodeQRCodeTitle"><div class="modal-backdrop" data-close-node-qrcode></div>
     <section class="modal-panel qrcode-modal">
       <header class="modal-header"><h2 id="nodeQRCodeTitle">${escapeHtml(qr.name)}</h2><button class="icon-btn" data-close-node-qrcode aria-label="关闭" title="关闭">×</button></header>
-      <div class="modal-body qrcode-body"><img class="qrcode-image" src="${qr.image}" alt="节点分享链接二维码"><p class="muted modal-hint">用手机客户端扫码即可导入该节点</p><code class="qrcode-link">${escapeHtml(qr.link)}</code></div>
+      <div class="modal-body qrcode-body"><img class="qrcode-image" src="${escapeHtml(qr.image)}" alt="节点分享链接二维码"><p class="muted modal-hint">用手机客户端扫码即可导入该节点</p><code class="qrcode-link">${escapeHtml(qr.link)}</code></div>
       <footer class="modal-footer"><button class="btn btn-ghost" data-close-node-qrcode>关闭</button><button class="btn btn-primary" id="copyNodeQRCodeLink">复制链接</button></footer>
     </section></div>`
 }
@@ -697,7 +720,7 @@ function renderBackupModal() {
   if (!b) return ''
   const f = b.form
   const busy = Boolean(b.busy)
-  const field = (key, label, type, placeholder) => `<label class="setting-field"><span>${label}</span><input class="input" data-backup-field="${key}" type="${type}" value="${escapeHtml(f[key] || '')}" placeholder="${placeholder}" autocomplete="off" /></label>`
+  const field = (key, label, type, placeholder) => `<label class="setting-field"><span>${label}</span><input id="backup-${key}" class="input" data-backup-field="${key}" type="${type}" value="${escapeHtml(f[key] || '')}" placeholder="${placeholder}" autocomplete="off" /></label>`
   const list = !b.saved
     ? '<p class="muted">保存 WebDAV 设置后可以备份和恢复。</p>'
     : b.listError
@@ -743,7 +766,7 @@ async function refreshBackupList() {
     b.listError = ''
   } catch (e) {
     b.list = null
-    b.listError = e.message || String(e)
+    b.listError = errorText(e)
   }
   if (state.backup === b) renderApp()
 }
@@ -761,7 +784,7 @@ async function runBackupAction(name, action) {
   try {
     await action(b)
   } catch (e) {
-    showToast(e.message || String(e), 'error')
+    showToast(errorText(e), 'error')
   } finally {
     b.busy = ''
     if (state.backup === b) renderApp()
@@ -771,7 +794,7 @@ async function runBackupAction(name, action) {
 async function saveBackupSettings(b, form, message) {
   await window.go.app.App.TestWebDAV(form)
   await window.go.app.App.SaveWebDAVSettings(form)
-  state.config = await window.go.app.App.GetConfig()
+  await refreshConfig()
   b.form = { ...form }
   b.saved = true
   showToast(message, 'success')
@@ -804,7 +827,7 @@ function bindBackupModal() {
     if (!window.confirm('清除本机保存的 WebDAV 设置？云端已有的备份不会删除。')) return
     runBackupAction('clear', async b => {
       await window.go.app.App.SaveWebDAVSettings({ url: '', username: '', password: '', encrypt_password: '', auto_backup: false })
-      state.config = await window.go.app.App.GetConfig()
+      await refreshConfig()
       b.form = backupFormFromConfig()
       b.saved = false
       b.list = null
@@ -816,7 +839,7 @@ function bindBackupModal() {
     if (!window.confirm('用这份备份覆盖本机的节点、订阅、规则和设置？订阅节点会按地址重新拉取。')) return
     runBackupAction(name, async () => {
       const warning = await window.go.app.App.RestoreFromWebDAV(name)
-      state.config = await window.go.app.App.GetConfig()
+      await refreshConfig()
       await refreshRules()
       showToast(warning ? '已恢复，' + warning : '已恢复备份', warning ? '' : 'success')
     })
@@ -848,7 +871,7 @@ function formatCaptureBody(body, encoding, contentType, pretty = true) {
     try { return { text: JSON.stringify(JSON.parse(body), null, 2), pretty: true } } catch (_) {}
   }
   if (mediaType === 'application/x-www-form-urlencoded') {
-    try { return { text: new URLSearchParams(body).toString().replaceAll('&', '\n'), pretty: true } } catch (_) {}
+    try { return { text: new URLSearchParams(body).toString().replace(/&/g, '\n'), pretty: true } } catch (_) {}
   }
   return { text: body, pretty: false }
 }
@@ -928,14 +951,17 @@ function renderRules() {
   const filter = state.ruleFilter || 'all'
   const rules = state.rules.filter(rule => filter === 'all' || (filter === 'default' ? rule.source === 'default' : rule.source !== 'default'))
   if (!rules.length) return '<div class="empty">没有符合条件的规则集</div>'
-  return `<div class="rule-set-list">${rules.map(r => `
+  return `<div class="rule-set-list">${rules.map(r => {
+    const id = escapeHtml(r.id)
+    return `
     <div class="rule-set-row">
-      <button class="rule-switch ${r.enabled ? 'on' : ''} toggle-rule" data-id="${r.id}" aria-label="${r.enabled ? '停用' : '启用'} ${escapeHtml(r.name)}"><span></span></button>
-      <div class="rule-set-main"><div class="rule-set-title"><strong>${escapeHtml(r.name)}</strong><span class="rule-tag ${r.source === 'default' ? 'default' : 'custom'}">${r.source === 'default' ? '默认' : '用户添加'}</span></div><div class="rule-set-file">${r.exists ? escapeHtml(formatRuleInfo(r)) : `<button class="rule-inline-download update-rule" data-id="${r.id}" ${state.ruleUpdating || state.allRulesUpdating ? 'disabled' : ''}>${state.ruleUpdating === r.id ? '下载中...' : '立即下载'}</button>`}</div></div>
+      <button class="rule-switch ${r.enabled ? 'on' : ''} toggle-rule" data-id="${id}" ${busyAttr('rule:' + r.id)} aria-label="${r.enabled ? '停用' : '启用'} ${escapeHtml(r.name)}"><span></span></button>
+      <div class="rule-set-main"><div class="rule-set-title"><strong>${escapeHtml(r.name)}</strong><span class="rule-tag ${r.source === 'default' ? 'default' : 'custom'}">${r.source === 'default' ? '默认' : '用户添加'}</span></div><div class="rule-set-file">${r.exists ? escapeHtml(formatRuleInfo(r)) : `<button class="rule-inline-download update-rule" data-id="${id}" ${state.ruleUpdating || state.allRulesUpdating ? 'disabled' : ''}>${state.ruleUpdating === r.id ? '下载中...' : '立即下载'}</button>`}</div></div>
       <span class="rule-tag ${r.exists ? 'ready' : 'missing'}">${r.exists ? '已下载' : '未下载'}</span>
       <span class="rule-set-date">${r.updated_at ? escapeHtml(new Date(r.updated_at).toLocaleDateString('zh-CN')) : '尚未更新'}</span>
-      <details class="rule-menu" data-rule-menu-id="${r.id}"><summary aria-label="规则集操作">⋯</summary><div class="rule-menu-list"><button class="rule-menu-action update-rule" data-id="${r.id}" ${state.ruleUpdating || state.allRulesUpdating ? 'disabled' : ''}>${state.ruleUpdating === r.id ? '更新中...' : '更新'}</button><button class="rule-menu-action edit-rule" data-id="${r.id}">编辑</button><button class="rule-menu-action rule-copy-url" data-url="${escapeHtml(r.url || '')}">查看 URL</button><button class="rule-menu-action danger delete-rule" data-id="${r.id}">删除</button></div></details>
-    </div>`).join('')}</div>`
+      <details class="rule-menu" data-rule-menu-id="${id}"><summary aria-label="规则集操作">⋯</summary><div class="rule-menu-list"><button class="rule-menu-action update-rule" data-id="${id}" ${state.ruleUpdating || state.allRulesUpdating ? 'disabled' : ''}>${state.ruleUpdating === r.id ? '更新中...' : '更新'}</button><button class="rule-menu-action edit-rule" data-id="${id}">编辑</button><button class="rule-menu-action rule-copy-url" data-url="${escapeHtml(r.url || '')}">查看 URL</button><button class="rule-menu-action danger delete-rule" data-id="${id}" ${busyAttr('rule:' + r.id)}>删除</button></div></details>
+    </div>`
+  }).join('')}</div>`
 }
 
 function renderDNSFilterRules() {
@@ -953,7 +979,6 @@ function formatRuleInfo(rule) {
 
 function renderNodes() {
   const allNodes = state.config?.nodes || []
-  const currentNodeID = activeNodeID()
   const filterBtns = [['all', '全部'], ...NODE_PROTOCOLS.map(([id, label]) => [id, id === 'shadowsocks' ? 'SS' : label])]
   const toolsHtml = `<div class="node-tools">
       <div class="node-tools-row"><input id="nodeSearch" class="input" value="${escapeHtml(state.nodeSearch)}" placeholder="搜索名称、服务器或协议" aria-label="搜索节点">
@@ -964,26 +989,34 @@ function renderNodes() {
     if (!count && id !== 'all' && state.nodeFilter !== id) return ''
     return `<button class="filter-btn ${state.nodeFilter === id ? 'active' : ''}" data-filter="${id}">${label} (${count})</button>`
   }).join('')}</div></div>`
+  // 列表单独放一层：搜索时只重绘列表，不动搜索框（避免打断输入法）
+  return toolsHtml + `<div id="nodeList">${renderNodeList()}</div>`
+}
+
+function renderNodeList() {
+  const allNodes = state.config?.nodes || []
+  const currentNodeID = activeNodeID()
   // 链接粘到了搜索框里：提示一下，并给个一键导入。
-  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(state.nodeSearch.trim())) return toolsHtml + '<div class="empty">这里是搜索框，只用来筛选节点。<br><button class="btn btn-primary" id="importFromSearch">导入这个链接</button></div>'
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(state.nodeSearch.trim())) return '<div class="empty">这里是搜索框，只用来筛选节点。<br><button class="btn btn-primary" id="importFromSearch">导入这个链接</button></div>'
   const visible = new Set(visibleNodeIDs())
   const filtered = allNodes.filter(n => visible.has(n.id))
-  if (!allNodes.length) return toolsHtml + '<div class="empty">还没有节点，点右上角“导入 / 添加”</div>'
-  if (!filtered.length) return toolsHtml + '<div class="empty">没有匹配的节点</div>'
+  if (!allNodes.length) return '<div class="empty">还没有节点，点右上角“导入 / 添加”</div>'
+  if (!filtered.length) return '<div class="empty">没有匹配的节点</div>'
   const bySubscription = state.nodeGroupBy === 'subscription'
   const row = n => {
     const current = currentNodeID === n.id
     const testing = state.nodeTesting.has(n.id)
-    return `<li class="node-item ${current ? 'active' : ''} ${state.nodeSwitching ? 'busy' : ''}" data-node-id="${n.id}" tabindex="0" title="${current ? '当前节点' : '点击切换到此节点'}">
-        <input class="node-select" type="checkbox" data-id="${n.id}" ${state.selectedNodes.has(n.id) ? 'checked' : ''} aria-label="选择 ${escapeHtml(n.name)}" />
+    const id = escapeHtml(n.id)
+    return `<li class="node-item ${current ? 'active' : ''} ${state.nodeSwitching ? 'busy' : ''}" data-node-id="${id}" tabindex="0" title="${current ? '当前节点' : '点击切换到此节点'}">
+        <input class="node-select" type="checkbox" data-id="${id}" ${state.selectedNodes.has(n.id) ? 'checked' : ''} aria-label="选择 ${escapeHtml(n.name)}" />
         <div class="node-info">
           <div class="node-row"><span class="node-name">${escapeHtml(n.name)}</span>${current ? '<span class="node-current-tag">当前</span>' : ''}</div>
           <div class="node-meta">${bySubscription ? `<span class="node-proto">${escapeHtml(protocolLabel(n.protocol))}</span>` : ''}<span class="node-server">${escapeHtml(n.server)}:${n.port}</span></div>
         </div>
         ${renderLatency(n.id)}
         <div class="node-actions">
-          <button class="btn btn-ghost test-node desktop-only" data-id="${n.id}" ${testing ? 'disabled' : ''}>测试</button>
-          <details class="rule-menu node-menu" data-rule-menu-id="node-${n.id}"><summary aria-label="节点操作" title="更多操作">⋯</summary><div class="rule-menu-list"><button class="rule-menu-action test-node mobile-only" data-id="${n.id}" ${testing ? 'disabled' : ''}>测试延迟</button><button class="rule-menu-action edit-node" data-id="${n.id}">编辑</button><button class="rule-menu-action export-node" data-id="${n.id}">复制分享链接</button><button class="rule-menu-action qrcode-node" data-id="${n.id}">显示二维码</button><button class="rule-menu-action danger rm-node" data-id="${n.id}">删除</button></div></details>
+          <button class="btn btn-ghost test-node desktop-only" data-id="${id}" ${testing ? 'disabled' : ''}>测试</button>
+          <details class="rule-menu node-menu" data-rule-menu-id="node-${id}"><summary aria-label="节点操作" title="更多操作">⋯</summary><div class="rule-menu-list"><button class="rule-menu-action test-node mobile-only" data-id="${id}" ${testing ? 'disabled' : ''}>测试延迟</button><button class="rule-menu-action edit-node" data-id="${id}">编辑</button><button class="rule-menu-action export-node" data-id="${id}" ${busyAttr('node:' + n.id)}>复制分享链接</button><button class="rule-menu-action qrcode-node" data-id="${id}" ${busyAttr('node:' + n.id)}>显示二维码</button><button class="rule-menu-action danger rm-node" data-id="${id}" ${busyAttr('node:' + n.id)}>删除</button></div></details>
         </div>
       </li>`
   }
@@ -991,7 +1024,7 @@ function renderNodes() {
     const nodes = state.nodeSort === 'latency' ? [...group.nodes].sort((a, b) => latencySortValue(a.id) - latencySortValue(b.id)) : group.nodes
     return `<div class="node-group"><div class="node-group-header"><span class="badge proxy" title="${escapeHtml(group.label)}">${escapeHtml(group.label)}</span><span class="node-group-count">${nodes.length} 个</span></div><ul class="node-list">${nodes.map(row).join('')}</ul></div>`
   }).join('')
-  return toolsHtml + groupsHtml
+  return groupsHtml
 }
 
 function protocolLabel(protocol) {
@@ -1073,18 +1106,18 @@ async function testNodes(ids) {
   const queue = ids.filter(id => !state.nodeTesting.has(id))
   if (!queue.length) return
   queue.forEach(id => state.nodeTesting.add(id))
-  renderApp()
+  backgroundRender()
   const worker = async () => {
     while (queue.length) {
       const id = queue.shift()
       try {
         state.nodeHealth[id] = await window.go.app.App.TestNode(id)
       } catch (e) {
-        state.nodeHealth[id] = { node_id: id, healthy: false, message: e.message || String(e) }
+        state.nodeHealth[id] = { node_id: id, healthy: false, message: errorText(e) }
       }
       state.nodeTesting.delete(id)
       saveNodeHealth()
-      renderApp()
+      backgroundRender()
     }
   }
   await Promise.all(Array.from({ length: Math.min(NODE_TEST_CONCURRENCY, queue.length) }, worker))
@@ -1101,7 +1134,7 @@ async function selectNode(id) {
     await refreshRules()
     showToast('已切换节点', 'success')
   } catch (e) {
-    showToast(e.message || String(e), 'error')
+    showToast(errorText(e), 'error')
   } finally {
     state.nodeSwitching = false
     renderApp()
@@ -1118,6 +1151,79 @@ function closeNodeModal() {
 
 function escapeHtml(s) {
   return String(s ?? '').replace(/[&<>"']/g, c => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]))
+}
+
+// 错误转文字：桌面版 Wails reject 的是字符串，安卓桥是 Error，Go 的 error 序列化后可能是对象
+function errorText(e, fallback = '未知错误') {
+  if (e == null) return fallback
+  if (typeof e === 'string') return e || fallback
+  if (e.message) return String(e.message)
+  if (e.error) return String(e.error)
+  if (typeof e === 'object') {
+    const text = JSON.stringify(e)
+    return text && text !== '{}' ? text : fallback
+  }
+  return String(e)
+}
+
+function busyAttr(key) {
+  return state.busy.has(key) ? 'disabled' : ''
+}
+
+// 防重复操作：同一个 key 进行中时忽略再次触发；按钮禁用由 render 按 state.busy 输出，重绘后也不会恢复可点
+async function runOnce(key, action, el) {
+  if (state.busy.has(key)) return
+  state.busy.add(key)
+  if (el) el.disabled = true
+  try {
+    await action()
+  } catch (e) {
+    showToast(errorText(e), 'error')
+  } finally {
+    state.busy.delete(key)
+    renderApp()
+  }
+}
+
+// 用户正在输入（文本框、下拉框获得焦点）时，后台轮询不整页重绘，等失焦后再补
+function userEditing() {
+  const el = document.activeElement
+  if (!el || !app.contains(el)) return false
+  return el.tagName === 'TEXTAREA' || el.tagName === 'SELECT' || (el.tagName === 'INPUT' && !/^(checkbox|radio|button|submit)$/.test(el.type))
+}
+
+function backgroundRender() {
+  if (userEditing()) state.renderPending = true
+  else renderApp()
+}
+
+// 配置读写序号：本地写入或发起新读取后，之前发出的读取结果作废，避免过期数据覆盖刚保存的值
+let configSeq = 0
+
+// 修改配置：以后端最新配置为底只改自己那部分，不拿可能过期的 state.config 整份覆盖
+async function updateConfig(mutate) {
+  const cfg = await window.go.app.App.GetConfig()
+  mutate(cfg)
+  configSeq++
+  await window.go.app.App.SaveConfig(cfg)
+  configSeq++
+  state.config = cfg
+  return cfg
+}
+
+// 按内容删除规则：下标来自可能过期的 state.config，不能直接按下标删
+function removeRule(list, target) {
+  const rules = list || []
+  const index = rules.findIndex(rule => rule.match_type === target.match_type && rule.value === target.value && rule.action === target.action)
+  return index === -1 ? rules : rules.filter((_, i) => i !== index)
+}
+
+// 文本框输入：输入法组字期间不处理，组字结束再处理一次
+function onTextInput(input, apply) {
+  let composing = false
+  input.addEventListener('compositionstart', () => { composing = true })
+  input.addEventListener('compositionend', () => { composing = false; apply() })
+  input.addEventListener('input', event => { if (!composing && !event.isComposing) apply() })
 }
 
 function showToast(msg, type = '') {
@@ -1148,10 +1254,10 @@ async function refreshStatus() {
     state.selectorSyncState = s.selector_sync_state || 'idle'
     state.selectorSyncMessage = s.selector_sync_message || ''
     const selectorSyncChanged = previousSelectorSync !== `${state.selectorSyncState}:${state.selectorSyncMessage}`
-    if (previousNodeID !== activeNodeID() || selectorSyncChanged) renderApp()
+    if (previousNodeID !== activeNodeID() || selectorSyncChanged) backgroundRender()
     updateStatusView()
   } catch (e) {
-    showToast('获取状态失败: ' + e.message, 'error')
+    showToast('获取状态失败: ' + errorText(e), 'error')
   } finally {
     state.statusRefreshing = false
   }
@@ -1185,7 +1291,7 @@ async function refreshAutoSwitch() {
       saveNodeHealth()
       changed = true
     }
-    if (changed) renderApp()
+    if (changed) backgroundRender()
     if (newEvent) showToast(event.message, event.ok ? 'success' : 'error')
   } catch (e) {
     console.error('read auto switch status failed:', e)
@@ -1195,7 +1301,7 @@ async function refreshAutoSwitch() {
 async function checkAppUpdate() {
   try {
     state.appUpdate = await window.go.app.App.CheckAppUpdate()
-    renderApp()
+    backgroundRender()
   } catch (e) {
     console.error('check sbtun update failed:', e)
   }
@@ -1204,7 +1310,7 @@ async function checkAppUpdate() {
 async function refreshSingBoxVersion() {
   try {
     state.singBoxVersion = await window.go.app.App.SingBoxVersion()
-    renderApp()
+    backgroundRender()
   } catch (e) {
     console.error('read sing-box version failed:', e)
   }
@@ -1228,7 +1334,7 @@ function updateStatusView() {
   const power = document.querySelector('#power')
   const dot = document.querySelector('.status-bar .dot')
   if (!statusText || !power || !dot) {
-    renderApp()
+    backgroundRender()
     return
   }
   statusText.textContent = statusLabel(state.statusState, state.statusMessage)
@@ -1247,22 +1353,24 @@ function updateStatusView() {
   if (trafficChart) trafficChart.innerHTML = renderTrafficChart()
   power.textContent = powerLabel()
   power.className = 'switch ' + (state.running ? 'on' : '')
+  power.disabled = state.busy.has('power')
   updateMobileHero()
   dot.className = 'dot ' + dotClass(state.statusState)
 }
 
 async function refreshConfig() {
-  if (state.configRefreshing) return
-  state.configRefreshing = true
+  const seq = ++configSeq
+  state.configReading++
   try {
     const next = await window.go.app.App.GetConfig()
+    if (seq !== configSeq) return // 期间有新的读取或本地写入，这次结果已过期
     const changed = JSON.stringify(state.config) !== JSON.stringify(next)
     state.config = next
-    if (changed) renderApp()
+    if (changed) backgroundRender()
   } catch (e) {
-    showToast('获取配置失败: ' + e.message, 'error')
+    showToast('获取配置失败: ' + errorText(e), 'error')
   } finally {
-    state.configRefreshing = false
+    state.configReading--
   }
 }
 
@@ -1296,12 +1404,16 @@ function updateRuleEditorHints() {
   if (ruleValueHint) ruleValueHint.textContent = matchType.hint
 }
 
+// 只在开了诊断且停在路由页时读取，结果变了才重绘
 async function refreshDiagnostics() {
+  if (!state.config?.diagnostics_enabled || state.view !== 'routing') return
+  const previous = JSON.stringify(state.diagnostics)
   try {
     state.diagnostics = await window.go.app.App.GetDiagnostics()
   } catch (e) {
-    state.diagnostics = { message: e.message || String(e) }
+    state.diagnostics = { message: errorText(e) }
   }
+  if (JSON.stringify(state.diagnostics) !== previous) backgroundRender()
 }
 
 async function refreshCapture() {
@@ -1323,7 +1435,7 @@ async function refreshCapture() {
       const summary = state.captureFlows.find(flow => flow.id === state.selectedCaptureID)
       if (summary) state.selectedCaptureFlow = { ...state.selectedCaptureFlow, route: summary.route, error: summary.error, status_code: summary.status_code, duration_ms: summary.duration_ms }
     }
-    if (state.view === 'capture' && document.activeElement?.id !== 'captureDomains') renderApp()
+    if (state.view === 'capture') backgroundRender()
   } catch (e) {
     console.error('capture refresh failed:', e)
   }
@@ -1339,26 +1451,28 @@ async function refreshRules() {
 }
 
 // 安卓扫码：识别到的内容放进“粘贴链接导入”，然后直接导入。
-async function scanAndImport() {
-  let text = ''
-  try {
-    text = (await window.runtime.ScanQRCode()).trim()
-  } catch (e) {
-    showToast('扫码失败：' + (e.message || e), 'error')
-    return
-  }
-  if (!text) return
-  const keep = state.nodeFormOpen && state.nodeFormTab === 'link' ? state.manualForm.url.trim() : ''
-  if (!keep) resetManualForm()
-  state.manualForm.url = [keep, text].filter(Boolean).join('\n')
-  state.editingNodeId = ''
-  state.nodeFormTab = 'link'
-  state.nodeFormOpen = true
-  renderApp()
-  document.querySelector('#importBtn')?.click()
+function scanAndImport() {
+  return runOnce('scan', async () => {
+    let text = ''
+    try {
+      text = String(await window.runtime.ScanQRCode() || '').trim()
+    } catch (e) {
+      throw new Error('扫码失败：' + errorText(e))
+    }
+    if (!text) return
+    const keep = state.nodeFormOpen && !state.editingNodeId && state.nodeFormTab === 'link' ? state.manualForm.url.trim() : ''
+    if (!keep) resetManualForm()
+    state.manualForm.url = [keep, text].filter(Boolean).join('\n')
+    state.editingNodeId = ''
+    state.nodeFormTab = 'link'
+    state.nodeFormOpen = true
+    renderApp()
+    document.querySelector('#importBtn')?.click()
+  })
 }
 
 function renderApp() {
+  state.renderPending = false
   const focused = document.activeElement
   const focusSnapshot = focused?.id ? {
     id: focused.id,
@@ -1425,7 +1539,7 @@ window.__sbtunBack = () => {
 }
 
 function bindEvents() {
-  if (!state.ruleMenuDocumentBound) {
+  if (!state.documentEventsBound) {
     document.addEventListener('click', event => {
       const clickedMenu = event.target.closest?.('.rule-menu')
       document.querySelectorAll('.rule-menu[open]').forEach(menu => {
@@ -1433,12 +1547,19 @@ function bindEvents() {
       })
     })
     document.addEventListener('keydown', event => {
-      if (event.key !== 'Escape' || state.captureBodyViewer) return
-      if (state.backup) closeBackup()
+      if (event.key !== 'Escape') return
+      if (state.captureBodyViewer) {
+        state.captureBodyViewer = null
+        renderApp()
+      } else if (state.backup) closeBackup()
       else if (state.nodeQRCode) closeNodeQRCode()
       else if (state.nodeFormOpen || state.editingNodeId) closeNodeModal()
     })
-    state.ruleMenuDocumentBound = true
+    // 输入框失焦后补上被推迟的后台重绘
+    app.addEventListener('focusout', () => setTimeout(() => {
+      if (state.renderPending && !userEditing()) renderApp()
+    }))
+    state.documentEventsBound = true
   }
   document.querySelector('#appUpdate')?.addEventListener('click', () => {
     if (state.appUpdate?.release_url) window.runtime.BrowserOpenURL(state.appUpdate.release_url)
@@ -1455,27 +1576,23 @@ function bindEvents() {
     item.addEventListener('click', async () => {
       state.view = item.dataset.view
       localStorage.setItem('sbtun-ui-view', state.view)
-      if (state.view === 'routing') await refreshIPv6Status()
+      if (state.view === 'routing') {
+        await refreshIPv6Status()
+        await refreshDiagnostics()
+      }
       if (state.view === 'capture') await refreshCapture()
       renderApp()
     })
   })
   const nodeSearch = document.querySelector('#nodeSearch')
-  if (nodeSearch) nodeSearch.addEventListener('input', () => {
+  if (nodeSearch) onTextInput(nodeSearch, () => {
     state.nodeSearch = nodeSearch.value
     localStorage.setItem('sbtun-ui-node-search', state.nodeSearch)
-    renderApp()
-  })
-  document.querySelector('#importFromSearch')?.addEventListener('click', () => {
-    resetManualForm()
-    state.manualForm.url = state.nodeSearch.trim()
-    state.nodeSearch = ''
-    localStorage.setItem('sbtun-ui-node-search', '')
-    state.editingNodeId = ''
-    state.nodeFormTab = 'link'
-    state.nodeFormOpen = true
-    renderApp()
-    document.querySelector('#importBtn')?.click()
+    const list = document.querySelector('#nodeList')
+    if (!list) return renderApp()
+    list.innerHTML = renderNodeList()
+    bindNodeList(list)
+    updateNodeHeading()
   })
   const toggleNodeForm = document.querySelector('#toggleNodeForm')
   if (toggleNodeForm) toggleNodeForm.addEventListener('click', () => {
@@ -1512,47 +1629,24 @@ function bindEvents() {
     localStorage.setItem('sbtun-ui-rules-tab', state.rulesTab)
     renderApp()
   }))
-  const updateSingBox = document.querySelector('#updateSingBox')
-  if (updateSingBox) {
-    updateSingBox.addEventListener('click', async () => {
-      state.singBoxUpdating = true
-      state.singBoxUpdateState = 'loading'
-      state.singBoxUpdateMessage = '正在检查官方稳定版并校验资源…'
+  document.querySelector('#updateSingBox')?.addEventListener('click', async () => {
+    if (state.singBoxUpdating) return
+    state.singBoxUpdating = true
+    renderApp()
+    try {
+      const result = await window.go.app.App.UpdateSingBox()
+      state.singBoxVersion = result.current_version || state.singBoxVersion
+      showToast(result.message || 'sing-box 已是最新版本', 'success')
+    } catch (e) {
+      showToast('更新内核失败：' + errorText(e), 'error')
+    } finally {
+      state.singBoxUpdating = false
       renderApp()
-      try {
-        const result = await window.go.app.App.UpdateSingBox()
-        state.singBoxVersion = result.current_version || state.singBoxVersion
-        state.singBoxUpdateState = 'success'
-        state.singBoxUpdateMessage = result.message || 'sing-box 更新完成'
-        showToast(result.message || 'sing-box 更新完成', 'success')
-      } catch (e) {
-        state.singBoxUpdateState = 'error'
-        state.singBoxUpdateMessage = e.message || String(e)
-        showToast(e.message || String(e), 'error')
-      } finally {
-        state.singBoxUpdating = false
-        renderApp()
-      }
-    })
-  }
-  document.querySelectorAll('[data-scroll]').forEach(item => {
-    item.addEventListener('click', () => document.querySelector('#' + item.dataset.scroll)?.scrollIntoView({ behavior: 'smooth' }))
-  })
-  for (const id of ['nodeUrl', 'nodeName', 'nodeServer', 'nodePort']) {
-    const input = document.querySelector('#' + id)
-    if (input) {
-      input.addEventListener('input', () => {
-        const key = id === 'nodeUrl' ? 'url' : id === 'nodeName' ? 'name' : id === 'nodeServer' ? 'server' : 'port'
-        state.manualForm[key] = input.value
-      })
-      if (input.type === 'checkbox') {
-        input.addEventListener('change', () => { state.manualForm[id === 'nodeTLS' ? 'tls' : 'insecure'] = input.checked })
-      }
     }
-  }
-  for (const id of ['nodeTLS', 'nodeInsecure']) {
+  })
+  for (const [id, key] of [['nodeUrl', 'url'], ['nodeName', 'name'], ['nodeServer', 'server'], ['nodePort', 'port']]) {
     const input = document.querySelector('#' + id)
-    if (input) input.addEventListener('change', () => { state.manualForm[id === 'nodeTLS' ? 'tls' : 'insecure'] = input.checked })
+    if (input) input.addEventListener('input', () => { state.manualForm[key] = input.value })
   }
   document.querySelectorAll('[data-setting]').forEach(input => {
     const update = () => {
@@ -1580,77 +1674,56 @@ function bindEvents() {
     ruleAction.addEventListener('change', () => { state.customRuleForm.action = ruleAction.value })
   }
   const addRuleBtn = document.querySelector('#addRuleBtn')
-  if (addRuleBtn) {
-    addRuleBtn.addEventListener('click', async () => {
-      const value = state.customRuleForm.value.trim()
-      const error = validateCustomRule(state.customRuleForm.match_type, value)
-      if (error) { showToast(error, 'error'); return }
-      const cfg = JSON.parse(JSON.stringify(state.config))
-      cfg.custom_rules = cfg.custom_rules || []
-      const duplicate = cfg.custom_rules.some(rule => rule.match_type === state.customRuleForm.match_type && rule.value.toLowerCase() === value.toLowerCase() && rule.action === state.customRuleForm.action)
-      if (duplicate) { showToast('这条规则已经存在', 'error'); return }
-      cfg.custom_rules.push({ match_type: state.customRuleForm.match_type, value, action: state.customRuleForm.action })
-      addRuleBtn.disabled = true
-      try {
-        await window.go.app.App.SaveConfig(cfg)
-        state.config = cfg
-        state.customRuleForm.value = ''
-        renderApp()
-        showToast('规则已添加', 'success')
-      } catch (e) { showToast(e.message || String(e), 'error') }
-      finally { addRuleBtn.disabled = false }
-    })
-  }
+  if (addRuleBtn) addRuleBtn.addEventListener('click', () => {
+    const { match_type: matchType, action } = state.customRuleForm
+    const value = state.customRuleForm.value.trim()
+    const error = validateCustomRule(matchType, value)
+    if (error) return showToast(error, 'error')
+    runOnce('customRule', async () => {
+      await updateConfig(cfg => {
+        cfg.custom_rules = cfg.custom_rules || []
+        if (cfg.custom_rules.some(rule => rule.match_type === matchType && rule.value.toLowerCase() === value.toLowerCase() && rule.action === action)) throw new Error('这条规则已经存在')
+        cfg.custom_rules.push({ match_type: matchType, value, action })
+      })
+      state.customRuleForm.value = ''
+      showToast('规则已添加', 'success')
+    }, addRuleBtn)
+  })
   const ruleImport = document.querySelector('#ruleImport')
   if (ruleImport) {
     ruleImport.value = state.customRuleImport
     ruleImport.addEventListener('input', () => { state.customRuleImport = ruleImport.value })
   }
   const importRuleBtn = document.querySelector('#importRuleBtn')
-  if (importRuleBtn) {
-    importRuleBtn.addEventListener('click', async () => {
-      const source = state.customRuleImport.trim()
-      if (!source) { showToast('请输入规则链接、文件路径或文本', 'error'); return }
-      importRuleBtn.disabled = true
-      try {
-        const count = await window.go.app.App.ImportCustomRules(source)
-        state.customRuleImport = ''
-        await refreshConfig()
-        showToast('已导入 ' + count + ' 条规则', 'success')
-      } catch (e) { showToast(e.message || String(e), 'error') }
-      finally { importRuleBtn.disabled = false }
-    })
-  }
-  document.querySelectorAll('.remove-custom-rule').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const cfg = JSON.parse(JSON.stringify(state.config))
-      cfg.custom_rules.splice(Number(btn.dataset.index), 1)
-      try {
-        await window.go.app.App.SaveConfig(cfg)
-        state.config = cfg
-        renderApp()
-        showToast('规则已删除', 'success')
-      } catch (e) { showToast(e.message || String(e), 'error') }
-    })
+  if (importRuleBtn) importRuleBtn.addEventListener('click', () => {
+    const source = state.customRuleImport.trim()
+    if (!source) return showToast('请输入规则链接、文件路径或文本', 'error')
+    runOnce('importRule', async () => {
+      const count = await window.go.app.App.ImportCustomRules(source)
+      state.customRuleImport = ''
+      await refreshConfig()
+      showToast('已导入 ' + count + ' 条规则', 'success')
+    }, importRuleBtn)
   })
-  document.querySelectorAll('[data-power]').forEach(power => {
-    power.addEventListener('click', async () => {
-      document.querySelectorAll('[data-power]').forEach(button => { button.disabled = true })
+  document.querySelectorAll('.remove-custom-rule').forEach(btn => btn.addEventListener('click', () => {
+    const target = state.config?.custom_rules?.[Number(btn.dataset.index)]
+    if (!target) return
+    runOnce('customRule', async () => {
+      await updateConfig(cfg => { cfg.custom_rules = removeRule(cfg.custom_rules, target) })
+      showToast('规则已删除', 'success')
+    }, btn)
+  }))
+  document.querySelectorAll('[data-power]').forEach(power => power.addEventListener('click', () => {
+    runOnce('power', async () => {
+      updateStatusView()
       try {
-        if (state.running) {
-          await window.go.app.App.Stop()
-        } else {
-          await window.go.app.App.Start()
-        }
-        await refreshStatus()
-      } catch (e) {
-        showToast(e.message || String(e), 'error')
-        await refreshStatus()
+        if (state.running) await window.go.app.App.Stop()
+        else await window.go.app.App.Start()
       } finally {
-        document.querySelectorAll('[data-power]').forEach(button => { button.disabled = false })
+        await refreshStatus()
       }
     })
-  })
+  }))
 
   document.querySelectorAll('.mode-btn').forEach(btn => {
     btn.addEventListener('click', async () => {
@@ -1658,10 +1731,10 @@ function bindEvents() {
       try {
         await window.go.app.App.SetRoutingMode(mode)
         await refreshConfig()
-    await refreshRules()
+        await refreshRules()
         showToast('路由模式已切换', 'success')
       } catch (e) {
-        showToast(e.message, 'error')
+        showToast(errorText(e), 'error')
       }
     })
   })
@@ -1676,67 +1749,37 @@ function bindEvents() {
         showToast(enabled ? '已开启自动切换' : '已关闭自动切换', 'success')
       } catch (e) {
         autoSwitchToggle.checked = !enabled
-        showToast(e.message || String(e), 'error')
+        showToast(errorText(e), 'error')
       }
     })
   }
+  // 开关失败时 runOnce 结束会按 state.config 重绘，勾选状态自动回到实际值
   const diagnosticsToggle = document.querySelector('#diagnosticsToggle')
-  if (diagnosticsToggle) {
-    diagnosticsToggle.addEventListener('change', async () => {
-      const cfg = JSON.parse(JSON.stringify(state.config))
-      cfg.diagnostics_enabled = diagnosticsToggle.checked
-      try {
-        await window.go.app.App.SaveConfig(cfg)
-        state.config = cfg
-        await refreshDiagnostics()
-        renderApp()
-      } catch (e) {
-        diagnosticsToggle.checked = !diagnosticsToggle.checked
-        showToast(e.message || String(e), 'error')
-      }
-    })
-  }
-
+  if (diagnosticsToggle) diagnosticsToggle.addEventListener('change', () => {
+    const enabled = diagnosticsToggle.checked
+    runOnce('diagnostics', async () => {
+      await updateConfig(cfg => { cfg.diagnostics_enabled = enabled })
+      if (!enabled) state.diagnostics = null
+      await refreshDiagnostics()
+    }, diagnosticsToggle)
+  })
   const ipv6Toggle = document.querySelector('#ipv6Toggle')
-  if (ipv6Toggle) {
-    ipv6Toggle.addEventListener('change', async () => {
-      const cfg = JSON.parse(JSON.stringify(state.config))
-      cfg.ipv6_enabled = ipv6Toggle.checked
-      ipv6Toggle.disabled = true
-      try {
-        await window.go.app.App.SaveConfig(cfg)
-        state.config = cfg
-        await refreshIPv6Status()
-        renderApp()
-        showToast(cfg.ipv6_enabled && !state.ipv6Status?.available ? '设备没有可用 IPv6，已自动使用 IPv4' : 'IPv6 设置已应用', 'success')
-      } catch (e) {
-        ipv6Toggle.checked = !ipv6Toggle.checked
-        showToast(e.message || String(e), 'error')
-      } finally {
-        ipv6Toggle.disabled = false
-      }
-    })
-  }
-
+  if (ipv6Toggle) ipv6Toggle.addEventListener('change', () => {
+    const enabled = ipv6Toggle.checked
+    runOnce('ipv6', async () => {
+      await updateConfig(cfg => { cfg.ipv6_enabled = enabled })
+      await refreshIPv6Status()
+      showToast(enabled && !state.ipv6Status?.available ? '设备没有可用 IPv6，已自动使用 IPv4' : 'IPv6 设置已应用', 'success')
+    }, ipv6Toggle)
+  })
   const webrtcProtectionToggle = document.querySelector('#webrtcProtectionToggle')
-  if (webrtcProtectionToggle) {
-    webrtcProtectionToggle.addEventListener('change', async () => {
-      const cfg = JSON.parse(JSON.stringify(state.config))
-      cfg.webrtc_protection_enabled = webrtcProtectionToggle.checked
-      webrtcProtectionToggle.disabled = true
-      try {
-        await window.go.app.App.SaveConfig(cfg)
-        state.config = cfg
-        renderApp()
-        showToast(cfg.webrtc_protection_enabled ? 'WebRTC 防泄漏已启用' : 'WebRTC 防泄漏已关闭', 'success')
-      } catch (e) {
-        webrtcProtectionToggle.checked = !webrtcProtectionToggle.checked
-        showToast(e.message || String(e), 'error')
-      } finally {
-        webrtcProtectionToggle.disabled = false
-      }
-    })
-  }
+  if (webrtcProtectionToggle) webrtcProtectionToggle.addEventListener('change', () => {
+    const enabled = webrtcProtectionToggle.checked
+    runOnce('webrtc', async () => {
+      await updateConfig(cfg => { cfg.webrtc_protection_enabled = enabled })
+      showToast(enabled ? 'WebRTC 防泄漏已启用' : 'WebRTC 防泄漏已关闭', 'success')
+    }, webrtcProtectionToggle)
+  })
 
   const captureDomains = document.querySelector('#captureDomains')
   const captureSettings = document.querySelector('#captureSettings')
@@ -1761,9 +1804,9 @@ function bindEvents() {
     await refreshCapture()
   }
   const captureEnabled = document.querySelector('#captureEnabled')
-  if (captureEnabled) captureEnabled.addEventListener('change', async () => {
-    const domains = [...new Set(readCaptureDomains())]
-    if (captureEnabled.checked && !domains.length) {
+  if (captureEnabled) captureEnabled.addEventListener('change', () => {
+    const enabled = captureEnabled.checked
+    if (enabled && !readCaptureDomains().length) {
       captureEnabled.checked = false
       state.captureEnabledDraft = false
       state.captureEnabledDirty = false
@@ -1771,76 +1814,62 @@ function bindEvents() {
       captureDomains?.focus()
       return
     }
-    state.captureEnabledDraft = captureEnabled.checked
+    state.captureEnabledDraft = enabled
     state.captureEnabledDirty = true
-    captureEnabled.disabled = true
-    try {
-      await applyCaptureSettings(captureEnabled.checked)
-      showToast(captureEnabled.checked ? (state.captureStatus?.running ? '分析器已启动' : '已启用，开启 TUN 后开始分析') : '分析器已关闭', 'success')
-    } catch (e) {
-      state.captureEnabledDraft = Boolean(state.config?.capture_enabled)
-      state.captureEnabledDirty = false
-      showToast(e.message || String(e), 'error')
-      renderApp()
-    } finally { captureEnabled.disabled = false }
+    runOnce('capture', async () => {
+      try {
+        await applyCaptureSettings(enabled)
+      } catch (e) {
+        state.captureEnabledDraft = Boolean(state.config?.capture_enabled)
+        state.captureEnabledDirty = false
+        throw e
+      }
+      showToast(enabled ? (state.captureStatus?.running ? '分析器已启动' : '已启用，开启 TUN 后开始分析') : '分析器已关闭', 'success')
+    }, captureEnabled)
   })
   const saveCapture = document.querySelector('#saveCapture')
-  if (saveCapture) saveCapture.addEventListener('click', async () => {
+  if (saveCapture) saveCapture.addEventListener('click', () => {
     const enabled = state.captureEnabledDirty ? state.captureEnabledDraft : Boolean(captureEnabled?.checked)
-    saveCapture.disabled = true
-    try {
+    runOnce('capture', async () => {
       await applyCaptureSettings(enabled)
       showToast(enabled && !state.captureStatus?.running ? '配置已保存，开启 TUN 后开始分析' : '分析配置已应用', 'success')
-    } catch (e) { showToast(e.message || String(e), 'error') }
-    finally { saveCapture.disabled = false }
+    }, saveCapture)
   })
-  const installCaptureCA = document.querySelector('#installCaptureCA')
   const captureCertLevel = document.querySelector('#captureCertLevel')
-  if (installCaptureCA) installCaptureCA.addEventListener('click', async () => {
-    installCaptureCA.disabled = true
-    try {
-      await window.go.app.App.InstallCaptureCertificate(captureCertLevel?.value || 'system')
-      await refreshCapture()
-      showToast(`分析证书已安装（${captureCertLevel?.value === 'user' ? '当前用户' : '系统级'}）`, 'success')
-    } catch (e) { showToast(e.message || String(e), 'error') }
-    finally { installCaptureCA.disabled = false }
-  })
-  const uninstallCaptureCA = document.querySelector('#uninstallCaptureCA')
-  if (uninstallCaptureCA) uninstallCaptureCA.addEventListener('click', async () => {
-    uninstallCaptureCA.disabled = true
-    try {
-      await window.go.app.App.UninstallCaptureCertificate(captureCertLevel?.value || 'system')
-      await refreshCapture()
-      showToast('分析证书已卸载', 'success')
-    } catch (e) { showToast(e.message || String(e), 'error') }
-    finally { uninstallCaptureCA.disabled = false }
-  })
-  const clearCapture = document.querySelector('#clearCapture')
-  if (clearCapture) clearCapture.addEventListener('click', async () => {
-    if (!window.confirm('确定删除全部抓包记录？此操作无法撤销。')) return
-    await window.go.app.App.ClearCaptureFlows()
-    state.selectedCaptureID = 0
-    state.selectedCaptureFlow = null
+  const certLevel = () => captureCertLevel?.value || 'system'
+  document.querySelector('#installCaptureCA')?.addEventListener('click', event => runOnce('captureCA', async () => {
+    const level = certLevel()
+    await window.go.app.App.InstallCaptureCertificate(level)
     await refreshCapture()
-  })
-  const saveCaptureFile = document.querySelector('#saveCaptureFile')
-  if (saveCaptureFile) saveCaptureFile.addEventListener('click', async () => {
-    saveCaptureFile.disabled = true
-    try {
-      await window.go.app.App.SaveCaptureFlows()
+    showToast(`分析证书已安装（${level === 'user' ? '当前用户' : '系统级'}）`, 'success')
+  }, event.currentTarget))
+  document.querySelector('#uninstallCaptureCA')?.addEventListener('click', event => runOnce('captureCA', async () => {
+    await window.go.app.App.UninstallCaptureCertificate(certLevel())
+    await refreshCapture()
+    showToast('分析证书已卸载', 'success')
+  }, event.currentTarget))
+  document.querySelector('#clearCapture')?.addEventListener('click', event => {
+    if (!window.confirm('确定删除全部抓包记录？此操作无法撤销。')) return
+    runOnce('captureFile', async () => {
+      await window.go.app.App.ClearCaptureFlows()
+      state.selectedCaptureID = 0
+      state.selectedCaptureFlow = null
       await refreshCapture()
-      showToast('抓包已保存为 JSON', 'success')
-    } catch (e) { showToast(e.message || String(e), 'error') }
-    finally { saveCaptureFile.disabled = false }
+    }, event.currentTarget)
   })
+  document.querySelector('#saveCaptureFile')?.addEventListener('click', event => runOnce('captureFile', async () => {
+    await window.go.app.App.SaveCaptureFlows()
+    await refreshCapture()
+    showToast('抓包已保存为 JSON', 'success')
+  }, event.currentTarget))
   document.querySelectorAll('[data-capture-id]').forEach(row => row.addEventListener('click', async () => {
     state.selectedCaptureID = Number(row.dataset.captureId)
     try { state.selectedCaptureFlow = await window.go.app.App.GetCaptureFlow(state.selectedCaptureID) }
-    catch (e) { return showToast(e.message || String(e), 'error') }
+    catch (e) { return showToast(errorText(e), 'error') }
     renderApp()
   }))
   const captureSearch = document.querySelector('#captureSearch')
-  if (captureSearch) captureSearch.addEventListener('input', () => {
+  if (captureSearch) onTextInput(captureSearch, () => {
     state.captureSearch = captureSearch.value
     state.captureListScroll = 0
     renderApp()
@@ -1887,39 +1916,20 @@ function bindEvents() {
       await window.runtime.ClipboardSetText(state.captureBodyViewer.body)
       showToast('正文已复制', 'success')
     } catch (e) {
-      showToast(e.message || String(e), 'error')
+      showToast(errorText(e), 'error')
     }
-  })
-  if (state.captureBodyViewer) {
-    document.addEventListener('keydown', function closeCaptureBodyOnEscape(event) {
-      if (event.key !== 'Escape' || !state.captureBodyViewer) return
-      state.captureBodyViewer = null
-      renderApp()
-      document.removeEventListener('keydown', closeCaptureBodyOnEscape)
-    }, { once: true })
-  }
-
-  document.querySelectorAll('.node-item[data-node-id]').forEach(row => {
-    row.addEventListener('click', event => {
-      if (event.target.closest('button, input, details, a')) return
-      selectNode(row.dataset.nodeId)
-    })
-    row.addEventListener('keydown', event => {
-      if (event.target !== row || (event.key !== 'Enter' && event.key !== ' ')) return
-      event.preventDefault()
-      selectNode(row.dataset.nodeId)
-    })
   })
 
   document.querySelectorAll('.update-sub').forEach(btn => {
     btn.addEventListener('click', async () => {
+      if (state.subUpdating) return
       state.subUpdating = btn.dataset.id
       renderApp()
       try {
         const result = await window.go.app.App.UpdateSubscription(btn.dataset.id)
         showToast('订阅已更新 · ' + subscriptionResultText(result), 'success')
       } catch (e) {
-        showToast('订阅更新失败: ' + (e.message || String(e)), 'error')
+        showToast('订阅更新失败: ' + errorText(e), 'error')
       } finally {
         state.subUpdating = ''
         await refreshConfig()
@@ -1931,15 +1941,16 @@ function bindEvents() {
   const updateAllSubs = document.querySelector('#updateAllSubs')
   if (updateAllSubs) {
     updateAllSubs.addEventListener('click', async () => {
+      if (state.subUpdating) return
       state.subUpdating = '*'
       renderApp()
       try {
         const results = await window.go.app.App.UpdateAllSubscriptions()
         const failed = results.filter(r => r.error)
-        if (failed.length) showToast('部分订阅更新失败: ' + failed.map(r => `${r.name || r.id}: ${r.error}`).join('; '), 'error')
+        if (failed.length) showToast('部分订阅更新失败: ' + failed.map(r => `${r.name || r.id}: ${errorText(r.error)}`).join('; '), 'error')
         else showToast('全部订阅已更新', 'success')
       } catch (e) {
-        showToast(e.message || String(e), 'error')
+        showToast(errorText(e), 'error')
       } finally {
         state.subUpdating = ''
         await refreshConfig()
@@ -1957,37 +1968,13 @@ function bindEvents() {
         await refreshConfig()
         showToast('订阅已删除', 'success')
       } catch (e) {
-        showToast(e.message || String(e), 'error')
+        showToast(errorText(e), 'error')
       }
     })
   })
 
-  document.querySelectorAll('.rm-node').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const node = state.config?.nodes?.find(item => item.id === btn.dataset.id)
-      if (!window.confirm(`确定删除节点“${node?.name || '此节点'}”吗？`)) return
-      try {
-        await window.go.app.App.RemoveNode(btn.dataset.id)
-        state.selectedNodes.delete(btn.dataset.id)
-        await refreshConfig()
-        await refreshRules()
-        saveNodeHealth()
-        renderApp()
-        showToast('节点已删除', 'success')
-      } catch (e) {
-        showToast(e.message, 'error')
-      }
-    })
-  })
-
+  bindNodeList(document)
   const toggleSelectNodes = document.querySelector('#toggleSelectNodes')
-  document.querySelectorAll('.node-select').forEach(input => {
-    input.addEventListener('change', () => {
-      if (input.checked) state.selectedNodes.add(input.dataset.id)
-      else state.selectedNodes.delete(input.dataset.id)
-      renderApp()
-    })
-  })
   if (toggleSelectNodes) toggleSelectNodes.addEventListener('click', () => {
     const ids = visibleNodeIDs()
     const allSelected = ids.length > 0 && ids.every(id => state.selectedNodes.has(id))
@@ -1997,46 +1984,32 @@ function bindEvents() {
     })
     renderApp()
   })
-  const selectedIDs = selectedNodeIDs
-  const copyNodeLinks = async ids => {
-    const links = await window.go.app.App.ExportNodes(ids)
-    if (!links?.length) throw new Error('没有可导出的节点')
-    await window.runtime.ClipboardSetText(links.join('\n'))
-    return links.length
-  }
   const batchExport = document.querySelector('#batchExportNodes')
-  if (batchExport) batchExport.addEventListener('click', async () => {
-    const ids = selectedIDs()
+  if (batchExport) batchExport.addEventListener('click', () => {
+    const ids = selectedNodeIDs()
     if (!ids.length) return showToast('请先选择节点', 'error')
-    batchExport.disabled = true
-    try {
+    runOnce('export', async () => {
       const count = await copyNodeLinks(ids)
       showToast(`已复制 ${count} 个节点链接`, 'success')
-    } catch (e) {
-      showToast(e.message || String(e), 'error')
-    } finally {
-      batchExport.disabled = false
-    }
+    }, batchExport)
   })
   const batchDelete = document.querySelector('#batchDeleteNodes')
-  if (batchDelete) batchDelete.addEventListener('click', async () => {
-    const ids = selectedIDs()
+  if (batchDelete) batchDelete.addEventListener('click', () => {
+    const ids = selectedNodeIDs()
     if (!ids.length) return showToast('请先选择节点', 'error')
     if (!confirm(`确定删除选中的 ${ids.length} 个节点吗？`)) return
-    batchDelete.disabled = true
-    try {
+    runOnce('delete', async () => {
       await window.go.app.App.RemoveNodes(ids)
       ids.forEach(id => state.selectedNodes.delete(id))
       await refreshConfig()
       saveNodeHealth()
-      renderApp()
       showToast('批量删除成功', 'success')
-    } catch (e) { showToast(e.message || String(e), 'error') }
-    finally { batchDelete.disabled = false }
+    }, batchDelete)
   })
   const batchTest = document.querySelector('#batchTestNodes')
   if (batchTest) batchTest.addEventListener('click', async () => {
-    const selected = selectedIDs()
+    if (state.batchTesting) return
+    const selected = selectedNodeIDs()
     const ids = selected.length ? selected : visibleNodeIDs()
     if (!ids.length) return
     state.batchTesting = true
@@ -2056,42 +2029,6 @@ function bindEvents() {
       renderApp()
     })
   })
-  document.querySelectorAll('.edit-node').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const node = state.config.nodes.find(item => item.id === btn.dataset.id)
-      if (!node) return
-      beginEditNode(node)
-    })
-  })
-  document.querySelectorAll('.export-node').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      btn.disabled = true
-      try {
-        await copyNodeLinks([btn.dataset.id])
-        showToast('节点链接已复制', 'success')
-      } catch (e) {
-        showToast(e.message || String(e), 'error')
-      } finally {
-        btn.disabled = false
-      }
-    })
-  })
-  document.querySelectorAll('.qrcode-node').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      const node = state.config.nodes.find(item => item.id === btn.dataset.id)
-      if (!node) return
-      btn.disabled = true
-      try {
-        const qr = await window.go.app.App.NodeQRCode(node.id)
-        state.nodeQRCode = { name: node.name, link: qr.link, image: qr.image }
-        renderApp()
-      } catch (e) {
-        showToast(e.message || String(e), 'error')
-      } finally {
-        btn.disabled = false
-      }
-    })
-  })
   document.querySelectorAll('[data-close-node-qrcode]').forEach(element => element.addEventListener('click', closeNodeQRCode))
   bindBackupModal()
   document.querySelector('#copyNodeQRCodeLink')?.addEventListener('click', async () => {
@@ -2100,32 +2037,23 @@ function bindEvents() {
       await window.runtime.ClipboardSetText(state.nodeQRCode.link)
       showToast('节点链接已复制', 'success')
     } catch (e) {
-      showToast(e.message || String(e), 'error')
+      showToast(errorText(e), 'error')
     }
-  })
-  document.querySelectorAll('.test-node').forEach(btn => {
-    btn.addEventListener('click', async () => {
-      await testNodes([btn.dataset.id])
-      const latency = nodeLatency(btn.dataset.id)
-      if (latency && !latency.ok) showToast(latency.label, 'error')
-    })
   })
 
   document.querySelectorAll('.update-rule').forEach(btn => {
     btn.addEventListener('click', async () => {
+      if (state.ruleUpdating || state.allRulesUpdating) return
       state.ruleUpdating = btn.dataset.id
       renderApp()
       try {
         await window.go.app.App.UpdateRule(btn.dataset.id)
-        state.ruleUpdating = ''
-        await refreshRules()
         showToast('规则集更新成功', 'success')
       } catch (e) {
-        state.ruleUpdating = ''
-        showToast(e.message || String(e), 'error')
-        await refreshRules()
+        showToast(errorText(e), 'error')
       } finally {
         state.ruleUpdating = ''
+        await refreshRules()
       }
     })
   })
@@ -2159,24 +2087,19 @@ function bindEvents() {
   if (ruleSetName) ruleSetName.addEventListener('input', () => { state.ruleSetForm.name = ruleSetName.value })
   if (ruleSetURL) ruleSetURL.addEventListener('input', () => { state.ruleSetForm.url = ruleSetURL.value })
   const addRuleSetBtn = document.querySelector('#addRuleSetBtn')
-  if (addRuleSetBtn) addRuleSetBtn.addEventListener('click', async () => {
+  if (addRuleSetBtn) addRuleSetBtn.addEventListener('click', () => {
     const name = state.ruleSetForm.name.trim()
     const url = state.ruleSetForm.url.trim()
-    if (!name || !url) { showToast('请输入规则集名称和 URL', 'error'); return }
-    addRuleSetBtn.disabled = true
-    const editing = Boolean(state.editingRuleSetID)
-    try {
-      if (state.editingRuleSetID) {
-        await window.go.app.App.EditRuleSet(state.editingRuleSetID, name, url)
-      } else {
-        await window.go.app.App.AddRuleSet(name, url)
-      }
+    if (!name || !url) return showToast('请输入规则集名称和 URL', 'error')
+    const editingID = state.editingRuleSetID
+    runOnce('ruleSet', async () => {
+      if (editingID) await window.go.app.App.EditRuleSet(editingID, name, url)
+      else await window.go.app.App.AddRuleSet(name, url)
       state.ruleSetForm = { name: '', url: '' }
       state.editingRuleSetID = ''
       await refreshRules()
-      showToast(editing ? '规则集已修改' : '规则集已添加', 'success')
-    } catch (e) { showToast(e.message || String(e), 'error') }
-    finally { addRuleSetBtn.disabled = false }
+      showToast(editingID ? '规则集已修改' : '规则集已添加', 'success')
+    }, addRuleSetBtn)
   })
   const cancelEditRuleSet = document.querySelector('#cancelEditRuleSet')
   if (cancelEditRuleSet) cancelEditRuleSet.addEventListener('click', () => {
@@ -2184,59 +2107,51 @@ function bindEvents() {
     state.ruleSetForm = { name: '', url: '' }
     renderApp()
   })
-  document.querySelectorAll('.toggle-rule').forEach(btn => btn.addEventListener('click', async () => {
+  document.querySelectorAll('.toggle-rule').forEach(btn => btn.addEventListener('click', () => {
     const rule = state.rules?.find(item => item.id === btn.dataset.id)
     if (!rule) return
-    btn.disabled = true
-    try {
+    runOnce('rule:' + rule.id, async () => {
       await window.go.app.App.SetRuleEnabled(rule.id, !rule.enabled)
       await refreshRules()
       showToast(rule.enabled ? '规则集已停用' : '规则集已启用', 'success')
-    } catch (e) { showToast(e.message || String(e), 'error') }
-    finally { btn.disabled = false }
+    }, btn)
   }))
-  document.querySelectorAll('.delete-rule').forEach(btn => btn.addEventListener('click', async () => {
+  document.querySelectorAll('.delete-rule').forEach(btn => btn.addEventListener('click', () => {
     if (!window.confirm('删除这个规则集及其本地文件？')) return
-    btn.disabled = true
-    try {
+    runOnce('rule:' + btn.dataset.id, async () => {
       await window.go.app.App.DeleteRuleSet(btn.dataset.id)
       await refreshRules()
       showToast('规则集已删除', 'success')
-    } catch (e) { showToast(e.message || String(e), 'error') }
-    finally { btn.disabled = false }
+    }, btn)
   }))
   const restoreDefaultRules = document.querySelector('#restoreDefaultRules')
-  if (restoreDefaultRules) restoreDefaultRules.addEventListener('click', async () => {
-    restoreDefaultRules.disabled = true
-    try {
-      await window.go.app.App.RestoreDefaultRuleSets()
-      await refreshRules()
-      showToast('默认规则集已恢复', 'success')
-    } catch (e) { showToast(e.message || String(e), 'error') }
-    finally { restoreDefaultRules.disabled = false }
-  })
+  if (restoreDefaultRules) restoreDefaultRules.addEventListener('click', () => runOnce('ruleSet', async () => {
+    await window.go.app.App.RestoreDefaultRuleSets()
+    await refreshRules()
+    showToast('默认规则集已恢复', 'success')
+  }, restoreDefaultRules))
 
+  const filterRuleMatchType = document.querySelector('#filterRuleMatchType')
+  const filterRuleValue = document.querySelector('#filterRuleValue')
+  if (filterRuleMatchType) filterRuleMatchType.addEventListener('change', () => { state.filterRuleForm.match_type = filterRuleMatchType.value })
+  if (filterRuleValue) filterRuleValue.addEventListener('input', () => { state.filterRuleForm.value = filterRuleValue.value })
   const addFilterRuleBtn = document.querySelector('#addFilterRuleBtn')
-  if (addFilterRuleBtn) addFilterRuleBtn.addEventListener('click', async () => {
-    const matchType = document.querySelector('#filterRuleMatchType')?.value || 'domain_suffix'
-    const value = document.querySelector('#filterRuleValue')?.value.trim() || ''
+  if (addFilterRuleBtn) addFilterRuleBtn.addEventListener('click', () => {
+    const matchType = state.filterRuleForm.match_type
+    const value = state.filterRuleForm.value.trim()
+    if (!value) return showToast('请输入过滤内容', 'error')
     const error = validateCustomRule(matchType, value)
-    if (error && matchType !== 'ip_cidr') { showToast(error, 'error'); return }
-    if (!value) { showToast('请输入过滤内容', 'error'); return }
-    const cfg = JSON.parse(JSON.stringify(state.config))
-    cfg.dns_filter_rules = cfg.dns_filter_rules || []
-    const duplicate = cfg.dns_filter_rules.some(rule => rule.match_type === matchType && rule.value.toLowerCase() === value.toLowerCase())
-    if (duplicate) { showToast('这条过滤规则已经存在', 'error'); return }
-    cfg.dns_filter_rules.push({ match_type: matchType, value, action: 'block' })
-    addFilterRuleBtn.disabled = true
-    try {
-      await window.go.app.App.SaveConfig(cfg)
-      state.config = cfg
+    if (error && matchType !== 'ip_cidr') return showToast(error, 'error')
+    runOnce('filterRule', async () => {
+      await updateConfig(cfg => {
+        cfg.dns_filter_rules = cfg.dns_filter_rules || []
+        if (cfg.dns_filter_rules.some(rule => rule.match_type === matchType && rule.value.toLowerCase() === value.toLowerCase())) throw new Error('这条过滤规则已经存在')
+        cfg.dns_filter_rules.push({ match_type: matchType, value, action: 'block' })
+      })
+      state.filterRuleForm = { match_type: 'domain_suffix', value: '' }
       state.dnsFilterFormOpen = false
-      renderApp()
       showToast('过滤规则已添加', 'success')
-    } catch (e) { showToast(e.message || String(e), 'error') }
-    finally { addFilterRuleBtn.disabled = false }
+    }, addFilterRuleBtn)
   })
   const openFilterRuleBtn = document.querySelector('#openFilterRuleBtn')
   if (openFilterRuleBtn) openFilterRuleBtn.addEventListener('click', () => {
@@ -2246,44 +2161,38 @@ function bindEvents() {
   const cancelFilterRuleBtn = document.querySelector('#cancelFilterRuleBtn')
   if (cancelFilterRuleBtn) cancelFilterRuleBtn.addEventListener('click', () => {
     state.dnsFilterFormOpen = false
+    state.filterRuleForm = { match_type: 'domain_suffix', value: '' }
     renderApp()
   })
-  document.querySelectorAll('.remove-filter-rule').forEach(btn => btn.addEventListener('click', async () => {
-    const cfg = JSON.parse(JSON.stringify(state.config))
-    cfg.dns_filter_rules.splice(Number(btn.dataset.index), 1)
-    try {
-      await window.go.app.App.SaveConfig(cfg)
-      state.config = cfg
-      renderApp()
+  document.querySelectorAll('.remove-filter-rule').forEach(btn => btn.addEventListener('click', () => {
+    const target = state.config?.dns_filter_rules?.[Number(btn.dataset.index)]
+    if (!target) return
+    runOnce('filterRule', async () => {
+      await updateConfig(cfg => { cfg.dns_filter_rules = removeRule(cfg.dns_filter_rules, target) })
       showToast('过滤规则已删除', 'success')
-    } catch (e) { showToast(e.message || String(e), 'error') }
+    }, btn)
   }))
 
-  const updateAllRules = document.querySelector('#updateAllRules')
-  if (updateAllRules) {
-    updateAllRules.disabled = Boolean(state.ruleUpdating || state.allRulesUpdating)
-    updateAllRules.textContent = state.allRulesUpdating ? '更新中...' : '更新全部规则集'
-    updateAllRules.addEventListener('click', async () => {
-      state.allRulesUpdating = true
-      renderApp()
-      try {
-        const errors = await window.go.app.App.UpdateAllRules()
-        state.allRulesUpdating = false
-        await refreshRules()
-        if (errors?.length) {
-          showToast('部分规则集更新失败: ' + errors.join('; '), 'error')
-        } else {
-          showToast('全部规则集更新成功', 'success')
-        }
-      } catch (e) {
-        state.allRulesUpdating = false
-        showToast(e.message || String(e), 'error')
-        await refreshRules()
-      } finally {
-        state.allRulesUpdating = false
+  document.querySelector('#updateAllRules')?.addEventListener('click', async () => {
+    if (state.ruleUpdating || state.allRulesUpdating) return
+    state.allRulesUpdating = true
+    renderApp()
+    try {
+      // Go 的 []error 序列化后可能是空对象，字符串或对象都尽量取出文字
+      const errors = await window.go.app.App.UpdateAllRules() || []
+      if (errors.length) {
+        const texts = errors.map(e => errorText(e, '')).filter(Boolean)
+        showToast(`部分规则集更新失败（${errors.length} 个）` + (texts.length ? '：' + texts.join('；') : '，可在列表里单独更新查看原因'), 'error')
+      } else {
+        showToast('全部规则集更新成功', 'success')
       }
-    })
-  }
+    } catch (e) {
+      showToast(errorText(e), 'error')
+    } finally {
+      state.allRulesUpdating = false
+      await refreshRules()
+    }
+  })
 
   document.querySelector('#subAutoUpdate')?.addEventListener('change', async event => {
     const hours = Number(event.target.value)
@@ -2293,26 +2202,37 @@ function bindEvents() {
       renderApp()
       showToast(hours ? `订阅将每 ${hours} 小时自动更新` : '已关闭订阅自动更新', 'success')
     } catch (e) {
-      showToast('设置失败：' + (e.message || e), 'error')
+      showToast('设置失败：' + errorText(e), 'error')
     }
   })
 
   document.querySelectorAll('[data-scan-qr]').forEach(button => button.addEventListener('click', scanAndImport))
 
   const importBtn = document.querySelector('#importBtn')
-  if (importBtn) {
-    importBtn.addEventListener('click', async () => {
-      const links = state.manualForm.url.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
-      if (!links.length) { showToast('请输入节点或订阅链接', 'error'); return }
-      importBtn.disabled = true
-      importBtn.textContent = '导入中…'
+  if (importBtn) importBtn.addEventListener('click', () => {
+    const links = state.manualForm.url.split(/\r?\n/).map(line => line.trim()).filter(Boolean)
+    if (!links.length) return showToast('请输入节点或订阅链接', 'error')
+    const editingID = state.editingNodeId
+    if (editingID && links.length !== 1) return showToast('编辑节点时只能粘贴一条节点链接', 'error')
+    runOnce('import', async () => {
+      renderApp() // 显示“导入中…”
+      if (editingID) {
+        await window.go.app.App.UpdateNodeFromLink(editingID, links[0])
+        await refreshConfig()
+        await refreshRules()
+        resetManualForm()
+        state.editingNodeId = ''
+        state.nodeFormOpen = false
+        showToast('节点已按链接更新', 'success')
+        return
+      }
       let added = 0
       const failed = []
       for (const link of links) {
         try {
           added += await window.go.app.App.ImportSubscription(link)
         } catch (e) {
-          failed.push({ link, error: e.message || String(e) })
+          failed.push({ link, error: errorText(e) })
         }
       }
       await refreshConfig()
@@ -2320,13 +2240,12 @@ function bindEvents() {
       // 失败的链接留在输入框里，方便修改后重试。
       state.manualForm.url = failed.map(item => item.link).join('\n')
       state.nodeFormOpen = failed.length > 0
-      renderApp()
       if (!failed.length && !added) showToast('节点已存在，没有重复添加', 'success')
       else if (!failed.length) showToast(`导入成功，新增 ${added} 个节点`, 'success')
       else if (failed.length === links.length) showToast('导入失败：' + failed[0].error, 'error')
       else showToast(`新增 ${added} 个节点，${failed.length} 条失败：${failed[0].error}`, 'error')
-    })
-  }
+    }, importBtn)
+  })
 
   const addNodeBtn = document.querySelector('#addNodeBtn')
   const nodeProtocol = document.querySelector('#nodeProtocol')
@@ -2336,55 +2255,130 @@ function bindEvents() {
       renderApp()
     })
   }
-  if (addNodeBtn) {
-    addNodeBtn.addEventListener('click', async () => {
-      const name = state.manualForm.name.trim()
-      const server = state.manualForm.server.trim()
-      const port = parseInt(state.manualForm.port.trim(), 10)
-      const protocol = document.querySelector('#nodeProtocol').value
-      const password = state.manualForm.password.trim()
-      if (!name || !server || !Number.isInteger(port) || port < 1 || port > 65535) {
-        showToast('请填写名称、服务器和端口', 'error'); return
-      }
-      const editing = Boolean(state.editingNodeId)
-      try {
-        const node = {
-          id: 'manual-' + Date.now(),
-          name, server, port, protocol,
-          settings: buildManualSettings(protocol, password),
+  if (addNodeBtn) addNodeBtn.addEventListener('click', () => {
+    const name = state.manualForm.name.trim()
+    const server = state.manualForm.server.trim()
+    const port = parseInt(state.manualForm.port.trim(), 10)
+    const protocol = state.manualProtocol
+    if (!name || !server || !Number.isInteger(port) || port < 1 || port > 65535) {
+      return showToast('请填写名称、服务器和端口', 'error')
+    }
+    const editingID = state.editingNodeId
+    runOnce('node', async () => {
+      const node = { id: editingID || 'manual-' + Date.now(), name, server, port, protocol, settings: buildManualSettings(protocol, state.manualForm.password.trim()) }
+      if (editingID) {
+        // 同协议编辑时保留表单里没有的设置项
+        const original = state.config?.nodes?.find(n => n.id === editingID)
+        if (original?.protocol === protocol) {
+          const managed = formSettingKeys(protocol)
+          const kept = {}
+          for (const [key, value] of Object.entries(original.settings || {})) if (!managed.has(key)) kept[key] = value
+          node.settings = { ...kept, ...node.settings }
         }
-        if (editing) {
-          node.id = state.editingNodeId
-          const original = state.config?.nodes?.find(n => n.id === state.editingNodeId)
-          if (original?.protocol === protocol) {
-            const managed = formSettingKeys(protocol)
-            const kept = Object.fromEntries(Object.entries(original.settings || {}).filter(([key]) => !managed.has(key)))
-            node.settings = { ...kept, ...node.settings }
-          }
-          await window.go.app.App.UpdateNode(state.editingNodeId, node)
-          state.editingNodeId = ''
-        } else {
-          await window.go.app.App.AddNode(node)
-        }
-        await refreshConfig()
-        await refreshRules()
-        showToast(editing ? '节点已修改' : '节点已添加', 'success')
-        resetManualForm()
-        state.nodeFormOpen = false
-        renderApp()
-      } catch (e) {
-        showToast(e.message, 'error')
+        await window.go.app.App.UpdateNode(editingID, node)
+        state.editingNodeId = ''
+      } else {
+        await window.go.app.App.AddNode(node)
       }
-    })
-  }
+      await refreshConfig()
+      await refreshRules()
+      showToast(editingID ? '节点已修改' : '节点已添加', 'success')
+      resetManualForm()
+      state.nodeFormOpen = false
+    }, addNodeBtn)
+  })
   document.querySelectorAll('#node-import input').forEach(input => {
     input.addEventListener('keydown', event => {
-      if (event.key === 'Enter' && addNodeBtn && !addNodeBtn.disabled) {
+      if (event.key === 'Enter' && addNodeBtn) {
         event.preventDefault()
         addNodeBtn.click()
       }
     })
   })
+}
+
+// 节点列表里的事件；搜索时只重绘列表，单独重新绑定
+function bindNodeList(root) {
+  root.querySelector('#importFromSearch')?.addEventListener('click', () => {
+    resetManualForm()
+    state.manualForm.url = state.nodeSearch.trim()
+    state.nodeSearch = ''
+    localStorage.setItem('sbtun-ui-node-search', '')
+    state.editingNodeId = ''
+    state.nodeFormTab = 'link'
+    state.nodeFormOpen = true
+    renderApp()
+    document.querySelector('#importBtn')?.click()
+  })
+  root.querySelectorAll('.node-item[data-node-id]').forEach(row => {
+    row.addEventListener('click', event => {
+      if (event.target.closest('button, input, details, a')) return
+      selectNode(row.dataset.nodeId)
+    })
+    row.addEventListener('keydown', event => {
+      if (event.target !== row || (event.key !== 'Enter' && event.key !== ' ')) return
+      event.preventDefault()
+      selectNode(row.dataset.nodeId)
+    })
+  })
+  root.querySelectorAll('.node-select').forEach(input => input.addEventListener('change', () => {
+    if (input.checked) state.selectedNodes.add(input.dataset.id)
+    else state.selectedNodes.delete(input.dataset.id)
+    renderApp()
+  }))
+  root.querySelectorAll('.rm-node').forEach(btn => btn.addEventListener('click', () => {
+    const id = btn.dataset.id
+    const node = state.config?.nodes?.find(item => item.id === id)
+    if (!window.confirm(`确定删除节点“${node?.name || '此节点'}”吗？`)) return
+    runOnce('node:' + id, async () => {
+      await window.go.app.App.RemoveNode(id)
+      state.selectedNodes.delete(id)
+      await refreshConfig()
+      await refreshRules()
+      saveNodeHealth()
+      showToast('节点已删除', 'success')
+    }, btn)
+  }))
+  root.querySelectorAll('.edit-node').forEach(btn => btn.addEventListener('click', () => {
+    const node = state.config?.nodes?.find(item => item.id === btn.dataset.id)
+    if (node) beginEditNode(node)
+  }))
+  root.querySelectorAll('.export-node').forEach(btn => btn.addEventListener('click', () => runOnce('node:' + btn.dataset.id, async () => {
+    await copyNodeLinks([btn.dataset.id])
+    showToast('节点链接已复制', 'success')
+  }, btn)))
+  root.querySelectorAll('.qrcode-node').forEach(btn => btn.addEventListener('click', () => {
+    const node = state.config?.nodes?.find(item => item.id === btn.dataset.id)
+    if (!node) return
+    runOnce('node:' + node.id, async () => {
+      const qr = await window.go.app.App.NodeQRCode(node.id)
+      state.nodeQRCode = { name: node.name, link: qr.link, image: qr.image }
+    }, btn)
+  }))
+  root.querySelectorAll('.test-node').forEach(btn => btn.addEventListener('click', async () => {
+    await testNodes([btn.dataset.id])
+    const latency = nodeLatency(btn.dataset.id)
+    if (latency && !latency.ok) showToast(latency.label, 'error')
+  }))
+}
+
+// 搜索只重绘列表时，同步标题栏里依赖可见节点的按钮
+function updateNodeHeading() {
+  const ids = visibleNodeIDs()
+  const toggle = document.querySelector('#toggleSelectNodes')
+  const batchTest = document.querySelector('#batchTestNodes')
+  if (toggle) {
+    toggle.disabled = !ids.length
+    toggle.textContent = ids.length && ids.every(id => state.selectedNodes.has(id)) ? '取消全选' : '全选'
+  }
+  if (batchTest) batchTest.disabled = state.batchTesting || !ids.length
+}
+
+async function copyNodeLinks(ids) {
+  const links = await window.go.app.App.ExportNodes(ids)
+  if (!links?.length) throw new Error('没有可导出的节点')
+  await window.runtime.ClipboardSetText(links.join('\n'))
+  return links.length
 }
 
 function beginEditNode(node) {
@@ -2401,6 +2395,7 @@ function beginEditNode(node) {
   state.manualProtocol = node.protocol
   state.manualForm = form
   state.editingNodeId = node.id
+  state.nodeFormTab = 'manual'
   state.nodeFormOpen = true
   renderApp()
   document.querySelector('#nodeName')?.focus()
@@ -2446,7 +2441,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     await refreshDiagnostics()
     if (!IS_ANDROID) await refreshCapture()
     setInterval(refreshStatus, 2000)
-    setInterval(refreshConfig, 1500)
+    setInterval(() => { if (!state.configReading) refreshConfig() }, 1500)
     setInterval(refreshDiagnostics, 1500)
     if (!IS_ANDROID) setInterval(refreshCapture, 1500)
     setInterval(refreshAutoSwitch, 2000)

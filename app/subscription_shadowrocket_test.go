@@ -23,7 +23,7 @@ func TestParseShadowrocketLinks(t *testing.T) {
 	if err != nil {
 		t.Fatal(err)
 	}
-	want = map[string]string{"uuid": "11111111-2222-3333-4444-555555555555", "alter_id": "0", "security": "auto", "transport_type": "grpc", "transport_host": "h.com", "transport_service_name": "svc", "tls": "true", "server_name": "a.com", "insecure": "true"}
+	want = map[string]string{"uuid": "11111111-2222-3333-4444-555555555555", "alter_id": "0", "transport_type": "grpc", "transport_host": "h.com", "transport_service_name": "svc", "tls": "true", "server_name": "a.com", "insecure": "true"}
 	if n.Protocol != "vmess" || n.Server != "1.2.3.4" || n.Port != 8443 || n.Name != "vm" || !reflect.DeepEqual(n.Settings, want) {
 		t.Fatalf("vmess=%+v", n)
 	}

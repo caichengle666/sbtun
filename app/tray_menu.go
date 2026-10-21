@@ -26,7 +26,8 @@ func (a *App) StartTray() {
 	trayOnce.Do(func() {
 		goruntime.LockOSThread()
 		defer goruntime.UnlockOSThread()
-		a.trayEnd = systray.Quit
+		quit := systray.Quit
+		a.trayEnd.Store(&quit)
 		systray.Run(func() {
 			if len(a.trayIcon) > 0 {
 				systray.SetIcon(a.trayIcon)

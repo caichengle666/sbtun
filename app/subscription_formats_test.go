@@ -93,10 +93,10 @@ proxy-groups: []
 		t.Fatalf("got %d nodes: %+v", len(nodes), nodes)
 	}
 	assertSettings(t, byName["SS"], map[string]string{"method": "aes-256-gcm", "plugin": "obfs-local", "plugin_opts": "obfs=tls;obfs-host=bing.com"})
-	assertSettings(t, byName["VMess"], map[string]string{"uuid": "00000000-0000-0000-0000-000000000001", "alter_id": "0", "security": "auto", "tls": "true", "server_name": "sni.example.com", "transport_type": "ws", "transport_path": "/ws", "transport_host": "cdn.example.com"})
+	assertSettings(t, byName["VMess"], map[string]string{"uuid": "00000000-0000-0000-0000-000000000001", "alter_id": "0", "security": "", "tls": "true", "server_name": "sni.example.com", "transport_type": "ws", "transport_path": "/ws", "transport_host": "cdn.example.com"})
 	assertSettings(t, byName["VLESS"], map[string]string{"flow": "xtls-rprx-vision", "tls": "true", "server_name": "www.microsoft.com", "utls_fingerprint": "chrome", "reality_public_key": "pubkey", "reality_short_id": "abcd"})
 	assertSettings(t, byName["Trojan"], map[string]string{"tls": "true", "insecure": "true", "transport_type": "grpc", "transport_service_name": "svc"})
-	assertSettings(t, byName["Hy2"], map[string]string{"sni": "sni.example.com", "up_mbps": "50 Mbps", "obfs_type": "salamander", "obfs_password": "o"})
+	assertSettings(t, byName["Hy2"], map[string]string{"sni": "sni.example.com", "up_mbps": "50", "down_mbps": "200", "obfs_type": "salamander", "obfs_password": "o"})
 	assertSettings(t, byName["TUIC"], map[string]string{"alpn": "h3", "congestion_control": "bbr", "udp_relay_mode": "native"})
 	assertSettings(t, byName["AnyTLS"], map[string]string{"password": "secret", "server_name": "sni.example.com", "utls_fingerprint": "chrome"})
 	assertSettings(t, byName["WG"], map[string]string{"local_address": "172.16.0.2,fd01::2", "reserved": "1,2,3", "mtu": "1280"})

@@ -95,7 +95,9 @@ func clashNode(m map[string]any) (config.Node, bool) {
 		}
 		if kind == "vmess" {
 			set("alter_id", "alterId")
-			set("security", "cipher")
+			if v := vmessSecurity(anyString(m["cipher"])); v != "" {
+				s["security"] = v
+			}
 		} else {
 			set("flow", "flow")
 		}
@@ -127,11 +129,16 @@ func clashNode(m map[string]any) (config.Node, bool) {
 			s["sni"] = v
 			delete(s, "server_name")
 		}
-		set("up_mbps", "up")
-		set("down_mbps", "down")
+		s["up_mbps"] = bandwidthMbps(anyString(m["up"]))
+		s["down_mbps"] = bandwidthMbps(anyString(m["down"]))
 		set("server_ports", "ports")
 		set("obfs_type", "obfs")
 		set("obfs_password", "obfs-password")
+		for key, value := range s {
+			if value == "" {
+				delete(s, key)
+			}
+		}
 	case "hysteria":
 		// sing-box 只支持 udp 协议，faketcp、wechat-video 跳过。
 		if p := strings.ToLower(anyString(m["protocol"])); p != "" && p != "udp" {
@@ -220,12 +227,7 @@ func clashNode(m map[string]any) (config.Node, bool) {
 	if smux := anyMap(m["smux"]); smux != nil && anyBool(smux["enabled"]) && (kind == "vmess" || kind == "vless" || kind == "trojan" || kind == "ss") {
 		s["multiplex"] = "true"
 	}
-	if (kind == "vmess" || kind == "vless" || kind == "socks5" || kind == "http") && s["tls"] != "true" {
-		// 未开启 TLS 时 servername 等字段没有意义，留着会被当成开启 TLS。
-		for _, key := range []string{"server_name", "insecure", "alpn", "utls_fingerprint"} {
-			delete(s, key)
-		}
-	}
+	clearTLSKeysIfOff(protocol, s)
 	name := anyString(m["name"])
 	if name == "" {
 		name = protocol + "-" + server

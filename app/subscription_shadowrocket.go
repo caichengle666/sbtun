@@ -96,10 +96,9 @@ func shadowrocketQuery(vals url.Values) {
 	fill("type", transport)
 	fill("host", host)
 	if vals.Get("type") == "grpc" {
-		fill("serviceName", vals.Get("path"))
-		if vals.Get("serviceName") == vals.Get("path") {
-			vals.Del("path")
-		}
+		// gRPC 没有 path，path 只能当 serviceName 用（去掉开头的 /）。
+		fill("serviceName", strings.TrimPrefix(vals.Get("path"), "/"))
+		vals.Del("path")
 	}
 }
 

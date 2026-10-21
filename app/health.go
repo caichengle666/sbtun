@@ -12,6 +12,7 @@ import (
 	"os/exec"
 	"path/filepath"
 	"strconv"
+	"sync"
 	"time"
 
 	"github.com/caichengle666/sbtun/config"
@@ -120,60 +121,129 @@ func transportLabel(transport string) string {
 	return "TCPing"
 }
 
-func probeURL(ctx context.Context, binary string, node config.Node) HealthCheckDTO {
-	started := time.Now()
+// lockedBuffer 收集 sing-box 输出；exec 的拷贝协程在写，tail 可能同时在读，需要加锁。
+type lockedBuffer struct {
+	mu  sync.Mutex
+	buf bytes.Buffer
+}
+
+func (b *lockedBuffer) Write(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.Write(p)
+}
+
+func (b *lockedBuffer) String() string {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.buf.String()
+}
+
+// nodeProxy 是只带一个节点的临时 sing-box 进程，对外提供本地 HTTP 代理。
+type nodeProxy struct {
+	addr   string
+	cmd    *exec.Cmd
+	exited chan struct{} // cmd.Wait 返回后关闭；ProcessState 只有 Wait 之后才有值，不能拿来判断进程是否已退出
+	dir    string
+	logs   lockedBuffer
+	client *http.Client
+}
+
+func startNodeProxy(ctx context.Context, binary string, node config.Node, timeout time.Duration) (*nodeProxy, error) {
 	listener, err := net.Listen("tcp", "127.0.0.1:0")
 	if err != nil {
-		return HealthCheckDTO{Message: fmt.Sprintf("URL 测试端口失败: %v", err)}
+		return nil, fmt.Errorf("端口失败: %v", err)
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
 	data, err := singbox.BuildHealthConfig(node, port)
 	if err != nil {
-		return HealthCheckDTO{Message: fmt.Sprintf("URL 配置失败: %v", err)}
+		return nil, fmt.Errorf("配置失败: %v", err)
 	}
-	tmpDir, err := os.MkdirTemp("", "sbtun-health-")
+	dir, err := os.MkdirTemp("", "sbtun-health-")
 	if err != nil {
-		return HealthCheckDTO{Message: fmt.Sprintf("URL 临时目录失败: %v", err)}
+		return nil, fmt.Errorf("临时目录失败: %v", err)
 	}
-	defer os.RemoveAll(tmpDir)
-	configPath := filepath.Join(tmpDir, "config.json")
+	configPath := filepath.Join(dir, "config.json")
 	if err := os.WriteFile(configPath, data, 0o600); err != nil {
-		return HealthCheckDTO{Message: fmt.Sprintf("URL 配置写入失败: %v", err)}
+		_ = os.RemoveAll(dir)
+		return nil, fmt.Errorf("配置写入失败: %v", err)
 	}
-	cmd := exec.CommandContext(ctx, binary, "run", "-c", configPath)
-	cmd.Dir = filepath.Dir(binary)
-	configureProcess(cmd)
-	var logs bytes.Buffer
-	cmd.Stdout = &logs
-	cmd.Stderr = &logs
-	if err := cmd.Start(); err != nil {
-		return HealthCheckDTO{Message: fmt.Sprintf("URL 启动 sing-box 失败: %v", err)}
+	p := &nodeProxy{dir: dir, addr: fmt.Sprintf("127.0.0.1:%d", port)}
+	p.cmd = exec.CommandContext(ctx, binary, "run", "-c", configPath)
+	p.cmd.Dir = filepath.Dir(binary)
+	configureProcess(p.cmd)
+	p.cmd.Stdout = &p.logs
+	p.cmd.Stderr = &p.logs
+	if err := p.cmd.Start(); err != nil {
+		_ = os.RemoveAll(dir)
+		return nil, fmt.Errorf("启动 sing-box 失败: %v", err)
 	}
-	defer func() {
-		if cmd.Process != nil && cmd.ProcessState == nil {
-			_ = cmd.Process.Kill()
-		}
-		_ = cmd.Wait()
+	p.exited = make(chan struct{})
+	go func() {
+		_ = p.cmd.Wait()
+		close(p.exited)
 	}()
 	proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
-	transportConfig := &http.Transport{Proxy: http.ProxyURL(proxyURL)}
-	defer transportConfig.CloseIdleConnections()
-	client := &http.Client{
-		Timeout:   8 * time.Second,
-		Transport: transportConfig,
+	p.client = &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
+	return p, nil
+}
+
+// waitReady 等本地代理端口可以连上。
+func (p *nodeProxy) waitReady(timeout time.Duration) error {
+	deadline := time.Now().Add(timeout)
+	for {
+		select {
+		case <-p.exited:
+			return fmt.Errorf("sing-box 已退出 %s", p.tail())
+		default:
+		}
+		conn, err := net.DialTimeout("tcp", p.addr, 300*time.Millisecond)
+		if err == nil {
+			conn.Close()
+			return nil
+		}
+		if time.Now().After(deadline) {
+			return fmt.Errorf("等待本地代理超时 %s", p.tail())
+		}
+		select {
+		case <-p.exited:
+			return fmt.Errorf("sing-box 已退出 %s", p.tail())
+		case <-time.After(150 * time.Millisecond):
+		}
 	}
+}
+
+// tail 返回 sing-box 日志的末尾，便于在错误里说明原因。
+func (p *nodeProxy) tail() string {
+	message := p.logs.String()
+	if len(message) > 240 {
+		message = message[len(message)-240:]
+	}
+	return message
+}
+
+func (p *nodeProxy) Close() {
+	p.client.CloseIdleConnections()
+	_ = p.cmd.Process.Kill()
+	<-p.exited
+	_ = os.RemoveAll(p.dir)
+}
+
+func probeURL(ctx context.Context, binary string, node config.Node) HealthCheckDTO {
+	started := time.Now()
+	proxy, err := startNodeProxy(ctx, binary, node, 8*time.Second)
+	if err != nil {
+		return HealthCheckDTO{Message: "URL " + err.Error()}
+	}
+	defer proxy.Close()
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, "https://www.gstatic.com/generate_204", nil)
 	if err != nil {
 		return HealthCheckDTO{Message: fmt.Sprintf("URL 请求创建失败: %v", err)}
 	}
-	response, err := waitForURL(ctx, client, request, cmd, 10*time.Second)
+	response, err := waitForURL(ctx, proxy.client, request, proxy.exited, 10*time.Second)
 	if err != nil {
-		message := logs.String()
-		if len(message) > 240 {
-			message = message[len(message)-240:]
-		}
-		return HealthCheckDTO{Message: fmt.Sprintf("URL 测试失败: %v %s", err, message)}
+		return HealthCheckDTO{Message: fmt.Sprintf("URL 测试失败: %v %s", err, proxy.tail())}
 	}
 	defer response.Body.Close()
 	if response.StatusCode < 200 || response.StatusCode >= 400 {
@@ -217,21 +287,21 @@ func probeURLViaClash(ctx context.Context, node config.Node) HealthCheckDTO {
 	return HealthCheckDTO{OK: true, StatusCode: http.StatusNoContent, Message: "URL 访问成功", Latency: payload.Delay}
 }
 
-func waitForURL(ctx context.Context, client *http.Client, request *http.Request, cmd *exec.Cmd, timeout time.Duration) (*http.Response, error) {
+// waitForURL 反复请求直到成功；exited 关闭说明 sing-box 已退出，立即报错，不白等到超时。
+func waitForURL(ctx context.Context, client *http.Client, request *http.Request, exited <-chan struct{}, timeout time.Duration) (*http.Response, error) {
 	if ctx == nil {
 		ctx = context.Background()
 	}
 	waitCtx, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	for {
-		if cmd.ProcessState != nil {
-			return nil, fmt.Errorf("sing-box 已退出")
-		}
 		response, err := client.Do(request.WithContext(waitCtx))
 		if err == nil {
 			return response, nil
 		}
 		select {
+		case <-exited:
+			return nil, fmt.Errorf("sing-box 已退出")
 		case <-waitCtx.Done():
 			if ctx.Err() != nil {
 				return nil, ctx.Err()

@@ -1,6 +1,7 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
@@ -40,6 +41,7 @@ type RuntimeCoordinator struct {
 	ReadyCheck      func(context.Context) error
 	activeConfig    config.Config
 	activeConfigSet bool
+	activeData      []byte // 正在运行的 sing-box 配置内容，用来判断重载是否真有必要
 	// LocalAuth protects the clash API and capture proxy ports.
 	LocalAuth singbox.LocalAuth
 	resolver  nodeResolver
@@ -132,16 +134,16 @@ func (r *RuntimeCoordinator) Reload(ctx context.Context, cfg config.Config) erro
 	}
 	state, _ := r.State.Get()
 	if state == core.StateStopped {
-		return r.startConfigLocked(ctx, cfg)
+		// 已停止就只写配置，绝不自行启动（退出过程中被重载会留下孤儿进程）。
+		_, err := r.SyncConfig(cfg)
+		return err
 	}
 	if state != core.StateRunning && state != core.StateError {
 		return fmt.Errorf("runtime cannot reload from state: %s", state)
 	}
-	configPath, err := r.SyncConfig(cfg)
+	// 先校验通过再替换 runtime.json；校验失败时旧配置原样保留，旧进程继续运行。
+	configPath, data, err := r.writeValidatedConfig(ctx, cfg)
 	if err != nil {
-		return fmt.Errorf("%s: %w", ErrConfigInvalid, err)
-	}
-	if err := singbox.ValidateConfig(ctx, r.Binary, configPath); err != nil {
 		return fmt.Errorf("%s: %w", ErrConfigInvalid, err)
 	}
 	captureRestart := !r.activeConfigSet || captureConfigChanged(r.activeConfig, cfg)
@@ -157,14 +159,43 @@ func (r *RuntimeCoordinator) Reload(ctx context.Context, cfg config.Config) erro
 	if err := r.TUN.CleanupRoutes(); err != nil {
 		return r.fail(ErrSingBoxReload, fmt.Errorf("清理旧 TUN 路由失败: %w", err))
 	}
-	return r.startConfigLocked(ctx, cfg)
+	return r.launchLocked(ctx, cfg, configPath, data)
+}
+
+// SyncIfUnchanged 在运行中且新配置生成的 sing-box 配置与正在运行的完全一致时，只写回 runtime.json、不重启，
+// 返回 true。订阅定时更新等只改了元数据（如 UpdatedAt）的场景靠它避免断开所有连接。
+func (r *RuntimeCoordinator) SyncIfUnchanged(cfg config.Config) (bool, error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	if r.State == nil || !r.State.IsRunning() || !r.activeConfigSet || captureConfigChanged(r.activeConfig, cfg) {
+		return false, nil
+	}
+	data, err := r.buildConfig(cfg)
+	if err != nil {
+		return false, err
+	}
+	if !bytes.Equal(data, r.activeData) {
+		return false, nil
+	}
+	if err := atomicWrite(r.configPath(), data, nil); err != nil {
+		return false, fmt.Errorf("写入运行配置失败: %w", err)
+	}
+	r.activeConfig = cfg
+	return true, nil
 }
 
 func (r *RuntimeCoordinator) startConfigLocked(ctx context.Context, cfg config.Config) error {
 	r.State.Set(core.StateStarting, "")
-	if err := config.Validate(cfg); err != nil {
+	configPath, data, err := r.writeValidatedConfig(ctx, cfg)
+	if err != nil {
 		return r.fail(ErrConfigInvalid, err)
 	}
+	return r.launchLocked(ctx, cfg, configPath, data)
+}
+
+// launchLocked 用已校验并写好的配置启动 sing-box，并按需启停流量分析器。
+func (r *RuntimeCoordinator) launchLocked(ctx context.Context, cfg config.Config, configPath string, data []byte) error {
+	r.State.Set(core.StateStarting, "")
 	if r.Capture != nil {
 		if cfg.CaptureEnabled && len(cfg.CaptureDomains) > 0 {
 			if err := r.Capture.Start(ctx, cfg.CaptureDomains); err != nil {
@@ -174,28 +205,12 @@ func (r *RuntimeCoordinator) startConfigLocked(ctx context.Context, cfg config.C
 			return r.fail(ErrCaptureStartFailed, err)
 		}
 	}
-	configPath, err := r.SyncConfig(cfg)
-	if err != nil {
-		if r.Capture != nil {
-			_ = r.Capture.Stop()
-		}
-		return r.fail(ErrConfigInvalid, err)
-	}
-	if err := singbox.ValidateConfig(ctx, r.Binary, configPath); err != nil {
-		if r.Capture != nil {
-			_ = r.Capture.Stop()
-		}
-		return r.fail(ErrConfigInvalid, err)
-	}
 	if err := r.SingBox.Start(ctx, r.Binary, configPath); err != nil {
-		if r.Capture != nil {
-			_ = r.Capture.Stop()
-		}
 		return r.fail(ErrSingBoxStartFailed, err)
 	}
 	if r.ReadyCheck != nil {
 		readyCtx, cancel := context.WithTimeout(ctx, 10*time.Second)
-		err = r.ReadyCheck(readyCtx)
+		err := r.ReadyCheck(readyCtx)
 		cancel()
 		if err != nil {
 			stopErr := r.SingBox.Stop()
@@ -216,6 +231,7 @@ func (r *RuntimeCoordinator) startConfigLocked(ctx context.Context, cfg config.C
 	r.State.Set(core.StateRunning, "")
 	r.activeConfig = cfg
 	r.activeConfigSet = true
+	r.activeData = data
 	return nil
 }
 
@@ -255,20 +271,47 @@ func captureConfigChanged(before, after config.Config) bool {
 	return false
 }
 
+func (r *RuntimeCoordinator) buildConfig(cfg config.Config) ([]byte, error) {
+	return singbox.BuildConfigWithAuth(cfg, r.resourceDir(), r.LocalAuth, r.resolver.resolve(cfg.Nodes))
+}
+
+func (r *RuntimeCoordinator) configPath() string { return filepath.Join(r.WorkDir, "runtime.json") }
+
+// SyncConfig 生成并原子写入 runtime.json，不做 sing-box 校验（未运行时保存配置用）。
 func (r *RuntimeCoordinator) SyncConfig(cfg config.Config) (string, error) {
-	exeDir := r.resourceDir()
-	data, err := singbox.BuildConfigWithAuth(cfg, exeDir, r.LocalAuth, r.resolver.resolve(cfg.Nodes))
+	data, err := r.buildConfig(cfg)
 	if err != nil {
 		return "", err
 	}
 	if err := os.MkdirAll(r.WorkDir, 0o755); err != nil {
 		return "", fmt.Errorf("创建运行目录失败: %w", err)
 	}
-	configPath := filepath.Join(r.WorkDir, "runtime.json")
-	if err := atomicWrite(configPath, data); err != nil {
+	if err := atomicWrite(r.configPath(), data, nil); err != nil {
 		return "", fmt.Errorf("写入运行配置失败: %w", err)
 	}
-	return configPath, nil
+	return r.configPath(), nil
+}
+
+// writeValidatedConfig 把配置写到临时文件，sing-box check 通过后才替换 runtime.json；
+// 任何一步失败都保留旧的 runtime.json，避免之后每次启动和内核升级校验都被坏配置卡住。
+func (r *RuntimeCoordinator) writeValidatedConfig(ctx context.Context, cfg config.Config) (string, []byte, error) {
+	if err := config.Validate(cfg); err != nil {
+		return "", nil, err
+	}
+	data, err := r.buildConfig(cfg)
+	if err != nil {
+		return "", nil, err
+	}
+	if err := os.MkdirAll(r.WorkDir, 0o755); err != nil {
+		return "", nil, fmt.Errorf("创建运行目录失败: %w", err)
+	}
+	err = atomicWrite(r.configPath(), data, func(tmp string) error {
+		return singbox.ValidateConfig(ctx, r.Binary, tmp)
+	})
+	if err != nil {
+		return "", nil, err
+	}
+	return r.configPath(), data, nil
 }
 
 func (r *RuntimeCoordinator) resourceDir() string {
@@ -337,6 +380,7 @@ func (r *RuntimeCoordinator) Stop() error {
 	r.State.Set(core.StateStopped, "")
 	r.activeConfig = config.Config{}
 	r.activeConfigSet = false
+	r.activeData = nil
 	return nil
 }
 
@@ -364,8 +408,9 @@ func (r *RuntimeCoordinator) fail(code string, err error) error {
 	return fmt.Errorf("%s: %w", code, err)
 }
 
-func atomicWrite(path string, data []byte) error {
-	tmp, err := os.CreateTemp(filepath.Dir(path), ".runtime-*.tmp")
+// atomicWrite 先写同目录临时文件；check 不为空时校验临时文件，通过后才替换 path。
+func atomicWrite(path string, data []byte, check func(tmp string) error) error {
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".runtime-*.json")
 	if err != nil {
 		return err
 	}
@@ -381,6 +426,11 @@ func atomicWrite(path string, data []byte) error {
 	}
 	if err := tmp.Close(); err != nil {
 		return err
+	}
+	if check != nil {
+		if err := check(name); err != nil {
+			return err
+		}
 	}
 	if err := config.ReplaceConfigFile(name, path); err != nil {
 		return fmt.Errorf("替换运行配置失败: %w", err)

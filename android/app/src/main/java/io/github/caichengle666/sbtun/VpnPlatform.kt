@@ -11,13 +11,16 @@ import mobile.Platform
 class VpnPlatform(private val context: Context) : Platform {
     override fun openTun(ipv6: Boolean): Int {
         val ready = SbtunVpnService.whenReady()
-        ContextCompat.startForegroundService(context, Intent(context, SbtunVpnService::class.java))
-        val service = try {
-            ready.get(10, TimeUnit.SECONDS)
-        } catch (e: TimeoutException) {
-            throw Exception("VPN 服务启动超时")
+        val intent = Intent(context, SbtunVpnService::class.java).putExtra(SbtunVpnService.EXTRA_FROM_APP, true)
+        ContextCompat.startForegroundService(context, intent)
+        return try {
+            ready.get(10, TimeUnit.SECONDS).establishTun(ipv6)
+        } catch (e: Exception) {
+            // 失败时收掉前台服务和"已连接"通知；超时时服务可能稍后才起来，也一并停掉。
+            SbtunVpnService.current?.shutdown()
+            context.stopService(Intent(context, SbtunVpnService::class.java))
+            throw if (e is TimeoutException) Exception("VPN 服务启动超时") else e
         }
-        return service.establishTun(ipv6)
     }
 
     override fun closeTun() {

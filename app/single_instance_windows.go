@@ -3,7 +3,9 @@
 package app
 
 import (
+	"errors"
 	"fmt"
+
 	"golang.org/x/sys/windows"
 )
 
@@ -15,13 +17,16 @@ func AcquireSingleInstance() (func(), error) {
 	if err != nil {
 		return nil, err
 	}
+	// 互斥体已存在时 CreateMutex 返回有效句柄，同时 err 为 ERROR_ALREADY_EXISTS。
 	handle, err := windows.CreateMutex(nil, false, name)
+	if errors.Is(err, windows.ERROR_ALREADY_EXISTS) {
+		if handle != 0 {
+			windows.CloseHandle(handle)
+		}
+		return nil, fmt.Errorf("sbtun 已经在运行")
+	}
 	if err != nil {
 		return nil, fmt.Errorf("创建单实例锁失败: %w", err)
-	}
-	if windows.GetLastError() == windows.ERROR_ALREADY_EXISTS {
-		windows.CloseHandle(handle)
-		return nil, fmt.Errorf("sbtun 已经在运行")
 	}
 	return func() { windows.CloseHandle(handle) }, nil
 }

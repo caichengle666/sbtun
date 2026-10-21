@@ -42,7 +42,7 @@ func TestShareLinksKeepAllFieldsAndRoundTrip(t *testing.T) {
 		"trojang": {"tls": "true", "transport_service_name": "g"},
 		"socks":   {"username": "user", "password": "pass"},
 		"ss":      {"plugin": "obfs-local", "plugin_opts": "obfs=http"},
-		"vm":      {"security": "auto", "transport_path": "/vm"},
+		"vm":      {"security": "", "transport_path": "/vm"},
 	}
 	for _, n := range out {
 		for k, v := range want[n.Name] {

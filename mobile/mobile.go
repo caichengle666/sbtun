@@ -9,10 +9,10 @@ package mobile
 import (
 	"context"
 	"errors"
-	"fmt"
 	"net/url"
 	"strconv"
 	"sync"
+	"syscall"
 	"time"
 
 	"github.com/xjasonlyu/tun2socks/v2/core"
@@ -25,12 +25,6 @@ import (
 	"github.com/caichengle666/sbtun/app"
 	"github.com/caichengle666/sbtun/core/tun"
 )
-
-// Platform 由安卓实现：OpenTun 建立 VPN 并返回 TUN 文件描述符（所有权交给 Go），CloseTun 关闭 VPN 服务。
-type Platform interface {
-	OpenTun(ipv6 bool) (int32, error)
-	CloseTun() error
-}
 
 var (
 	initOnce sync.Once
@@ -76,13 +70,8 @@ func (vpnPlatform) Start() error {
 	if err != nil {
 		return err
 	}
-	fd, err := platform.OpenTun(cfg.IPv6Enabled)
-	if err != nil {
-		return fmt.Errorf("建立 VPN 失败: %w", err)
-	}
-	if err := startNetstack(int(fd)); err != nil {
-		_ = platform.CloseTun()
-		return fmt.Errorf("启动 tun2socks 失败: %w", err)
+	if err := openVPN(platform, cfg.IPv6Enabled, startNetstack); err != nil {
+		return err
 	}
 	vpnRunning = true
 	return nil
@@ -104,7 +93,14 @@ func (vpnPlatform) Stop() error {
 
 // startNetstack 用 gVisor 用户态协议栈接管 TUN，把 TCP/UDP 连接转给 sing-box 的 SOCKS5 入站。
 // 不用 tun2socks 的 engine 包，因为它出错时直接退出进程。
+// fd 交给 fdbased 设备之前出错要自己关掉，否则 VPN 接口一直被占着。
 func startNetstack(fd int) error {
+	owned := false
+	defer func() {
+		if !owned {
+			_ = syscall.Close(fd)
+		}
+	}()
 	proxyURL, err := url.Parse(instance.MobileProxyURL())
 	if err != nil {
 		return err
@@ -118,6 +114,7 @@ func startNetstack(fd int) error {
 	if err != nil {
 		return err
 	}
+	owned = true // 之后由 dev.Close 负责关闭 fd
 	tunnel.T().SetProxy(proxy)
 	tunnel.T().SetUDPTimeout(time.Minute)
 	st, err := core.CreateStack(&core.Config{LinkEndpoint: dev, TransportHandler: tunnel.T()})

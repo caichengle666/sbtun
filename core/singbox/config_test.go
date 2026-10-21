@@ -71,7 +71,7 @@ func TestHysteriaOutboundFields(t *testing.T) {
 }
 
 func TestRealityDefaultsToChromeUTLS(t *testing.T) {
-	out, err := buildOutbound(config.Node{Protocol: "vless", Server: "r.example", Port: 443, Settings: map[string]string{"uuid": "u", "tls": "true", "reality_public_key": "PBK"}})
+	out, err := buildOutbound(config.Node{Protocol: "vless", Server: "r.example", Port: 443, Settings: map[string]string{"uuid": "u", "tls": "true", "reality_public_key": "jNXHt1yRo0vDuchQlIP6Z0ZvjT3KtzVI+T4E7RoLJS0="}})
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -410,25 +410,70 @@ func TestCustomDNSUsesModernServerShape(t *testing.T) {
 	}
 }
 
+// 智能分流 + 自动 DNS：只有 geosite-cn 规则集启用且文件存在时，DNS 规则才能引用它；
+// 关掉或缺文件时引用它会让 sing-box 报 rule-set not found 拒绝整份配置。
 func TestSmartDNSUsesLocalRulesAndRemoteFallback(t *testing.T) {
-	data, err := BuildConfig(testConfig(config.RoutingSmart), "D:\\test")
-	if err != nil {
-		t.Fatal(err)
+	writeRules := func(t *testing.T, sets string) string {
+		dir := t.TempDir()
+		if err := os.MkdirAll(filepath.Join(dir, "rules"), 0o755); err != nil {
+			t.Fatal(err)
+		}
+		if err := os.WriteFile(filepath.Join(dir, "rules", "geosite-geolocation-cn.srs"), []byte("test"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if sets != "" {
+			if err := os.WriteFile(filepath.Join(dir, "rules", "sets.json"), []byte(sets), 0o600); err != nil {
+				t.Fatal(err)
+			}
+		}
+		return dir
 	}
-	var runtime RuntimeConfig
-	if err := json.Unmarshal(data, &runtime); err != nil {
-		t.Fatal(err)
+	cases := []struct {
+		name     string
+		exeDir   string
+		wantRule bool
+		check    bool // 不引用真实规则文件时可直接交给 sing-box check
+	}{
+		{"规则文件缺失", t.TempDir(), false, true},
+		{"规则集已启用", writeRules(t, ""), true, false},
+		{"规则集被关闭", writeRules(t, `[{"id":"geosite-cn","path":"geosite-geolocation-cn.srs","enabled":false,"source":"default","action":"direct"}]`), false, true},
 	}
-	if runtime.DNS["final"] != "dns-remote" {
-		t.Fatalf("dns final=%v", runtime.DNS["final"])
-	}
-	rules := runtime.DNS["rules"].([]any)
-	if len(rules) != 2 {
-		t.Fatalf("dns rules=%d want=2", len(rules))
-	}
-	routeRules := runtime.Route["rules"].([]any)
-	if routeRules[1].(map[string]any)["action"] != "hijack-dns" {
-		t.Fatalf("dns interception rule missing")
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			data, err := BuildConfig(testConfig(config.RoutingSmart), tc.exeDir)
+			if err != nil {
+				t.Fatal(err)
+			}
+			var runtime RuntimeConfig
+			if err := json.Unmarshal(data, &runtime); err != nil {
+				t.Fatal(err)
+			}
+			if runtime.DNS["final"] != "dns-remote" {
+				t.Fatalf("dns final=%v", runtime.DNS["final"])
+			}
+			hasRule, hasPrivate := false, false
+			for _, r := range runtime.DNS["rules"].([]any) {
+				rule := r.(map[string]any)
+				hasRule = hasRule || rule["rule_set"] != nil
+				hasPrivate = hasPrivate || rule["ip_is_private"] == true
+			}
+			if hasRule != tc.wantRule || !hasPrivate {
+				t.Fatalf("dns rules=%v", runtime.DNS["rules"])
+			}
+			routeRules := runtime.Route["rules"].([]any)
+			if routeRules[1].(map[string]any)["action"] != "hijack-dns" {
+				t.Fatalf("dns interception rule missing")
+			}
+			if binary := os.Getenv("SING_BOX_BINARY"); binary != "" && tc.check {
+				path := filepath.Join(t.TempDir(), "c.json")
+				if err := os.WriteFile(path, data, 0o600); err != nil {
+					t.Fatal(err)
+				}
+				if output, err := exec.Command(binary, "check", "-c", path).CombinedOutput(); err != nil {
+					t.Fatalf("sing-box check failed: %v\n%s", err, output)
+				}
+			}
+		})
 	}
 }
 

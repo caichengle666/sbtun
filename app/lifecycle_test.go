@@ -90,7 +90,7 @@ func TestAtomicWriteRoundTrip(t *testing.T) {
 	dir := t.TempDir()
 	path := dir + "/runtime.json"
 	want := []byte(`{"test":true}`)
-	if err := atomicWrite(path, want); err != nil {
+	if err := atomicWrite(path, want, nil); err != nil {
 		t.Fatalf("atomicWrite 失败: %v", err)
 	}
 	got, err := os.ReadFile(path)

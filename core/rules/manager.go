@@ -4,6 +4,7 @@ import (
 	"crypto/sha256"
 	"encoding/hex"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"io"
 	"net/http"
@@ -11,6 +12,8 @@ import (
 	"path/filepath"
 	"strings"
 	"time"
+
+	"github.com/caichengle666/sbtun/config"
 )
 
 // RuleSet 描述一个分流规则集。
@@ -48,6 +51,8 @@ type Manager struct {
 	rulesDir  string
 	statePath string
 	sets      []RuleSet
+	// loadErr 记录 sets.json 存在但读不出或解析失败；此时拒绝保存，免得默认列表覆盖用户的自定义规则集。
+	loadErr error
 }
 
 // NewManager 创建规则集管理器。
@@ -93,11 +98,16 @@ func defaultRuleSets(rulesDir string) []RuleSet {
 
 func (m *Manager) load() {
 	data, err := os.ReadFile(m.statePath)
+	if errors.Is(err, os.ErrNotExist) {
+		return
+	}
 	if err != nil {
+		m.loadErr = fmt.Errorf("读取规则集清单失败: %w", err)
 		return
 	}
 	var sets []RuleSet
-	if json.Unmarshal(data, &sets) != nil {
+	if err := json.Unmarshal(data, &sets); err != nil {
+		m.loadErr = fmt.Errorf("规则集清单 %s 已损坏（%v），为免覆盖自定义规则集已停止保存，可恢复默认规则或从备份恢复", m.statePath, err)
 		return
 	}
 	for i := range sets {
@@ -112,7 +122,14 @@ func (m *Manager) load() {
 	m.sets = sets
 }
 
+// LoadError 返回读取 sets.json 时的错误，正常时为 nil。
+func (m *Manager) LoadError() error { return m.loadErr }
+
+// save 先写同目录临时文件再原子替换，崩溃或并发读取时不会出现半截的 sets.json。
 func (m *Manager) save() error {
+	if m.loadErr != nil {
+		return m.loadErr
+	}
 	if err := os.MkdirAll(m.rulesDir, 0o755); err != nil {
 		return err
 	}
@@ -120,7 +137,23 @@ func (m *Manager) save() error {
 	if err != nil {
 		return err
 	}
-	return os.WriteFile(m.statePath, data, 0o600)
+	tmp, err := os.CreateTemp(m.rulesDir, ".sets-*.tmp")
+	if err != nil {
+		return err
+	}
+	defer os.Remove(tmp.Name())
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Sync(); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	return config.ReplaceConfigFile(tmp.Name(), m.statePath)
 }
 
 // Sets 返回规则集列表的副本（用于备份）。
@@ -152,6 +185,7 @@ func (m *Manager) Replace(sets []RuleSet) ([]string, error) {
 		next = append(next, set)
 	}
 	m.sets = next
+	m.loadErr = nil // 用备份整体替换，损坏的旧清单可以覆盖
 	return missing, m.save()
 }
 
@@ -319,6 +353,7 @@ func (m *Manager) RestoreDefaultsWithValidation(validate RuleSetValidator) error
 		}
 	}
 	m.sets = append(defaults, custom...)
+	m.loadErr = nil // 用户主动恢复默认，损坏的旧清单可以覆盖
 	if err := m.save(); err != nil {
 		return err
 	}

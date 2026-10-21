@@ -156,14 +156,14 @@ func TestSubscriptionTriesUserAgents(t *testing.T) {
 		}
 	}))
 	defer server.Close()
-	nodes, err := parseSubscriptionBody(server.URL + "/sub")
+	nodes, err := parseSubscriptionBody(server.URL+"/sub", fetchURL)
 	if err != nil || len(nodes) != 1 || calls.Load() != 3 {
 		t.Fatalf("nodes=%v err=%v calls=%d", nodes, err, calls.Load())
 	}
 
 	// 网络不通时不再换 UA 重试
 	server.Close()
-	if _, err := parseSubscriptionBody(server.URL + "/sub"); err == nil || calls.Load() != 3 {
+	if _, err := parseSubscriptionBody(server.URL+"/sub", fetchURL); err == nil || calls.Load() != 3 {
 		t.Fatalf("err=%v calls=%d", err, calls.Load())
 	}
 }

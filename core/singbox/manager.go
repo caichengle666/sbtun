@@ -25,6 +25,7 @@ type ExitEvent struct {
 type Manager struct {
 	mu       sync.Mutex
 	cmd      *exec.Cmd
+	pidPath  string
 	logFile  *os.File
 	exited   chan ExitEvent
 	done     chan struct{}
@@ -52,7 +53,19 @@ func (m *Manager) Start(ctx context.Context, binary, configPath string) error {
 		return fmt.Errorf("sing-box 已经在运行或正在启动")
 	}
 	m.starting = true
+	pidPath := filepath.Join(filepath.Dir(configPath), pidFileName)
+	cleanupStalePID(pidPath, binary)
 	cmd := exec.CommandContext(ctx, binary, "run", "-c", configPath)
+	// ctx 取消（如 CLI 收到 Ctrl+C / SIGTERM）时先请求优雅退出让内核撤掉路由，
+	// WaitDelay 后仍未退出才强杀；这次退出按预期退出处理。
+	cmd.Cancel = func() error {
+		m.markStopping(cmd)
+		if err := requestGracefulStop(cmd); err != nil {
+			return cmd.Process.Kill()
+		}
+		return nil
+	}
+	cmd.WaitDelay = gracefulStopTimeout
 	m.stopping = false
 	configureProcess(cmd)
 	cmd.Dir = filepath.Dir(binary)
@@ -70,7 +83,7 @@ func (m *Manager) Start(ctx context.Context, binary, configPath string) error {
 	cmd.Stderr = f
 	m.logFile = f
 
-	if err := cmd.Start(); err != nil {
+	if err := startProcess(cmd); err != nil {
 		_ = f.Close()
 		m.logFile = nil
 		m.starting = false
@@ -78,17 +91,31 @@ func (m *Manager) Start(ctx context.Context, binary, configPath string) error {
 	}
 
 	m.cmd = cmd
+	m.pidPath = pidPath
 	m.done = make(chan struct{})
 	m.starting = false
 	m.generation++
 	m.current = m.generation
+	_ = writePIDFile(pidPath, cmd.Process.Pid) // 写失败只影响下次残留清理，不阻止启动
 	go m.wait(cmd, m.generation)
 	return nil
+}
+
+// markStopping 把 cmd 的这次退出标记为预期退出。
+func (m *Manager) markStopping(cmd *exec.Cmd) {
+	m.mu.Lock()
+	defer m.mu.Unlock()
+	if m.cmd == cmd {
+		m.stopping = true
+	}
 }
 
 func (m *Manager) wait(cmd *exec.Cmd, generation uint64) {
 	err := cmd.Wait()
 	m.mu.Lock()
+	if m.pidPath != "" {
+		removePIDFile(m.pidPath, cmd.Process.Pid)
+	}
 	expected := m.stopping
 	done := m.done
 	ownsProcess := m.cmd == cmd

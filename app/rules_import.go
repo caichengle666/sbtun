@@ -13,8 +13,7 @@ import (
 )
 
 func (a *App) ImportCustomRules(source string) (int, error) {
-	a.operationMu.Lock()
-	defer a.operationMu.Unlock()
+	// 下载可能耗时（最长 30 秒），放在锁外，不能卡住切换节点、改设置等操作。
 	data, err := loadRuleSource(strings.TrimSpace(source))
 	if err != nil {
 		return 0, err
@@ -23,6 +22,8 @@ func (a *App) ImportCustomRules(source string) (int, error) {
 	if err != nil {
 		return 0, err
 	}
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
 	err = a.mutateConfigAndSyncLocked(func(_ config.Config, next *config.Config) error {
 		next.CustomRules = append(next.CustomRules, rules...)
 		return nil
@@ -46,9 +47,12 @@ func loadRuleSource(source string) ([]byte, error) {
 		if resp.StatusCode < 200 || resp.StatusCode >= 300 {
 			return nil, fmt.Errorf("规则 HTTP %d", resp.StatusCode)
 		}
-		body, err := io.ReadAll(resp.Body)
+		body, err := io.ReadAll(io.LimitReader(resp.Body, maxSubscriptionBytes+1))
 		if err != nil {
 			return nil, err
+		}
+		if len(body) > maxSubscriptionBytes {
+			return nil, fmt.Errorf("规则内容超过 %d 字节上限", maxSubscriptionBytes)
 		}
 		return body, nil
 	}
