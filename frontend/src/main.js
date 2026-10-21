@@ -445,7 +445,7 @@ function renderNodeModal() {
       <header class="modal-header"><h2 id="nodeModalTitle">${editing ? '编辑节点' : '添加节点'}</h2><button class="icon-btn" data-close-node-modal aria-label="关闭" title="关闭">×</button></header>
       ${editing ? '' : `<div class="modal-tabs" role="tablist"><button class="modal-tab ${tab === 'link' ? 'active' : ''}" data-node-form-tab="link" role="tab">粘贴链接导入</button><button class="modal-tab ${tab === 'manual' ? 'active' : ''}" data-node-form-tab="manual" role="tab">手动填写</button></div>`}
       <div class="modal-body">${body}</div>
-      <footer class="modal-footer"><button class="btn btn-ghost" data-close-node-modal>取消</button>${tab === 'link' ? '<button id="importBtn" class="btn btn-primary">导入</button>' : `<button id="addNodeBtn" class="btn btn-primary">${editing ? '保存修改' : '添加节点'}</button>`}</footer>
+      <footer class="modal-footer"><button class="btn btn-ghost" data-close-node-modal>取消</button>${tab === 'link' ? `${IS_ANDROID ? '<button id="scanQRBtn" class="btn btn-ghost">扫码</button>' : ''}<button id="importBtn" class="btn btn-primary">导入</button>` : `<button id="addNodeBtn" class="btn btn-primary">${editing ? '保存修改' : '添加节点'}</button>`}</footer>
     </section>
   </div>`
 }
@@ -465,7 +465,11 @@ function renderSubscriptions() {
         <div class="node-actions"><button class="btn btn-ghost update-sub" data-id="${s.id}" ${busy ? 'disabled' : ''}>${updating ? '更新中...' : '更新'}</button><button class="btn btn-danger rm-sub" data-id="${s.id}" ${busy ? 'disabled' : ''}>删除</button></div>
       </li>`
   }).join('')
-  return `<section class="card subscription-card"><div class="section-heading"><div><h2>订阅</h2><p class="muted">更新时用订阅里的最新节点替换旧节点，下载失败会保留原节点。</p></div>${subs.length > 1 ? `<button class="btn btn-primary" id="updateAllSubs" ${busy ? 'disabled' : ''}>${state.subUpdating === '*' ? '更新中...' : '全部更新'}</button>` : ''}</div><ul class="node-list">${items}</ul></section>`
+  const cfg = state.config || {}
+  const hours = cfg.subscription_auto_update_disabled ? 0 : cfg.subscription_update_hours || 24
+  const choices = [...new Set([0, 6, 12, 24, 48, hours])].sort((a, b) => a - b)
+  const autoSelect = `<select id="subAutoUpdate" class="select sub-auto-select" title="订阅自动更新">${choices.map(h => `<option value="${h}" ${h === hours ? 'selected' : ''}>${h ? `每 ${h} 小时自动更新` : '不自动更新'}</option>`).join('')}</select>`
+  return `<section class="card subscription-card"><div class="section-heading"><div><h2>订阅</h2><p class="muted">更新时用订阅里的最新节点替换旧节点，下载失败会保留原节点。</p></div><span class="node-batch-actions">${autoSelect}${subs.length > 1 ? `<button class="btn btn-primary" id="updateAllSubs" ${busy ? 'disabled' : ''}>${state.subUpdating === '*' ? '更新中...' : '全部更新'}</button>` : ''}</span></div><ul class="node-list">${items}</ul></section>`
 }
 
 function subscriptionResultText(r) {
@@ -960,6 +964,8 @@ function renderNodes() {
     if (!count && id !== 'all' && state.nodeFilter !== id) return ''
     return `<button class="filter-btn ${state.nodeFilter === id ? 'active' : ''}" data-filter="${id}">${label} (${count})</button>`
   }).join('')}</div></div>`
+  // 链接粘到了搜索框里：提示一下，并给个一键导入。
+  if (/^[a-z][a-z0-9+.-]*:\/\//i.test(state.nodeSearch.trim())) return toolsHtml + '<div class="empty">这里是搜索框，只用来筛选节点。<br><button class="btn btn-primary" id="importFromSearch">导入这个链接</button></div>'
   const visible = new Set(visibleNodeIDs())
   const filtered = allNodes.filter(n => visible.has(n.id))
   if (!allNodes.length) return toolsHtml + '<div class="empty">还没有节点，点右上角“导入 / 添加”</div>'
@@ -1439,6 +1445,17 @@ function bindEvents() {
     state.nodeSearch = nodeSearch.value
     localStorage.setItem('sbtun-ui-node-search', state.nodeSearch)
     renderApp()
+  })
+  document.querySelector('#importFromSearch')?.addEventListener('click', () => {
+    resetManualForm()
+    state.manualForm.url = state.nodeSearch.trim()
+    state.nodeSearch = ''
+    localStorage.setItem('sbtun-ui-node-search', '')
+    state.editingNodeId = ''
+    state.nodeFormTab = 'link'
+    state.nodeFormOpen = true
+    renderApp()
+    document.querySelector('#importBtn')?.click()
   })
   const toggleNodeForm = document.querySelector('#toggleNodeForm')
   if (toggleNodeForm) toggleNodeForm.addEventListener('click', () => {
@@ -2247,6 +2264,33 @@ function bindEvents() {
       }
     })
   }
+
+  document.querySelector('#subAutoUpdate')?.addEventListener('change', async event => {
+    const hours = Number(event.target.value)
+    try {
+      await window.go.app.App.SetSubscriptionAutoUpdate(hours)
+      await refreshConfig()
+      renderApp()
+      showToast(hours ? `订阅将每 ${hours} 小时自动更新` : '已关闭订阅自动更新', 'success')
+    } catch (e) {
+      showToast('设置失败：' + (e.message || e), 'error')
+    }
+  })
+
+  // 安卓扫码：识别到的内容追加到输入框，然后直接导入。
+  document.querySelector('#scanQRBtn')?.addEventListener('click', async () => {
+    let text = ''
+    try {
+      text = (await window.runtime.ScanQRCode()).trim()
+    } catch (e) {
+      showToast('扫码失败：' + (e.message || e), 'error')
+      return
+    }
+    if (!text) return
+    state.manualForm.url = [state.manualForm.url.trim(), text].filter(Boolean).join('\n')
+    renderApp()
+    document.querySelector('#importBtn')?.click()
+  })
 
   const importBtn = document.querySelector('#importBtn')
   if (importBtn) {

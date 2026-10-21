@@ -77,5 +77,6 @@ dependencies {
     implementation("androidx.core:core-ktx:1.13.1")
     implementation("androidx.activity:activity-ktx:1.9.3")
     implementation("androidx.webkit:webkit:1.12.1")
+    implementation("com.journeyapps:zxing-android-embedded:4.3.0") // 扫码导入节点，不依赖谷歌服务
     implementation(files("libs/sbtun.aar"))
 }

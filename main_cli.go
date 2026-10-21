@@ -305,7 +305,7 @@ func cliUsage(command string, args []string) string {
 	case "rules":
 		return "sbtun rules [list|add <名称> <SRS_URL>|edit <ID> <名称> <SRS_URL>|delete <ID>|enable <ID>|disable <ID>|restore|update <ID>|update-all]"
 	case "subs":
-		return "sbtun subs [list|update [编号]|delete <编号>]"
+		return "sbtun subs [list|update [编号]|delete <编号>|auto <小时|off>]"
 	case "capture":
 		if len(args) > 0 {
 			switch args[0] {
@@ -453,6 +453,14 @@ func validateCLIArgs(command string, args []string) error {
 				return fmt.Errorf("订阅编号无效: %s", args[1])
 			}
 			return nil
+		case len(args) == 2 && args[0] == "auto":
+			if args[1] == "off" {
+				return nil
+			}
+			if hours, err := strconv.Atoi(args[1]); err != nil || hours < 1 || hours > 720 {
+				return fmt.Errorf("自动更新间隔应为 1 到 720 小时，或 off: %s", args[1])
+			}
+			return nil
 		default:
 			return usageError(command, args)
 		}
@@ -566,6 +574,7 @@ func printHelp() {
 		{"subs", "列出订阅编号"},
 		{"subs update [编号]", "更新指定订阅，省略编号则更新全部"},
 		{"subs delete <编号>", "删除订阅及其全部节点"},
+		{"subs auto <小时|off>", "设置订阅自动更新间隔（默认 24 小时），off 关闭"},
 	})
 	printHelpGroup("路由与规则", []helpEntry{
 		{"route <模式>", "设置路由: smart/global/direct/custom"},
@@ -685,6 +694,11 @@ func runSubsCommand(application *app.App, args []string) error {
 			fmt.Println("暂无订阅，使用 sbtun add-node <订阅地址> 导入")
 			return nil
 		}
+		if hours := app.SubscriptionUpdateHours(cfg); hours > 0 {
+			fmt.Printf("自动更新: 每 %d 小时（sbtun run 运行期间）\n", hours)
+		} else {
+			fmt.Println("自动更新: 关闭")
+		}
 		for i, sub := range subs {
 			count := 0
 			for _, n := range cfg.Nodes {
@@ -728,6 +742,20 @@ func runSubsCommand(application *app.App, args []string) error {
 		}
 		if failed > 0 {
 			return fmt.Errorf("%d 个订阅更新失败", failed)
+		}
+		return nil
+	case "auto":
+		hours := 0
+		if args[1] != "off" {
+			hours, _ = strconv.Atoi(args[1])
+		}
+		if err := application.SetSubscriptionAutoUpdate(hours); err != nil {
+			return err
+		}
+		if hours > 0 {
+			fmt.Printf("订阅将每 %d 小时自动更新\n", hours)
+		} else {
+			fmt.Println("已关闭订阅自动更新")
 		}
 		return nil
 	case "delete":

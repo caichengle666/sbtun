@@ -43,8 +43,11 @@ type Config struct {
 	CurrentNodeID      string         `json:"current_node_id"`
 	Nodes              []Node         `json:"nodes"`
 	Subscriptions      []Subscription `json:"subscriptions,omitempty"`
-	CustomRules        []Rule         `json:"custom_rules,omitempty"`
-	DNSFilterRules     []Rule         `json:"dns_filter_rules,omitempty"`
+	// 订阅默认每 24 小时自动更新；SubscriptionUpdateHours 为 0 时用默认间隔。
+	SubscriptionAutoUpdateDisabled bool   `json:"subscription_auto_update_disabled,omitempty"`
+	SubscriptionUpdateHours        int    `json:"subscription_update_hours,omitempty"`
+	CustomRules                    []Rule `json:"custom_rules,omitempty"`
+	DNSFilterRules                 []Rule `json:"dns_filter_rules,omitempty"`
 	// WebDAV 是云端备份设置，只保存在本机，不会写进备份文件。
 	WebDAV *WebDAVSettings `json:"webdav,omitempty"`
 }

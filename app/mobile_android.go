@@ -27,6 +27,7 @@ func (a *App) StartupMobile(ctx context.Context, dataDir, binary string) {
 	a.initRuntime(dataDir)
 	go a.monitorNodes()
 	go a.autoBackupLoop()
+	go a.subscriptionUpdateLoop()
 }
 
 // MobileProxyURL 是 VPN 转发流量用的本地 SOCKS5 地址（sing-box 的 mixed 入站，带本地认证）。

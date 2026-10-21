@@ -35,6 +35,7 @@
   window.runtime = {
     Environment: () => Promise.resolve({ platform: 'android' }),
     ClipboardSetText: text => native('runtime', 'ClipboardSetText', [String(text)]).then(() => true),
+    ScanQRCode: () => native('runtime', 'ScanQRCode', []),
     BrowserOpenURL: url => { native('runtime', 'BrowserOpenURL', [String(url)]).catch(noop) },
     WindowIsMaximised: () => Promise.resolve(false),
     WindowMinimise: noop,

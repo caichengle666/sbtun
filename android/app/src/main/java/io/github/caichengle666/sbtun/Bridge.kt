@@ -42,6 +42,7 @@ class Bridge(private val activity: MainActivity, private val web: WebView) {
         when (name) {
             "ClipboardSetText" -> activity.getSystemService(ClipboardManager::class.java)
                 .setPrimaryClip(ClipData.newPlainText("sbtun", args.getString(0)))
+            "ScanQRCode" -> return JSONObject().put("result", activity.scanQRCode()).toString()
             "BrowserOpenURL" -> try {
                 activity.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(args.getString(0))))
             } catch (e: Exception) {

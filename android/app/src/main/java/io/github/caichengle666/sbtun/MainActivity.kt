@@ -23,16 +23,21 @@ import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.webkit.WebViewAssetLoader
+import com.journeyapps.barcodescanner.ScanContract
+import com.journeyapps.barcodescanner.ScanOptions
 import java.util.concurrent.CompletableFuture
 
 class MainActivity : ComponentActivity() {
     private lateinit var web: WebView
     private var safeArea = "" // 最近一次计算出的安全区 JS，页面加载完后补发
+    private var lastInsets: WindowInsetsCompat? = null
     private var vpnConsent: CompletableFuture<Boolean>? = null
+    private var qrResult: CompletableFuture<String>? = null
 
     private val vpnPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         vpnConsent?.complete(it.resultCode == RESULT_OK)
     }
+    private val qrScanner = registerForActivityResult(ScanContract()) { qrResult?.complete(it.contents.orEmpty()) }
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
     @SuppressLint("SetJavaScriptEnabled")
@@ -79,17 +84,14 @@ class MainActivity : ComponentActivity() {
         }
         setContentView(web)
 
-        ViewCompat.setOnApplyWindowInsetsListener(web) { view, insets ->
-            val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
-            val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
-            val density = resources.displayMetrics.density
-            fun css(name: String, px: Int) = "s.setProperty('--$name','${(px / density).toInt()}px');"
-            // 键盘高度单独给 --keyboard-h，并打上 data-keyboard，页面据此藏起底部标签栏，不跟着键盘重排。
-            safeArea = "(r=>{const s=r.style;" + css("safe-top", bars.top) + css("safe-bottom", bars.bottom) +
-                css("safe-left", bars.left) + css("safe-right", bars.right) + css("keyboard-h", ime.bottom) +
-                "r.toggleAttribute('data-keyboard'," + (ime.bottom > bars.bottom) + ")})(document.documentElement)"
-            (view as WebView).evaluateJavascript(safeArea, null)
+        ViewCompat.setOnApplyWindowInsetsListener(web) { _, insets ->
+            lastInsets = insets
+            pushSafeArea()
             WindowInsetsCompat.CONSUMED
+        }
+        // 有的系统（如 MIUI）键盘弹出时会把 WebView 缩短，有的不会；布局变化后按实际遮挡重新计算。
+        web.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
+            if (bottom - top != oldBottom - oldTop) pushSafeArea()
         }
 
         onBackPressedDispatcher.addCallback(this) {
@@ -107,8 +109,32 @@ class MainActivity : ComponentActivity() {
         web.loadUrl("https://${WebViewAssetLoader.DEFAULT_DOMAIN}/index.html")
     }
 
+    // 把系统栏和键盘真正盖住 WebView 的部分传给页面：WebView 已被系统缩短时不再重复留空。
+    private fun pushSafeArea() {
+        val insets = lastInsets ?: return
+        val bars = insets.getInsets(WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout())
+        val ime = insets.getInsets(WindowInsetsCompat.Type.ime())
+        val loc = IntArray(2).also(web::getLocationInWindow)
+        val windowH = window.decorView.height
+        if (windowH == 0 || web.height == 0) return
+        val gap = windowH - (loc[1] + web.height) // WebView 底边到窗口底边的距离
+        fun covered(px: Int) = maxOf(0, px - gap)
+        val keyboard = ime.bottom > bars.bottom
+        val shrunk = gap > bars.bottom + 50 // 系统还没把 WebView 恢复原高
+        val density = resources.displayMetrics.density
+        fun css(name: String, px: Int) = "s.setProperty('--$name','${(px / density).toInt()}px');"
+        // 键盘高度单独给 --keyboard-h，并打上 data-keyboard，页面据此藏起底部标签栏，不跟着键盘重排。
+        val js = "(r=>{const s=r.style;" + css("safe-top", bars.top) + css("safe-bottom", covered(bars.bottom)) +
+            css("safe-left", bars.left) + css("safe-right", bars.right) + css("keyboard-h", if (keyboard) covered(ime.bottom) else 0) +
+            "r.toggleAttribute('data-keyboard'," + (keyboard || shrunk) + ")})(document.documentElement)"
+        if (js == safeArea) return
+        safeArea = js
+        web.evaluateJavascript(js, null)
+    }
+
     override fun onDestroy() {
         vpnConsent?.complete(false) // 不让等待授权的后台线程永远卡住
+        qrResult?.complete("")
         web.destroy()
         super.onDestroy()
     }
@@ -147,6 +173,26 @@ class MainActivity : ComponentActivity() {
             }
         }
         return consent.get()
+    }
+
+    // 在后台线程调用：打开摄像头扫二维码，返回识别到的文字，取消时返回空串。相机权限由扫码界面自己申请。
+    fun scanQRCode(): String {
+        val result = CompletableFuture<String>()
+        runOnUiThread {
+            qrResult = result
+            try {
+                qrScanner.launch(
+                    ScanOptions()
+                        .setDesiredBarcodeFormats(ScanOptions.QR_CODE)
+                        .setPrompt("对准节点或订阅二维码")
+                        .setBeepEnabled(false)
+                        .setOrientationLocked(false)
+                )
+            } catch (e: Exception) {
+                result.complete("")
+            }
+        }
+        return result.get()
     }
 
     private companion object {

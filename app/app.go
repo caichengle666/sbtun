@@ -66,6 +66,7 @@ func (a *App) Startup(ctx context.Context) {
 	go a.StartTray()
 	go a.monitorNodes()
 	go a.autoBackupLoop()
+	go a.subscriptionUpdateLoop()
 }
 
 // StartupCLI initializes the runtime without starting the desktop tray.
@@ -80,6 +81,7 @@ func (a *App) StartMonitoring() {
 	}
 	go a.monitorNodes()
 	go a.autoBackupLoop()
+	go a.subscriptionUpdateLoop()
 }
 
 func (a *App) startupCore(ctx context.Context) {
