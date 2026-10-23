@@ -333,9 +333,11 @@ custom add <类型> <内容> <去向> 类型 domain_suffix/domain_keyword/domain
 groups                          列出节点组
 groups add <名称> [条件...]     条件 region=US,JP sub=订阅名 proto=hy2,vless keyword=IPLC exclude=过期
 groups delete <编号>
+custom edit <编号> <类型> <内容> <去向>  修改分流规则，参数同 add
 custom delete <编号>
 filter                          列出 DNS 过滤规则
 filter add <类型> <内容>        添加 DNS 过滤（阻断）规则
+filter edit <编号> <类型> <内容>
 filter delete <编号>
 ```
 

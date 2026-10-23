@@ -443,12 +443,13 @@ textarea.input { resize: vertical; }
 .dns-filter-editor .rule-form-field { margin-top: 0; }
 .dns-filter-editor .rule-form-actions { margin-top: 0; }
 .dns-filter-table { overflow: visible; border: 1px solid #25284a; border-radius: 8px; background: #0d0e15; }
-.dns-filter-head, .dns-filter-row { display: grid; grid-template-columns: 86px 130px minmax(0, 1fr) 72px 58px; align-items: center; gap: 12px; min-width: 0; padding: 11px 14px; }
+.dns-filter-head, .dns-filter-row { display: grid; grid-template-columns: 86px 130px minmax(0, 1fr) 72px 112px; align-items: center; gap: 12px; min-width: 0; padding: 11px 14px; }
 .dns-filter-head { color: #64748b; border-bottom: 1px solid #25284a; font-size: 11px; }
 .dns-filter-row + .dns-filter-row { border-top: 1px solid #1b2035; }
 .dns-filter-row > * { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
 .dns-filter-row strong { color: #e2e8f0; font-size: 13px; font-weight: 500; }
-.dns-filter-row .btn { justify-self: end; padding: 5px 8px; font-size: 11px; }
+.dns-filter-row .btn { padding: 5px 8px; font-size: 11px; }
+.dns-filter-actions { display: flex; justify-content: flex-end; gap: 6px; }
 .dns-filter-toolbar { justify-content: flex-start; }
 
 :root[data-theme="light"] .rules-summary-item,
@@ -486,7 +487,7 @@ textarea.input { resize: vertical; }
   .rule-set-row > .rule-tag.ready, .rule-set-row > .rule-tag.missing, .rule-set-date { display: none; }
   .rule-menu-list { right: -4px; }
   .dns-filter-head { display: none; }
-  .dns-filter-row { grid-template-columns: auto minmax(0, 1fr) 58px; gap: 8px; }
+  .dns-filter-row { grid-template-columns: auto minmax(0, 1fr) auto; gap: 8px; }
   .dns-filter-row > :nth-child(2) { display: none; }
   .dns-filter-row > :nth-child(4) { display: none; }
   .dns-filter-editor { grid-template-columns: 1fr; align-items: stretch; }
@@ -915,3 +916,6 @@ h2 { color: var(--text); letter-spacing: 0; }
 .node-region.guessed { opacity: .65; }
 .filter-btn.empty-chip { opacity: .45; }
 .region-filters .btn-small { padding: 4px 10px; font-size: 12px; }
+
+/* 正在修改的规则高亮 */
+.rule-item.editing { border-color: var(--accent, #22d3ee); box-shadow: 0 0 0 1px var(--accent, #22d3ee) inset; }

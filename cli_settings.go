@@ -52,11 +52,24 @@ func validateRuleListArgs(command string, args []string, withAction bool) error 
 			return fmt.Errorf("规则编号无效: %s", args[1])
 		}
 		return nil
-	case args[0] == "add" && (withAction && len(args) == 4 || !withAction && len(args) == 3):
-		if _, ok := ruleMatchLabels[args[1]]; !ok {
-			return fmt.Errorf("匹配类型无效: %s（可选 domain_suffix、domain_keyword、domain、ip_cidr、port）", args[1])
+	case args[0] == "add" || args[0] == "edit":
+		// edit 比 add 多一个编号：edit <编号> <类型> <内容> [去向]
+		rest := args[1:]
+		if args[0] == "edit" && len(rest) > 0 {
+			if index, err := strconv.Atoi(rest[0]); err != nil || index < 1 {
+				return fmt.Errorf("规则编号无效: %s", rest[0])
+			}
+			rest = rest[1:]
+		} else if args[0] == "edit" {
+			break
 		}
-		if strings.TrimSpace(args[2]) == "" {
+		if withAction && len(rest) != 3 || !withAction && len(rest) != 2 {
+			break
+		}
+		if _, ok := ruleMatchLabels[rest[0]]; !ok {
+			return fmt.Errorf("匹配类型无效: %s（可选 domain_suffix、domain_keyword、domain、ip_cidr、port）", rest[0])
+		}
+		if strings.TrimSpace(rest[1]) == "" {
 			return errors.New("匹配内容不能为空")
 		}
 		return nil
@@ -100,27 +113,40 @@ func runRuleListCommand(application *app.App, args []string, filter bool) error 
 		return nil
 	}
 	switch args[0] {
-	case "add":
-		rule := config.Rule{MatchType: args[1], Value: strings.TrimSpace(args[2]), Action: "block"}
+	case "add", "edit":
+		// edit <编号> 替换该条，add 追加；其余参数相同
+		index, rest := 0, args[1:]
+		if args[0] == "edit" {
+			index, _ = strconv.Atoi(rest[0])
+			rest = rest[1:]
+		}
+		rule := config.Rule{MatchType: rest[0], Value: strings.TrimSpace(rest[1]), Action: "block"}
 		err := mutateConfig(application, func(cfg *config.Config) error {
 			if !filter {
-				action, err := cliRuleTarget(*cfg, args[3])
+				action, err := cliRuleTarget(*cfg, rest[2])
 				if err != nil {
 					return err
 				}
 				rule.Action = action
 			}
 			rules := pick(cfg)
-			for _, existing := range *rules {
-				if existing.MatchType == rule.MatchType && strings.EqualFold(existing.Value, rule.Value) && existing.Action == rule.Action {
+			if index > len(*rules) {
+				return fmt.Errorf("规则编号超出范围: %d", index)
+			}
+			for i, existing := range *rules {
+				if i != index-1 && existing.MatchType == rule.MatchType && strings.EqualFold(existing.Value, rule.Value) && existing.Action == rule.Action {
 					return errors.New("这条规则已经存在")
 				}
 			}
-			*rules = append(*rules, rule)
+			if index > 0 {
+				(*rules)[index-1] = rule
+			} else {
+				*rules = append(*rules, rule)
+			}
 			return nil
 		})
 		if err == nil {
-			fmt.Println("规则已添加")
+			fmt.Println(map[bool]string{true: "规则已修改", false: "规则已添加"}[index > 0])
 		}
 		return err
 	case "delete":

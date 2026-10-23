@@ -58,6 +58,9 @@ const state = {
   documentEventsBound: false,
   dnsFilterFormOpen: false,
   filterRuleForm: { match_type: 'domain_suffix', value: '' },
+  // 正在修改的规则（原样保存，用于在配置里定位），null 表示新增
+  editingCustomRule: null,
+  editingFilterRule: null,
   nodeSwitching: false,
   subUpdating: '',
   nodeHealth: loadNodeHealth(),
@@ -617,7 +620,7 @@ function renderRoutingPage() {
   const diagnostics = state.diagnostics
   return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div><div class="network-options"><div class="network-options-title">网络选项</div><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>节点失效自动切换</strong><small>当前节点连续两次测试失败时，切换到延迟最低的可用节点，优先同一订阅</small></span><span class="toggle-switch"><input id="autoSwitchToggle" type="checkbox" ${state.config?.auto_switch_disabled ? '' : 'checked'}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用 IPv6</strong><small>${escapeHtml(state.ipv6Status?.message || '正在检测设备 IPv6')}</small></span><span class="toggle-switch"><input id="ipv6Toggle" type="checkbox" ${state.config?.ipv6_enabled ? 'checked' : ''} ${busyAttr('ipv6')}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row" data-desktop-only><span class="setting-toggle-copy"><strong>启用 WebRTC 防泄漏</strong><small>防止 WebRTC 通过直连暴露真实 IPv4/IPv6</small></span><span class="toggle-switch"><input id="webrtcProtectionToggle" type="checkbox" ${state.config?.webrtc_protection_enabled ? 'checked' : ''} ${busyAttr('webrtc')}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用诊断信息</strong><small>显示当前 selector 和运行节点，仅用于排查问题</small></span><span class="toggle-switch"><input id="diagnosticsToggle" type="checkbox" ${state.config?.diagnostics_enabled ? 'checked' : ''} ${busyAttr('diagnostics')}><span aria-hidden="true"></span></span></label></div></section>${state.config?.diagnostics_enabled ? `<section class="card"><h2>运行诊断</h2><div class="diagnostics-grid"><span>当前配置节点</span><strong>${escapeHtml(diagnostics?.current_node_id || '未选择')}</strong><span>实际 selector</span><strong>${escapeHtml(diagnostics?.selector || '未读取')}</strong><span>状态</span><strong>${escapeHtml(diagnostics?.message || '读取中')}</strong></div></section>` : ''}
     ${state.config?.routing_mode === 'custom' ? renderNodeGroupsCard() : ''}
-    ${state.config?.routing_mode === 'custom' ? `<section class="card"><div class="section-heading"><div><h2>自定义分流规则</h2><p class="muted">先选择匹配对象，再填写内容和处理方式。</p></div></div><div id="customRulesPanel">${renderCustomRules()}</div><div class="rule-editor ${state.customRuleForm.action === 'node' ? 'with-node' : ''}"><label class="rule-field"><span>匹配对象</span><select id="ruleMatchType" class="select">${RULE_MATCH_TYPES.map(item => `<option value="${item.id}" ${item.id === matchType.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-field"><span>匹配内容</span><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="${matchType.placeholder}" /></label><label class="rule-field"><span>去向</span>${renderRuleActionSelect()}</label>${state.customRuleForm.action === 'node' ? renderRuleNodeSelect() : ''}<button id="addRuleBtn" class="btn btn-primary" ${busyAttr('customRule')}>添加规则</button><small class="rule-hint value-hint" id="ruleValueHint">${matchType.hint}</small><small class="rule-hint action-hint" id="ruleActionHint">${ruleActionHint(state.customRuleForm.action)}</small></div><details class="rule-import" open><summary>批量导入规则</summary><div class="rule-import-body"><textarea id="ruleImport" class="input" rows="3" placeholder="每行一条，例如：proxy,domain_suffix,example.com；也认 Clash 写法：DOMAIN-SUFFIX,openai.com,美国"></textarea><button id="importRuleBtn" class="btn btn-ghost" ${busyAttr('importRule')}>导入</button></div></details></section>` : ''}
+    ${state.config?.routing_mode === 'custom' ? `<section class="card"><div class="section-heading"><div><h2>自定义分流规则</h2><p class="muted">先选择匹配对象，再填写内容和处理方式。</p></div></div><div id="customRulesPanel">${renderCustomRules()}</div><div class="rule-editor ${state.customRuleForm.action === 'node' ? 'with-node' : ''}"><label class="rule-field"><span>匹配对象</span><select id="ruleMatchType" class="select">${RULE_MATCH_TYPES.map(item => `<option value="${item.id}" ${item.id === matchType.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-field"><span>匹配内容</span><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="${matchType.placeholder}" /></label><label class="rule-field"><span>去向</span>${renderRuleActionSelect()}</label>${state.customRuleForm.action === 'node' ? renderRuleNodeSelect() : ''}<button id="addRuleBtn" class="btn btn-primary" ${busyAttr('customRule')}>${state.editingCustomRule ? '保存修改' : '添加规则'}</button>${state.editingCustomRule ? '<button id="cancelEditRule" class="btn btn-ghost">取消</button>' : ''}<small class="rule-hint value-hint" id="ruleValueHint">${matchType.hint}</small><small class="rule-hint action-hint" id="ruleActionHint">${ruleActionHint(state.customRuleForm.action)}</small></div><details class="rule-import" open><summary>批量导入规则</summary><div class="rule-import-body"><textarea id="ruleImport" class="input" rows="3" placeholder="每行一条，例如：proxy,domain_suffix,example.com；也认 Clash 写法：DOMAIN-SUFFIX,openai.com,美国"></textarea><button id="importRuleBtn" class="btn btn-ghost" ${busyAttr('importRule')}>导入</button></div></details></section>` : ''}
   </div>`
 }
 
@@ -653,7 +656,7 @@ function renderRulesPage() {
     ` : `
     <section class="card dns-filter-card">
       <div class="section-heading"><div><h2>手动 DNS 过滤规则</h2><p class="muted">单独添加域名或 IP，命中后直接阻断。优先级高于规则集。</p></div><button id="openFilterRuleBtn" class="btn btn-primary">添加过滤规则</button></div>
-      ${state.dnsFilterFormOpen ? `<div class="dns-filter-editor"><label class="rule-form-field"><span>匹配对象</span><select id="filterRuleMatchType" class="select">${RULE_MATCH_TYPES.filter(item => item.id !== 'port').map(item => `<option value="${item.id}" ${item.id === state.filterRuleForm.match_type ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-form-field"><span>匹配内容</span><input id="filterRuleValue" class="input" value="${escapeHtml(state.filterRuleForm.value)}" placeholder="例如 ads.example.com" /></label><div class="rule-form-actions"><button id="addFilterRuleBtn" class="btn btn-primary" ${busyAttr('filterRule')}>添加规则</button><button id="cancelFilterRuleBtn" class="btn btn-ghost">取消</button></div></div>` : ''}
+      ${state.dnsFilterFormOpen ? `<div class="dns-filter-editor"><label class="rule-form-field"><span>匹配对象</span><select id="filterRuleMatchType" class="select">${RULE_MATCH_TYPES.filter(item => item.id !== 'port').map(item => `<option value="${item.id}" ${item.id === state.filterRuleForm.match_type ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-form-field"><span>匹配内容</span><input id="filterRuleValue" class="input" value="${escapeHtml(state.filterRuleForm.value)}" placeholder="例如 ads.example.com" /></label><div class="rule-form-actions"><button id="addFilterRuleBtn" class="btn btn-primary" ${busyAttr('filterRule')}>${state.editingFilterRule ? '保存修改' : '添加规则'}</button><button id="cancelFilterRuleBtn" class="btn btn-ghost">取消</button></div></div>` : ''}
       ${renderDNSFilterRules()}
       <div class="rules-toolbar dns-filter-toolbar"><span class="rules-summary-note">共 ${(state.config?.dns_filter_rules || []).length} 条手动过滤规则</span></div>
     </section>
@@ -1030,7 +1033,7 @@ function renderRules() {
 function renderDNSFilterRules() {
   const rules = state.config?.dns_filter_rules || []
   if (!rules.length) return '<div class="dns-empty empty">暂无手动 DNS 过滤规则</div>'
-  return `<div class="dns-filter-table"><div class="dns-filter-head"><span>状态</span><span>匹配对象</span><span>匹配内容</span><span>处理</span><span></span></div>${rules.map((rule, index) => `<div class="dns-filter-row"><span class="rule-tag ready">已启用</span><span>${escapeHtml(ruleMatchLabel(rule.match_type))}</span><strong>${escapeHtml(rule.value)}</strong><span class="rule-tag block">阻断</span><button class="btn btn-ghost remove-filter-rule" data-index="${index}">删除</button></div>`).join('')}</div>`
+  return `<div class="dns-filter-table"><div class="dns-filter-head"><span>状态</span><span>匹配对象</span><span>匹配内容</span><span>处理</span><span></span></div>${rules.map((rule, index) => `<div class="dns-filter-row"><span class="rule-tag ready">已启用</span><span>${escapeHtml(ruleMatchLabel(rule.match_type))}</span><strong>${escapeHtml(rule.value)}</strong><span class="rule-tag block">阻断</span><span class="dns-filter-actions"><button class="btn btn-ghost edit-filter-rule" data-index="${index}">修改</button><button class="btn btn-ghost remove-filter-rule" data-index="${index}">删除</button></span></div>`).join('')}</div>`
 }
 
 function formatRuleInfo(rule) {
@@ -1306,10 +1309,23 @@ async function updateConfig(mutate) {
 }
 
 // 按内容删除规则：下标来自可能过期的 state.config，不能直接按下标删
+function ruleIndex(rules, target) {
+  return (rules || []).findIndex(rule => rule.match_type === target.match_type && rule.value === target.value && rule.action === target.action)
+}
+
 function removeRule(list, target) {
   const rules = list || []
-  const index = rules.findIndex(rule => rule.match_type === target.match_type && rule.value === target.value && rule.action === target.action)
+  const index = ruleIndex(rules, target)
   return index === -1 ? rules : rules.filter((_, i) => i !== index)
+}
+
+// saveRule 新增或替换（editing 为被修改的原规则）一条规则；same 判断是否与已有规则重复。
+function saveRule(list, rule, editing, same, duplicateMessage) {
+  const rules = list || []
+  const index = editing ? ruleIndex(rules, editing) : -1
+  if (editing && index === -1) throw new Error('这条规则已被删除或改动，请重新选择')
+  if (rules.some((existing, i) => i !== index && same(existing))) throw new Error(duplicateMessage)
+  return index === -1 ? [...rules, rule] : rules.map((existing, i) => i === index ? rule : existing)
 }
 
 // 文本框输入：输入法组字期间不处理，组字结束再处理一次
@@ -1414,9 +1430,10 @@ function renderCustomRules() {
   const rules = state.config?.custom_rules || []
   if (!rules.length) return '<div class="empty">暂无自定义规则</div>'
   return rules.map((rule, index) => `
-    <div class="node-item rule-item">
+    <div class="node-item rule-item ${state.editingCustomRule && ruleIndex(rules, state.editingCustomRule) === index ? 'editing' : ''}">
       <span class="badge">${escapeHtml(ruleMatchLabel(rule.match_type))}</span>
       <span class="rule-content"><span class="node-name">${escapeHtml(rule.value)}</span>${ruleTarget(rule.action)}</span>
+      <button class="btn btn-ghost edit-custom-rule" data-index="${index}">修改</button>
       <button class="btn btn-danger remove-custom-rule" data-index="${index}">删除</button>
     </div>
   `).join('')
@@ -1847,13 +1864,14 @@ function bindEvents() {
     const error = action === 'node:' ? '请选择节点' : validateCustomRule(matchType, value)
     if (error) return showToast(error, 'error')
     runOnce('customRule', async () => {
+      const editing = state.editingCustomRule
       await updateConfig(cfg => {
-        cfg.custom_rules = cfg.custom_rules || []
-        if (cfg.custom_rules.some(rule => rule.match_type === matchType && rule.value.toLowerCase() === value.toLowerCase() && rule.action === action)) throw new Error('这条规则已经存在')
-        cfg.custom_rules.push({ match_type: matchType, value, action })
+        cfg.custom_rules = saveRule(cfg.custom_rules, { match_type: matchType, value, action }, editing,
+          rule => rule.match_type === matchType && rule.value.toLowerCase() === value.toLowerCase() && rule.action === action, '这条规则已经存在')
       })
       state.customRuleForm.value = ''
-      showToast('规则已添加', 'success')
+      state.editingCustomRule = null
+      showToast(editing ? '规则已修改' : '规则已添加', 'success')
     }, addRuleBtn)
   })
   const ruleImport = document.querySelector('#ruleImport')
@@ -1871,6 +1889,21 @@ function bindEvents() {
       await refreshConfig()
       showToast('已导入 ' + count + ' 条规则', 'success')
     }, importRuleBtn)
+  })
+  document.querySelectorAll('.edit-custom-rule').forEach(btn => btn.addEventListener('click', () => {
+    const rule = state.config?.custom_rules?.[Number(btn.dataset.index)]
+    if (!rule) return
+    const node = rule.action.startsWith('node:')
+    state.editingCustomRule = { ...rule }
+    state.customRuleForm = { match_type: rule.match_type, value: rule.value, action: node ? 'node' : rule.action, node_id: node ? rule.action.slice(5) : '' }
+    renderApp()
+    document.querySelector('#ruleValue')?.focus()
+    document.querySelector('.rule-editor')?.scrollIntoView({ block: 'nearest' })
+  }))
+  document.querySelector('#cancelEditRule')?.addEventListener('click', () => {
+    state.editingCustomRule = null
+    state.customRuleForm = { match_type: 'domain_suffix', value: '', action: 'proxy', node_id: '' }
+    renderApp()
   })
   document.querySelectorAll('.remove-custom-rule').forEach(btn => btn.addEventListener('click', () => {
     const target = state.config?.custom_rules?.[Number(btn.dataset.index)]
@@ -2323,27 +2356,40 @@ function bindEvents() {
     const error = validateCustomRule(matchType, value)
     if (error && matchType !== 'ip_cidr') return showToast(error, 'error')
     runOnce('filterRule', async () => {
+      const editing = state.editingFilterRule
       await updateConfig(cfg => {
-        cfg.dns_filter_rules = cfg.dns_filter_rules || []
-        if (cfg.dns_filter_rules.some(rule => rule.match_type === matchType && rule.value.toLowerCase() === value.toLowerCase())) throw new Error('这条过滤规则已经存在')
-        cfg.dns_filter_rules.push({ match_type: matchType, value, action: 'block' })
+        cfg.dns_filter_rules = saveRule(cfg.dns_filter_rules, { match_type: matchType, value, action: 'block' }, editing,
+          rule => rule.match_type === matchType && rule.value.toLowerCase() === value.toLowerCase(), '这条过滤规则已经存在')
       })
       state.filterRuleForm = { match_type: 'domain_suffix', value: '' }
       state.dnsFilterFormOpen = false
-      showToast('过滤规则已添加', 'success')
+      state.editingFilterRule = null
+      showToast(editing ? '过滤规则已修改' : '过滤规则已添加', 'success')
     }, addFilterRuleBtn)
   })
   const openFilterRuleBtn = document.querySelector('#openFilterRuleBtn')
   if (openFilterRuleBtn) openFilterRuleBtn.addEventListener('click', () => {
+    state.editingFilterRule = null
+    state.filterRuleForm = { match_type: 'domain_suffix', value: '' }
     state.dnsFilterFormOpen = true
     renderApp()
   })
   const cancelFilterRuleBtn = document.querySelector('#cancelFilterRuleBtn')
   if (cancelFilterRuleBtn) cancelFilterRuleBtn.addEventListener('click', () => {
     state.dnsFilterFormOpen = false
+    state.editingFilterRule = null
     state.filterRuleForm = { match_type: 'domain_suffix', value: '' }
     renderApp()
   })
+  document.querySelectorAll('.edit-filter-rule').forEach(btn => btn.addEventListener('click', () => {
+    const rule = state.config?.dns_filter_rules?.[Number(btn.dataset.index)]
+    if (!rule) return
+    state.editingFilterRule = { ...rule }
+    state.filterRuleForm = { match_type: rule.match_type, value: rule.value }
+    state.dnsFilterFormOpen = true
+    renderApp()
+    document.querySelector('#filterRuleValue')?.focus()
+  }))
   document.querySelectorAll('.remove-filter-rule').forEach(btn => btn.addEventListener('click', () => {
     const target = state.config?.dns_filter_rules?.[Number(btn.dataset.index)]
     if (!target) return

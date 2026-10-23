@@ -295,11 +295,11 @@ func cliUsage(command string, args []string) string {
 	case "test", "export":
 		return "sbtun " + command + " [编号...]"
 	case "custom":
-		return "sbtun custom [list|add <类型> <内容> <去向>|delete <编号>]"
+		return "sbtun custom [list|add <类型> <内容> <去向>|edit <编号> <类型> <内容> <去向>|delete <编号>]"
 	case "groups":
 		return "sbtun groups [list|add <名称> [region=US,JP] [sub=订阅] [proto=hy2,vless] [keyword=词] [exclude=词]|delete <编号>]"
 	case "filter":
-		return "sbtun filter [list|add <类型> <内容>|delete <编号>]"
+		return "sbtun filter [list|add <类型> <内容>|edit <编号> <类型> <内容>|delete <编号>]"
 	case "set":
 		return "sbtun set <ipv6|webrtc|diagnostics> <on|off>"
 	case "edit":
@@ -592,12 +592,14 @@ func printHelp() {
 		{"add-rule <链接|文件|文本>", "批量导入自定义规则"},
 		{"custom", "列出自定义分流规则"},
 		{"custom add <类型> <内容> <去向>", "添加分流规则，类型 domain_suffix/domain_keyword/domain/ip_cidr/port；去向 proxy/direct/block，或节点组名、节点名、订阅名、协议(hy2)、地区(美国/US)"},
+		{"custom edit <编号> <类型> <内容> <去向>", "修改分流规则，参数同 add"},
 		{"custom delete <编号>", "删除分流规则"},
 		{"groups", "列出节点组（规则可以直接走一个组，组内自动用最快的）"},
 		{"groups add <名称> [条件...]", "新建节点组，条件 region=US,JP sub=订阅名 proto=hy2,vless keyword=IPLC exclude=过期，不写的不限"},
 		{"groups delete <编号>", "删除节点组"},
 		{"filter", "列出 DNS 过滤规则"},
 		{"filter add <类型> <内容>", "添加 DNS 过滤（阻断）规则"},
+		{"filter edit <编号> <类型> <内容>", "修改 DNS 过滤规则"},
 		{"filter delete <编号>", "删除 DNS 过滤规则"},
 		{"rules list", "列出规则集"},
 		{"rules add <名称> <SRS_URL>", "添加广告或其他 SRS 规则集"},
