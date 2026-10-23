@@ -130,8 +130,10 @@ const RULE_MATCH_TYPES = [
 ]
 
 // 节点落地地区：国旗 + 中文名。国旗用两个区域指示符拼出，Windows 靠 style.css 里的 Twemoji 国旗字体显示。
-const REGION_NAMES = { HK: '香港', TW: '台湾', JP: '日本', KR: '韩国', SG: '新加坡', US: '美国', GB: '英国', DE: '德国', FR: '法国', NL: '荷兰', CA: '加拿大', AU: '澳大利亚', IN: '印度', TR: '土耳其', RU: '俄罗斯', MY: '马来西亚', TH: '泰国', ID: '印尼', MO: '澳门', VN: '越南', PH: '菲律宾', AR: '阿根廷', BR: '巴西' }
-const regionName = code => REGION_NAMES[code] || code
+const REGION_NAMES = { HK: '香港', TW: '台湾', JP: '日本', KR: '韩国', SG: '新加坡', US: '美国', GB: '英国', DE: '德国', FR: '法国', NL: '荷兰', CA: '加拿大', AU: '澳大利亚', IN: '印度', TR: '土耳其', RU: '俄罗斯', MY: '马来西亚', TH: '泰国', ID: '印尼', MO: '澳门', VN: '越南', PH: '菲律宾', AR: '阿根廷', BR: '巴西', AE: '阿联酋', IT: '意大利', ES: '西班牙', CH: '瑞士', SE: '瑞典', PL: '波兰', UA: '乌克兰', IL: '以色列', MX: '墨西哥', CL: '智利', ZA: '南非', NZ: '新西兰', IE: '爱尔兰', FI: '芬兰', NO: '挪威', DK: '丹麦', AT: '奥地利', BE: '比利时', PT: '葡萄牙', CZ: '捷克', RO: '罗马尼亚', HU: '匈牙利', KZ: '哈萨克斯坦', PK: '巴基斯坦', BD: '孟加拉', SA: '沙特', EG: '埃及', NG: '尼日利亚', CO: '哥伦比亚', PE: '秘鲁', LU: '卢森堡', IS: '冰岛', GR: '希腊', BG: '保加利亚', RS: '塞尔维亚', LT: '立陶宛', LV: '拉脱维亚', EE: '爱沙尼亚', MN: '蒙古', KH: '柬埔寨', MM: '缅甸', LA: '老挝', NP: '尼泊尔', LK: '斯里兰卡', MD: '摩尔多瓦', GE: '格鲁吉亚', AM: '亚美尼亚', AZ: '阿塞拜疆' }
+// 没收录的地区用系统的中文地区名兜底（旧 WebView 没有 Intl.DisplayNames 就显示代码）
+const regionDisplay = (() => { try { return new Intl.DisplayNames(['zh-CN'], { type: 'region' }) } catch { return null } })()
+const regionName = code => { if (REGION_NAMES[code]) return REGION_NAMES[code]; try { return regionDisplay?.of(code) || code } catch { return code } }
 const regionFlag = code => /^[A-Z]{2}$/.test(code) ? String.fromCodePoint(...[...code].map(c => 0x1F1A5 + c.charCodeAt(0))) : ''
 const regionLabel = code => `<span class="region-flag">${regionFlag(code)}</span>${escapeHtml(regionName(code))}`
 // 按节点数从多到少列出现有地区
@@ -1062,8 +1064,9 @@ function activeRegionFilter() {
   if (r === 'none') return (state.config?.nodes || []).some(n => !n.country) ? r : 'all'
   return nodeRegions().some(item => item.code === r) ? r : 'all'
 }
-const protoMatches = n => state.nodeFilter === 'all' || n.protocol === state.nodeFilter
-const regionMatches = n => { const r = activeRegionFilter(); return r === 'all' || (r === 'none' ? !n.country : n.country === r) }
+// 用函数声明：启动时若停在节点页，render() 在模块加载阶段就会调用它们（const 箭头函数此时还在暂时性死区）
+function protoMatches(n) { return state.nodeFilter === 'all' || n.protocol === state.nodeFilter }
+function regionMatches(n) { const r = activeRegionFilter(); return r === 'all' || (r === 'none' ? !n.country : n.country === r) }
 
 function renderRegionChips() {
   const all = state.config?.nodes || []
