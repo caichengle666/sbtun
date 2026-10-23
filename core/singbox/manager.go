@@ -26,6 +26,7 @@ type Manager struct {
 	mu       sync.Mutex
 	cmd      *exec.Cmd
 	pidPath  string
+	logPath  string
 	logFile  *os.File
 	exited   chan ExitEvent
 	done     chan struct{}
@@ -82,6 +83,7 @@ func (m *Manager) Start(ctx context.Context, binary, configPath string) error {
 	cmd.Stdout = f
 	cmd.Stderr = f
 	m.logFile = f
+	m.logPath = logFile
 
 	if err := startProcess(cmd); err != nil {
 		_ = f.Close()

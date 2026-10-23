@@ -1,6 +1,8 @@
 package singbox
 
 import (
+	"github.com/caichengle666/sbtun/core/tun"
+
 	"encoding/base64"
 	"encoding/json"
 	"fmt"
@@ -65,6 +67,9 @@ func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth, resol
 		"type": "tun", "tag": "tun-in",
 		"address":    tunAddresses(cfg.IPv6Enabled),
 		"auto_route": true, "strict_route": cfg.WebRTCProtectionEnabled, "stack": "system",
+	}
+	if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
+		tunInbound["interface_name"] = tun.InterfaceName
 	}
 	// Node servers bypass TUN at the OS routing level, so Ping/TCPing from
 	// sbtun reach each node directly instead of going through the current node.

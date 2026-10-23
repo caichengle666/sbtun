@@ -18,6 +18,7 @@ import (
 	"github.com/caichengle666/sbtun/core/capture"
 	"github.com/caichengle666/sbtun/core/rules"
 	"github.com/caichengle666/sbtun/core/singbox"
+	"github.com/caichengle666/sbtun/core/tun"
 )
 
 type App struct {
@@ -1034,13 +1035,19 @@ func (a *App) checkReady(ctx context.Context) error {
 	if a.runtime == nil || a.runtime.SingBox == nil || a.runtime.TUN == nil {
 		return errors.New("运行时未初始化")
 	}
-	if !a.runtime.SingBox.Running() {
-		return errors.New("sing-box 进程未存活，请检查节点配置")
+	err := a.runtime.TUN.WaitReady(8*time.Second, a.runtime.SingBox.Running)
+	if err == nil {
+		return nil
 	}
-	if err := a.runtime.TUN.WaitReady(8 * time.Second); err != nil {
-		return err
+	// 网卡没出来多半是 sing-box 自己报了错（没有管理员权限、缺 wintun.dll、网卡名被占用等），
+	// 把它日志里的最后一条错误带上，而不是只说“网卡未出现”。
+	if reason := a.runtime.SingBox.LastError(); reason != "" {
+		return fmt.Errorf("%v：%s", err, reason)
 	}
-	return nil
+	if errors.Is(err, tun.ErrProcessExited) {
+		return errors.New("sing-box 启动后退出，请检查节点配置")
+	}
+	return err
 }
 
 func fileExists(path string) bool {

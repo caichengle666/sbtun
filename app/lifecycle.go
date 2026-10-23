@@ -95,6 +95,10 @@ func (r *RuntimeCoordinator) watchSingBoxExit() {
 		if event.Err != nil {
 			message += ": " + event.Err.Error()
 		}
+		// “exit status 1”本身看不出原因，带上 sing-box 日志里最后一条错误。
+		if reason := r.SingBox.LastError(); reason != "" {
+			message += "：" + reason
+		}
 		r.State.Set(core.StateError, message)
 		if r.Capture != nil {
 			_ = r.Capture.Stop()
