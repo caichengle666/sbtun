@@ -3,10 +3,12 @@ package singbox
 import (
 	"encoding/json"
 	"fmt"
+	"net"
 	"net/netip"
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -490,7 +492,7 @@ func TestTUNKeepsWindowsCompatibleRouteMode(t *testing.T) {
 		t.Fatalf("strict_route=%v want=false", runtime.Inbounds[0]["strict_route"])
 	}
 	addresses := runtime.Inbounds[0]["address"].([]any)
-	if len(addresses) != 1 || addresses[0] != "172.18.0.1/30" {
+	if len(addresses) != 1 || addresses[0] != tunIPv4Address(localIPv4s()) {
 		t.Fatalf("tun addresses=%v want IPv4 only by default", runtime.Inbounds[0]["address"])
 	}
 	rules := runtime.Route["rules"].([]any)
@@ -673,5 +675,18 @@ func TestMobileInboundPassesSingBoxCheck(t *testing.T) {
 	}
 	if output, err := exec.Command(binary, "check", "-c", path).CombinedOutput(); err != nil {
 		t.Fatalf("sing-box check failed: %v\n%s\n%s", err, output, data)
+	}
+}
+
+func TestTunIPv4AddressSkipsUsed(t *testing.T) {
+	if runtime.GOOS != "windows" && runtime.GOOS != "linux" {
+		t.Skip("只有 Windows / Linux 会顺延地址")
+	}
+	used := []net.IP{net.ParseIP("172.18.0.1"), net.ParseIP("172.19.0.2"), net.ParseIP("192.168.1.5")}
+	if got := tunIPv4Address(used); got != "172.20.0.1/30" {
+		t.Fatalf("got %s", got)
+	}
+	if got := tunIPv4Address(nil); got != "172.18.0.1/30" {
+		t.Fatalf("got %s", got)
 	}
 }
