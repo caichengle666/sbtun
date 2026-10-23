@@ -174,7 +174,19 @@ sing-box 不支持的内容会跳过：ShadowsocksR、Snell、xhttp / kcp 等传
 - IP/CIDR
 - 端口
 
-每条规则可以选择 `proxy`、`direct` 或 `block`。用户规则优先于内置分流规则。
+每条规则的去向可以是：
+
+- `proxy`（当前节点）、`direct`、`block`；
+- 指定节点 `node:<ID>`；
+- 节点组 `group:<ID>`、订阅 `sub:<ID>`、地区 `region:US`、协议 `proto:hysteria2`：组里自动用延迟最低的节点，节点挂了自动换下一个。
+
+用户规则优先于内置分流规则。指定的节点、节点组被删除，或组里没有可用节点时，这条规则暂走当前节点，界面会标红提示。改规则只会重载 sing-box，不会重建 TUN。
+
+**节点组**：按机场（订阅）、地区、协议、名称包含 / 排除组合挑节点。同一项里选多个是“任一”，不同项之间是“同时满足”，不选的项不限；订阅更新后组里的节点自动增减。
+
+**节点地区**：第一次测速成功时会经该节点查一次落地 IP 和归属地（之后不再重复查，节点参数变了才重查）；还没测过的节点按名字里的国旗、地名推测。节点列表可以按地区筛选、分组。
+
+**批量导入**除了本软件的 `proxy,domain_suffix,example.com` 写法，也认 Clash / Mihomo（含 YAML 的 `- ` 列表）、Surge、Quantumult X 的 `DOMAIN-SUFFIX,openai.com,策略` 规则行。策略是 `DIRECT` / `REJECT` 时对应直连 / 阻断；和节点组名、节点名、订阅名、协议（如 `hy2`）相同，或能认出地区（如 `🇺🇸 美国`）时走对应的节点；其余策略（如 `🚀 节点选择`）走当前节点。`GEOIP`、`MATCH`、`RULE-SET` 等没有对应的规则会跳过。
 
 ### 网络选项
 
@@ -316,7 +328,11 @@ rules update <ID>
 rules update-all
 add-rule <链接|文件|文本>       批量导入自定义规则
 custom                          列出自定义分流规则
-custom add <类型> <内容> <动作> 类型 domain_suffix/domain_keyword/domain/ip_cidr/port，动作 proxy/direct/block
+custom add <类型> <内容> <去向> 类型 domain_suffix/domain_keyword/domain/ip_cidr/port；去向 proxy/direct/block，
+                                或节点组名、节点名、订阅名、协议（hy2）、地区（美国 / US）
+groups                          列出节点组
+groups add <名称> [条件...]     条件 region=US,JP sub=订阅名 proto=hy2,vless keyword=IPLC exclude=过期
+groups delete <编号>
 custom delete <编号>
 filter                          列出 DNS 过滤规则
 filter add <类型> <内容>        添加 DNS 过滤（阻断）规则
@@ -472,4 +488,4 @@ go vet -tags cli ./...
 
 MIT License，详见 [LICENSE](LICENSE) 文件。
 
-第三方组件（sing-box、Wails、Wintun 等）仍分别受其自身许可证约束。
+第三方组件（sing-box、Wails、Wintun 等）仍分别受其自身许可证约束。界面里的国旗使用 [Twemoji](https://github.com/twitter/twemoji) 图形（经 [country-flag-emoji-polyfill](https://github.com/talkjs/country-flag-emoji-polyfill) 打包成字体），按 CC-BY 4.0 许可使用。

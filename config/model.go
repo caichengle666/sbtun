@@ -47,7 +47,9 @@ type Config struct {
 	SubscriptionAutoUpdateDisabled bool   `json:"subscription_auto_update_disabled,omitempty"`
 	SubscriptionUpdateHours        int    `json:"subscription_update_hours,omitempty"`
 	CustomRules                    []Rule `json:"custom_rules,omitempty"`
-	DNSFilterRules                 []Rule `json:"dns_filter_rules,omitempty"`
+	// NodeGroups 是规则可以直接指向的节点组（group:<ID>）。
+	NodeGroups     []NodeGroup `json:"node_groups,omitempty"`
+	DNSFilterRules []Rule      `json:"dns_filter_rules,omitempty"`
 	// WebDAV 是云端备份设置，只保存在本机，不会写进备份文件。
 	WebDAV *WebDAVSettings `json:"webdav,omitempty"`
 }
@@ -73,6 +75,10 @@ type Node struct {
 	Settings map[string]string `json:"settings,omitempty"`
 	// Subscription 是节点所属订阅的 ID，手动添加的节点为空。
 	Subscription string `json:"subscription,omitempty"`
+	// Country 是落地地区代码（US、HK…）：测速查到的落地 IP 归属地，没测过时按节点名推测。
+	Country string `json:"country,omitempty"`
+	// ExitIP 是测速时经该节点查到的落地 IP，为空表示 Country 只是按名字猜的。
+	ExitIP string `json:"exit_ip,omitempty"`
 }
 
 // Subscription 记录已导入的远程订阅，用于之后一键更新节点。

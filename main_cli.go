@@ -176,6 +176,8 @@ func main() {
 		err = runRuleListCommand(application, commandArgs, false)
 	case "filter":
 		err = runRuleListCommand(application, commandArgs, true)
+	case "groups":
+		err = runGroupsCommand(application, commandArgs)
 	case "set":
 		err = runSetCommand(application, commandArgs)
 	case "backup":
@@ -293,7 +295,9 @@ func cliUsage(command string, args []string) string {
 	case "test", "export":
 		return "sbtun " + command + " [编号...]"
 	case "custom":
-		return "sbtun custom [list|add <类型> <内容> <proxy|direct|block>|delete <编号>]"
+		return "sbtun custom [list|add <类型> <内容> <去向>|delete <编号>]"
+	case "groups":
+		return "sbtun groups [list|add <名称> [region=US,JP] [sub=订阅] [proto=hy2,vless] [keyword=词] [exclude=词]|delete <编号>]"
 	case "filter":
 		return "sbtun filter [list|add <类型> <内容>|delete <编号>]"
 	case "set":
@@ -398,6 +402,8 @@ func validateCLIArgs(command string, args []string) error {
 		return requireNodeIndices()
 	case "custom":
 		return validateRuleListArgs(command, args, true)
+	case "groups":
+		return validateGroupsArgs(args)
 	case "filter":
 		return validateRuleListArgs(command, args, false)
 	case "set":
@@ -535,7 +541,7 @@ func requiresElevation(command string, args []string) bool {
 	switch command {
 	case "run", "start", "stop", "route", "auto-switch", "add-node", "add-rule", "switch", "del", "delete", "edit", "set":
 		return true
-	case "custom", "filter":
+	case "custom", "filter", "groups":
 		return len(args) > 0 && (args[0] == "add" || args[0] == "delete")
 	case "capture":
 		if len(args) == 0 {
@@ -585,8 +591,11 @@ func printHelp() {
 		{"diag", "查看运行诊断（需先开启诊断信息）"},
 		{"add-rule <链接|文件|文本>", "批量导入自定义规则"},
 		{"custom", "列出自定义分流规则"},
-		{"custom add <类型> <内容> <动作>", "添加分流规则，类型 domain_suffix/domain_keyword/domain/ip_cidr/port，动作 proxy/direct/block"},
+		{"custom add <类型> <内容> <去向>", "添加分流规则，类型 domain_suffix/domain_keyword/domain/ip_cidr/port；去向 proxy/direct/block，或节点组名、节点名、订阅名、协议(hy2)、地区(美国/US)"},
 		{"custom delete <编号>", "删除分流规则"},
+		{"groups", "列出节点组（规则可以直接走一个组，组内自动用最快的）"},
+		{"groups add <名称> [条件...]", "新建节点组，条件 region=US,JP sub=订阅名 proto=hy2,vless keyword=IPLC exclude=过期，不写的不限"},
+		{"groups delete <编号>", "删除节点组"},
 		{"filter", "列出 DNS 过滤规则"},
 		{"filter add <类型> <内容>", "添加 DNS 过滤（阻断）规则"},
 		{"filter delete <编号>", "删除 DNS 过滤规则"},
@@ -630,6 +639,8 @@ func printHelp() {
   sbtun del 1 2 3
   sbtun test
   sbtun custom add domain_suffix example.com direct
+  sbtun groups add "美国 hy2" region=US proto=hy2
+  sbtun custom add domain_suffix openai.com "美国 hy2"
   sbtun edit 2
   sbtun edit 2 "vless://UUID@1.2.3.4:443?..."
 
@@ -1029,7 +1040,13 @@ func listNodes(application *app.App) error {
 		if name, ok := subNames[node.Subscription]; ok {
 			source = name
 		}
-		fmt.Printf("%s %d\t%s\t%s\t%s:%d\t%s\n", marker, i+1, node.Name, node.Protocol, node.Server, node.Port, source)
+		region := node.Country
+		if region == "" {
+			region = "--"
+		} else if node.ExitIP == "" {
+			region += "?" // 按名字猜的，测速后会查落地
+		}
+		fmt.Printf("%s %d\t%s\t%s\t%s\t%s:%d\t%s\n", marker, i+1, node.Name, region, node.Protocol, node.Server, node.Port, source)
 	}
 	fmt.Printf("当前节点: %s\n", currentID)
 	return nil

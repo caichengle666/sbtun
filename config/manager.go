@@ -53,6 +53,7 @@ func (m *Manager) loadLocked() (Config, error) {
 	if err := Validate(cfg); err != nil {
 		return Config{}, err
 	}
+	fillRegions(&cfg)
 	return cfg, nil
 }
 
@@ -204,6 +205,9 @@ func Validate(cfg Config) error {
 			return fmt.Errorf("第 %d 条自定义规则无效: %w", i+1, err)
 		}
 	}
+	if err := validateGroups(cfg.NodeGroups); err != nil {
+		return err
+	}
 	for i, r := range cfg.DNSFilterRules {
 		if strings.ToLower(strings.TrimSpace(r.Action)) != "block" {
 			return fmt.Errorf("第 %d 条 DNS 过滤规则必须使用阻断动作", i+1)
@@ -239,9 +243,8 @@ func validateRule(r Rule) error {
 	if value == "" {
 		return errors.New("匹配值不能为空")
 	}
-	action := strings.ToLower(strings.TrimSpace(r.Action))
-	if action != "proxy" && action != "direct" && action != "block" {
-		return fmt.Errorf("不支持动作 %q", r.Action)
+	if err := ValidateAction(r.Action); err != nil {
+		return err
 	}
 	if match == "port" {
 		p, err := strconv.Atoi(value)

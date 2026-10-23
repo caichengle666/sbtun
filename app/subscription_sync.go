@@ -208,7 +208,8 @@ func mergeSubscriptionNodes(nodes []config.Node, subID string, fresh []config.No
 			otherFPs[nodeFingerprint(n)] = struct{}{}
 		}
 	}
-	ownedIDs := make(map[string]string) // 指纹 -> 本订阅（或待收编）旧节点的 ID
+	ownedIDs := make(map[string]string)       // 指纹 -> 本订阅（或待收编）旧节点的 ID
+	ownedExit := make(map[string]config.Node) // 指纹 -> 已查到落地 IP 的旧节点
 	taken := make(map[string]struct{}, len(nodes))
 	replaced := make([]bool, len(nodes))
 	for i, n := range nodes {
@@ -219,6 +220,9 @@ func mergeSubscriptionNodes(nodes []config.Node, subID string, fresh []config.No
 			replaced[i] = true
 			if _, ok := ownedIDs[fp]; !ok {
 				ownedIDs[fp] = n.ID
+			}
+			if n.ExitIP != "" {
+				ownedExit[fp] = n
 			}
 			continue
 		}
@@ -246,6 +250,9 @@ func mergeSubscriptionNodes(nodes []config.Node, subID string, fresh []config.No
 				n.ID = id
 				taken[id] = struct{}{}
 			}
+		}
+		if old, ok := ownedExit[fp]; ok {
+			n.Country, n.ExitIP = old.Country, old.ExitIP // 参数没变，落地也没变
 		}
 		incoming = append(incoming, n)
 		fps = append(fps, fp)

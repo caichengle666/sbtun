@@ -59,11 +59,6 @@ func validateRuleListArgs(command string, args []string, withAction bool) error 
 		if strings.TrimSpace(args[2]) == "" {
 			return errors.New("匹配内容不能为空")
 		}
-		if withAction {
-			if _, ok := ruleActionLabels[args[3]]; !ok {
-				return fmt.Errorf("处理方式无效: %s（可选 proxy、direct、block）", args[3])
-			}
-		}
 		return nil
 	}
 	return usageError(command, args)
@@ -100,17 +95,21 @@ func runRuleListCommand(application *app.App, args []string, filter bool) error 
 			return nil
 		}
 		for i, rule := range rules {
-			fmt.Printf("%d\t%s\t%s\t%s\n", i+1, ruleMatchLabels[rule.MatchType], rule.Value, ruleActionLabels[rule.Action])
+			fmt.Printf("%d\t%s\t%s\t%s\n", i+1, ruleMatchLabels[rule.MatchType], rule.Value, describeAction(cfg, rule.Action))
 		}
 		return nil
 	}
 	switch args[0] {
 	case "add":
 		rule := config.Rule{MatchType: args[1], Value: strings.TrimSpace(args[2]), Action: "block"}
-		if !filter {
-			rule.Action = args[3]
-		}
 		err := mutateConfig(application, func(cfg *config.Config) error {
+			if !filter {
+				action, err := cliRuleTarget(*cfg, args[3])
+				if err != nil {
+					return err
+				}
+				rule.Action = action
+			}
 			rules := pick(cfg)
 			for _, existing := range *rules {
 				if existing.MatchType == rule.MatchType && strings.EqualFold(existing.Value, rule.Value) && existing.Action == rule.Action {
@@ -267,8 +266,12 @@ func runTestCommand(application *app.App, args []string) error {
 			mark = "✗"
 			failed++
 		}
-		fmt.Printf("%s %d\t%s\t%s\t%s\t%s\t%s\n", mark, i+1, cfg.Nodes[i].Name,
-			formatCheck("Ping", result.Ping), formatCheck("端口", result.Port), formatCheck("URL", result.URL), shortMessage(result.Message))
+		exit := ""
+		if result.ExitIP != "" {
+			exit = fmt.Sprintf("\t落地 %s %s", result.Country, result.ExitIP)
+		}
+		fmt.Printf("%s %d\t%s\t%s\t%s\t%s\t%s%s\n", mark, i+1, cfg.Nodes[i].Name,
+			formatCheck("Ping", result.Ping), formatCheck("端口", result.Port), formatCheck("URL", result.URL), shortMessage(result.Message), exit)
 	}
 	fmt.Printf("共 %d 个，可用 %d 个\n", len(ids), len(ids)-failed)
 	return nil

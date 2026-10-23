@@ -30,6 +30,9 @@ type NodeHealthDTO struct {
 	Ping      HealthCheckDTO `json:"ping"`
 	Port      HealthCheckDTO `json:"port"`
 	URL       HealthCheckDTO `json:"url"`
+	// 这次新查到的落地 IP 和地区；节点之前查过就不再查，留空。
+	ExitIP  string `json:"exit_ip,omitempty"`
+	Country string `json:"country,omitempty"`
 }
 
 type HealthCheckDTO struct {

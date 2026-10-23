@@ -47,7 +47,7 @@ const state = {
   manualProtocol: 'vless',
   editingNodeId: '',
   manualForm: { url: '', name: '', server: '', port: '', password: '', username: '', method: '', network: '', server_name: '', alpn: '', flow: '', alter_id: '', security: '', packet_encoding: '', reality_public_key: '', reality_short_id: '', utls_fingerprint: '', transport_type: '', transport_path: '', transport_host: '', transport_service_name: '', plugin: '', plugin_opts: '', version: '5', up_mbps: '', down_mbps: '', server_ports: '', hop_interval: '', path: '', obfs_type: '', obfs_password: '', uuid: '', congestion_control: '', udp_relay_mode: '', private_key: '', public_key: '', pre_shared_key: '', local_address: '', reserved: '', mtu: '', allowed_ips: '', disable_path_mtu_discovery: false, udp_over_tcp: false, multiplex: false, insecure: false, tls: false },
-  customRuleForm: { match_type: 'domain_suffix', value: '', action: 'proxy' },
+  customRuleForm: { match_type: 'domain_suffix', value: '', action: 'proxy', node_id: '' },
   customRuleImport: '',
   rules: null,
   ruleSetForm: { name: '', url: '' },
@@ -63,11 +63,12 @@ const state = {
   nodeHealth: loadNodeHealth(),
   selectedNodes: new Set(),
   batchTesting: false,
+  nodeRegion: localStorage.getItem('sbtun-ui-node-region') || 'all',
   nodeFilter: validNodeFilters.includes(savedNodeFilter) ? savedNodeFilter : 'all',
   nodeSearch: localStorage.getItem('sbtun-ui-node-search') || '',
   nodeFormOpen: false,
   nodeFormTab: 'link',
-  nodeGroupBy: localStorage.getItem('sbtun-ui-node-group') === 'subscription' ? 'subscription' : 'protocol',
+  nodeGroupBy: ['subscription', 'region'].includes(localStorage.getItem('sbtun-ui-node-group')) ? localStorage.getItem('sbtun-ui-node-group') : 'protocol',
   nodeSort: localStorage.getItem('sbtun-ui-node-sort') === 'latency' ? 'latency' : 'default',
   nodeTesting: new Set(),
   rulesTab: localStorage.getItem('sbtun-ui-rules-tab') === 'manual' ? 'manual' : 'sets',
@@ -128,10 +129,46 @@ const RULE_MATCH_TYPES = [
   { id: 'port', label: '端口', hint: '只填写一个端口号', placeholder: '例如 443' },
 ]
 
+// 节点落地地区：国旗 + 中文名。国旗用两个区域指示符拼出，Windows 靠 style.css 里的 Twemoji 国旗字体显示。
+const REGION_NAMES = { HK: '香港', TW: '台湾', JP: '日本', KR: '韩国', SG: '新加坡', US: '美国', GB: '英国', DE: '德国', FR: '法国', NL: '荷兰', CA: '加拿大', AU: '澳大利亚', IN: '印度', TR: '土耳其', RU: '俄罗斯', MY: '马来西亚', TH: '泰国', ID: '印尼', MO: '澳门', VN: '越南', PH: '菲律宾', AR: '阿根廷', BR: '巴西' }
+const regionName = code => REGION_NAMES[code] || code
+const regionFlag = code => /^[A-Z]{2}$/.test(code) ? String.fromCodePoint(...[...code].map(c => 0x1F1A5 + c.charCodeAt(0))) : ''
+const regionLabel = code => `<span class="region-flag">${regionFlag(code)}</span>${escapeHtml(regionName(code))}`
+// 按节点数从多到少列出现有地区
+function nodeRegions() {
+  const counts = new Map()
+  for (const n of state.config?.nodes || []) if (n.country) counts.set(n.country, (counts.get(n.country) || 0) + 1)
+  return [...counts.entries()].sort((a, b) => b[1] - a[1]).map(([code, count]) => ({ code, count }))
+}
+
+// 节点组：地区 / 机场(订阅) / 协议 / 名称关键词 组合筛选；同一项内任选其一，不同项要同时满足，空=不限
+const groupWords = text => (text || '').toLowerCase().split(/[\s,，]+/).filter(Boolean)
+function groupMatches(g, n) {
+  const name = (n.name || '').toLowerCase()
+  if (g.regions?.length && !g.regions.includes(n.country)) return false
+  if (g.subscriptions?.length && !g.subscriptions.includes(n.subscription || '')) return false
+  if (g.protocols?.length && !g.protocols.includes(n.protocol)) return false
+  const include = groupWords(g.keyword), exclude = groupWords(g.exclude)
+  if (include.length && !include.some(w => name.includes(w))) return false
+  return !exclude.some(w => name.includes(w))
+}
+const groupNodes = g => (state.config?.nodes || []).filter(n => groupMatches(g, n))
+const subscriptionName = id => id ? ((state.config?.subscriptions || []).find(sub => sub.id === id)?.name || '已删除的订阅') : '手动添加'
+function groupConditions(g) {
+  const parts = []
+  if (g.subscriptions?.length) parts.push(g.subscriptions.map(subscriptionName).map(escapeHtml).join(' / '))
+  if (g.regions?.length) parts.push(g.regions.map(regionLabel).join(' / '))
+  if (g.protocols?.length) parts.push(g.protocols.map(protocolLabel).map(escapeHtml).join(' / '))
+  if (g.keyword) parts.push('含「' + escapeHtml(g.keyword) + '」')
+  if (g.exclude) parts.push('不含「' + escapeHtml(g.exclude) + '」')
+  return parts.length ? parts.map(part => `<span class="group-cond">${part}</span>`).join('') : '<span class="group-cond">全部节点</span>'
+}
+
 const RULE_ACTIONS = [
   { id: 'proxy', label: '代理', hint: '匹配流量通过当前节点' },
   { id: 'direct', label: '直连', hint: '匹配流量直接连接' },
   { id: 'block', label: '阻断', hint: '匹配流量直接拒绝' },
+  { id: 'node', label: '指定节点…', hint: '固定走这个节点；节点被删除后改走当前节点' },
 ]
 
 const NODE_FIELDS = {
@@ -314,6 +351,7 @@ function render() {
     ${renderCaptureBodyModal()}
     ${renderNodeQRCodeModal()}
     ${renderBackupModal()}
+    ${renderGroupModal()}
   `
 }
 
@@ -348,8 +386,10 @@ function selectedNodeIDs() {
 
 function visibleNodeIDs() {
   const query = state.nodeSearch.trim().toLowerCase()
+  // 记住的地区筛选已经没有节点时当作“全部”，免得列表空着又找不到筛选条
+  const regionFilter = nodeRegions().some(r => r.code === state.nodeRegion) ? state.nodeRegion : ''
   return (state.config?.nodes || [])
-    .filter(node => (state.nodeFilter === 'all' || node.protocol === state.nodeFilter) && (!query || `${node.name} ${node.server} ${node.port} ${node.protocol}`.toLowerCase().includes(query)))
+    .filter(node => (state.nodeFilter === 'all' || node.protocol === state.nodeFilter) && (!regionFilter || node.country === regionFilter) && (!query || `${node.name} ${node.server} ${node.port} ${node.protocol} ${node.country || ''} ${regionName(node.country || '')}`.toLowerCase().includes(query)))
     .map(node => node.id)
 }
 
@@ -574,10 +614,10 @@ function formSettingKeys(protocol) {
 
 function renderRoutingPage() {
   const matchType = RULE_MATCH_TYPES.find(item => item.id === state.customRuleForm.match_type) || RULE_MATCH_TYPES[0]
-  const action = RULE_ACTIONS.find(item => item.id === state.customRuleForm.action) || RULE_ACTIONS[0]
   const diagnostics = state.diagnostics
   return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div><div class="network-options"><div class="network-options-title">网络选项</div><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>节点失效自动切换</strong><small>当前节点连续两次测试失败时，切换到延迟最低的可用节点，优先同一订阅</small></span><span class="toggle-switch"><input id="autoSwitchToggle" type="checkbox" ${state.config?.auto_switch_disabled ? '' : 'checked'}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用 IPv6</strong><small>${escapeHtml(state.ipv6Status?.message || '正在检测设备 IPv6')}</small></span><span class="toggle-switch"><input id="ipv6Toggle" type="checkbox" ${state.config?.ipv6_enabled ? 'checked' : ''} ${busyAttr('ipv6')}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row" data-desktop-only><span class="setting-toggle-copy"><strong>启用 WebRTC 防泄漏</strong><small>防止 WebRTC 通过直连暴露真实 IPv4/IPv6</small></span><span class="toggle-switch"><input id="webrtcProtectionToggle" type="checkbox" ${state.config?.webrtc_protection_enabled ? 'checked' : ''} ${busyAttr('webrtc')}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用诊断信息</strong><small>显示当前 selector 和运行节点，仅用于排查问题</small></span><span class="toggle-switch"><input id="diagnosticsToggle" type="checkbox" ${state.config?.diagnostics_enabled ? 'checked' : ''} ${busyAttr('diagnostics')}><span aria-hidden="true"></span></span></label></div></section>${state.config?.diagnostics_enabled ? `<section class="card"><h2>运行诊断</h2><div class="diagnostics-grid"><span>当前配置节点</span><strong>${escapeHtml(diagnostics?.current_node_id || '未选择')}</strong><span>实际 selector</span><strong>${escapeHtml(diagnostics?.selector || '未读取')}</strong><span>状态</span><strong>${escapeHtml(diagnostics?.message || '读取中')}</strong></div></section>` : ''}
-    ${state.config?.routing_mode === 'custom' ? `<section class="card"><div class="section-heading"><div><h2>自定义分流规则</h2><p class="muted">先选择匹配对象，再填写内容和处理方式。</p></div></div><div id="customRulesPanel">${renderCustomRules()}</div><div class="rule-editor"><label class="rule-field"><span>匹配对象</span><select id="ruleMatchType" class="select">${RULE_MATCH_TYPES.map(item => `<option value="${item.id}" ${item.id === matchType.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-field"><span>匹配内容</span><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="${matchType.placeholder}" /></label><label class="rule-field"><span>处理方式</span><select id="ruleAction" class="select">${RULE_ACTIONS.map(item => `<option value="${item.id}" ${item.id === action.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><button id="addRuleBtn" class="btn btn-primary" ${busyAttr('customRule')}>添加规则</button><small class="rule-hint value-hint" id="ruleValueHint">${matchType.hint}</small><small class="rule-hint action-hint" id="ruleActionHint">${action.hint}</small></div><details class="rule-import" open><summary>批量导入规则</summary><div class="rule-import-body"><textarea id="ruleImport" class="input" rows="3" placeholder="每行一条，例如：proxy,domain_suffix,example.com"></textarea><button id="importRuleBtn" class="btn btn-ghost" ${busyAttr('importRule')}>导入</button></div></details></section>` : ''}
+    ${state.config?.routing_mode === 'custom' ? renderNodeGroupsCard() : ''}
+    ${state.config?.routing_mode === 'custom' ? `<section class="card"><div class="section-heading"><div><h2>自定义分流规则</h2><p class="muted">先选择匹配对象，再填写内容和处理方式。</p></div></div><div id="customRulesPanel">${renderCustomRules()}</div><div class="rule-editor ${state.customRuleForm.action === 'node' ? 'with-node' : ''}"><label class="rule-field"><span>匹配对象</span><select id="ruleMatchType" class="select">${RULE_MATCH_TYPES.map(item => `<option value="${item.id}" ${item.id === matchType.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-field"><span>匹配内容</span><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="${matchType.placeholder}" /></label><label class="rule-field"><span>去向</span>${renderRuleActionSelect()}</label>${state.customRuleForm.action === 'node' ? renderRuleNodeSelect() : ''}<button id="addRuleBtn" class="btn btn-primary" ${busyAttr('customRule')}>添加规则</button><small class="rule-hint value-hint" id="ruleValueHint">${matchType.hint}</small><small class="rule-hint action-hint" id="ruleActionHint">${ruleActionHint(state.customRuleForm.action)}</small></div><details class="rule-import" open><summary>批量导入规则</summary><div class="rule-import-body"><textarea id="ruleImport" class="input" rows="3" placeholder="每行一条，例如：proxy,domain_suffix,example.com；也认 Clash 写法：DOMAIN-SUFFIX,openai.com,美国"></textarea><button id="importRuleBtn" class="btn btn-ghost" ${busyAttr('importRule')}>导入</button></div></details></section>` : ''}
   </div>`
 }
 
@@ -1005,15 +1045,22 @@ function renderNodes() {
   const filterBtns = [['all', '全部'], ...NODE_PROTOCOLS.map(([id, label]) => [id, id === 'shadowsocks' ? 'SS' : label])]
   const toolsHtml = `<div class="node-tools">
       <div class="node-tools-row"><input id="nodeSearch" class="input" value="${escapeHtml(state.nodeSearch)}" placeholder="搜索名称、服务器或协议" aria-label="搜索节点">
-        <select id="nodeGroupBy" class="select node-tool-select" aria-label="分组方式"><option value="protocol" ${state.nodeGroupBy === 'protocol' ? 'selected' : ''}>按协议分组</option><option value="subscription" ${state.nodeGroupBy === 'subscription' ? 'selected' : ''}>按订阅分组</option></select>
+        <select id="nodeGroupBy" class="select node-tool-select" aria-label="分组方式"><option value="protocol" ${state.nodeGroupBy === 'protocol' ? 'selected' : ''}>按协议分组</option><option value="subscription" ${state.nodeGroupBy === 'subscription' ? 'selected' : ''}>按订阅分组</option><option value="region" ${state.nodeGroupBy === 'region' ? 'selected' : ''}>按地区分组</option></select>
         <select id="nodeSort" class="select node-tool-select" aria-label="排序方式"><option value="default" ${state.nodeSort === 'default' ? 'selected' : ''}>默认顺序</option><option value="latency" ${state.nodeSort === 'latency' ? 'selected' : ''}>延迟从低到高</option></select></div>
       <div class="node-filters">${filterBtns.map(([id, label]) => {
     const count = id === 'all' ? allNodes.length : allNodes.filter(n => n.protocol === id).length
     if (!count && id !== 'all' && state.nodeFilter !== id) return ''
     return `<button class="filter-btn ${state.nodeFilter === id ? 'active' : ''}" data-filter="${id}">${label} (${count})</button>`
-  }).join('')}</div></div>`
+  }).join('')}</div>${renderRegionChips()}</div>`
   // 列表单独放一层：搜索时只重绘列表，不动搜索框（避免打断输入法）
   return toolsHtml + `<div id="nodeList">${renderNodeList()}</div>`
+}
+
+function renderRegionChips() {
+  const regions = nodeRegions()
+  if (!regions.length) return ''
+  const unknown = (state.config?.nodes || []).filter(n => !n.country).length
+  return `<div class="node-filters region-filters"><span class="region-filters-label">地区</span><button class="filter-btn ${state.nodeRegion === 'all' ? 'active' : ''}" data-region="all">全部</button>${regions.map(({ code, count }) => `<button class="filter-btn ${state.nodeRegion === code ? 'active' : ''}" data-region="${escapeHtml(code)}">${regionLabel(code)} ${count}</button>`).join('')}${unknown ? `<span class="region-unknown" title="测速时会顺带查询落地 IP">${unknown} 个未检测</span>` : ''}</div>`
 }
 
 function renderNodeList() {
@@ -1034,12 +1081,12 @@ function renderNodeList() {
         <input class="node-select" type="checkbox" data-id="${id}" ${state.selectedNodes.has(n.id) ? 'checked' : ''} aria-label="选择 ${escapeHtml(n.name)}" />
         <div class="node-info">
           <div class="node-row"><span class="node-name">${escapeHtml(n.name)}</span>${current ? '<span class="node-current-tag">当前</span>' : ''}</div>
-          <div class="node-meta">${bySubscription ? `<span class="node-proto">${escapeHtml(protocolLabel(n.protocol))}</span>` : ''}<span class="node-server">${escapeHtml(n.server)}:${n.port}</span></div>
+          <div class="node-meta">${bySubscription ? `<span class="node-proto">${escapeHtml(protocolLabel(n.protocol))}</span>` : ''}${n.country && state.nodeGroupBy !== 'region' ? `<span class="node-region ${n.exit_ip ? '' : 'guessed'}" title="${n.exit_ip ? '落地 IP ' + escapeHtml(n.exit_ip) : '按节点名推测，测速后查落地 IP'}">${regionLabel(n.country)}</span>` : ''}<span class="node-server">${escapeHtml(n.server)}:${n.port}</span>${ruleCount(n.id) ? `<span class="node-rule-count" title="有 ${ruleCount(n.id)} 条分流规则指定走这个节点">${ruleCount(n.id)} 条规则</span>` : ''}</div>
         </div>
         ${renderLatency(n.id)}
         <div class="node-actions">
           <button class="btn btn-ghost test-node desktop-only" data-id="${id}" ${testing ? 'disabled' : ''}>测试</button>
-          <details class="rule-menu node-menu" data-rule-menu-id="node-${id}"><summary aria-label="节点操作" title="更多操作">⋯</summary><div class="rule-menu-list"><button class="rule-menu-action test-node mobile-only" data-id="${id}" ${testing ? 'disabled' : ''}>测试延迟</button><button class="rule-menu-action edit-node" data-id="${id}">编辑</button><button class="rule-menu-action export-node" data-id="${id}" ${busyAttr('node:' + n.id)}>复制分享链接</button><button class="rule-menu-action qrcode-node" data-id="${id}" ${busyAttr('node:' + n.id)}>显示二维码</button><button class="rule-menu-action danger rm-node" data-id="${id}" ${busyAttr('node:' + n.id)}>删除</button></div></details>
+          <details class="rule-menu node-menu" data-rule-menu-id="node-${id}"><summary aria-label="节点操作" title="更多操作">⋯</summary><div class="rule-menu-list"><button class="rule-menu-action test-node mobile-only" data-id="${id}" ${testing ? 'disabled' : ''}>测试延迟</button><button class="rule-menu-action edit-node" data-id="${id}">编辑</button><button class="rule-menu-action route-to-node" data-id="${id}">让网站走这个节点…</button><button class="rule-menu-action export-node" data-id="${id}" ${busyAttr('node:' + n.id)}>复制分享链接</button><button class="rule-menu-action qrcode-node" data-id="${id}" ${busyAttr('node:' + n.id)}>显示二维码</button><button class="rule-menu-action danger rm-node" data-id="${id}" ${busyAttr('node:' + n.id)}>删除</button></div></details>
         </div>
       </li>`
   }
@@ -1058,11 +1105,11 @@ function protocolLabel(protocol) {
 // groups in subscription order, with manually added nodes last.
 function nodeGroups(nodes, groupBy) {
   const subs = state.config?.subscriptions || []
-  const keyOf = n => groupBy === 'subscription' ? (n.subscription || '') : (n.protocol || 'unknown')
-  const order = groupBy === 'subscription' ? [...subs.map(s => s.id), ''] : NODE_PROTOCOLS.map(([id]) => id)
+  const keyOf = n => groupBy === 'subscription' ? (n.subscription || '') : groupBy === 'region' ? (n.country || '') : (n.protocol || 'unknown')
+  const order = groupBy === 'subscription' ? [...subs.map(s => s.id), ''] : groupBy === 'region' ? [...nodeRegions().map(r => r.code), ''] : NODE_PROTOCOLS.map(([id]) => id)
   const labelOf = key => groupBy === 'subscription'
     ? (key ? subs.find(s => s.id === key)?.name || '已删除的订阅' : '手动添加')
-    : protocolLabel(key)
+    : groupBy === 'region' ? (key ? `${regionFlag(key)} ${regionName(key)}` : '未检测地区') : protocolLabel(key)
   const groups = new Map()
   for (const n of nodes) {
     const key = keyOf(n)
@@ -1130,11 +1177,16 @@ async function testNodes(ids) {
   if (!queue.length) return
   queue.forEach(id => state.nodeTesting.add(id))
   backgroundRender()
+  let exitFound = false
   const worker = async () => {
     while (queue.length) {
       const id = queue.shift()
       try {
-        state.nodeHealth[id] = await window.go.app.App.TestNode(id)
+        const result = await window.go.app.App.TestNode(id)
+        state.nodeHealth[id] = result
+        // 第一次测速成功会顺便查到落地 IP 和地区，后端已保存，这里先同步到界面
+        const node = result.exit_ip && (state.config?.nodes || []).find(n => n.id === id)
+        if (node) Object.assign(node, { country: result.country, exit_ip: result.exit_ip }), exitFound = true
       } catch (e) {
         state.nodeHealth[id] = { node_id: id, healthy: false, message: errorText(e) }
       }
@@ -1144,6 +1196,7 @@ async function testNodes(ids) {
     }
   }
   await Promise.all(Array.from({ length: Math.min(NODE_TEST_CONCURRENCY, queue.length) }, worker))
+  if (exitFound) await refreshConfig().catch(() => {})
 }
 
 async function selectNode(id) {
@@ -1345,7 +1398,7 @@ function renderCustomRules() {
   return rules.map((rule, index) => `
     <div class="node-item rule-item">
       <span class="badge">${escapeHtml(ruleMatchLabel(rule.match_type))}</span>
-      <span class="rule-content"><span class="node-name">${escapeHtml(rule.value)}</span><span class="node-server">${escapeHtml(ruleActionLabel(rule.action))}</span></span>
+      <span class="rule-content"><span class="node-name">${escapeHtml(rule.value)}</span>${ruleTarget(rule.action)}</span>
       <button class="btn btn-danger remove-custom-rule" data-index="${index}">删除</button>
     </div>
   `).join('')
@@ -1407,6 +1460,61 @@ async function refreshIPv6Status() {
 
 function ruleMatchLabel(id) { return RULE_MATCH_TYPES.find(item => item.id === id)?.label || id }
 function ruleActionLabel(id) { return RULE_ACTIONS.find(item => item.id === id)?.label || id }
+
+function ruleCount(nodeID) { return (state.config?.custom_rules || []).filter(rule => rule.action === 'node:' + nodeID).length }
+
+// 规则去向：代理/直连/阻断、某个分组(sub:)或地区(region:)（组内自动选延迟最低）、某个节点（节点没了就标红，实际走当前节点）
+function ruleTarget(action) {
+  if (action.startsWith('region:')) {
+    const code = action.slice(7)
+    return `<span class="rule-target region">${regionLabel(code)} · 自动选最快</span>`
+  }
+  if (action.startsWith('group:')) {
+    const g = (state.config?.node_groups || []).find(item => item.id === action.slice(6))
+    return g
+      ? `<span class="rule-target region">节点组 · ${escapeHtml(g.name)} · ${groupNodes(g).length} 个节点</span>`
+      : '<span class="rule-target missing" title="节点组已被删除，暂时走当前节点">节点组已删除 · 暂走代理</span>'
+  }
+  if (action.startsWith('proto:')) return `<span class="rule-target region">${escapeHtml(protocolLabel(action.slice(6)))} 节点 · 自动选最快</span>`
+  if (action.startsWith('sub:')) {
+    const sub = (state.config?.subscriptions || []).find(item => item.id === action.slice(4))
+    return sub
+      ? `<span class="rule-target region">机场 · ${escapeHtml(sub.name)} · 自动选最快</span>`
+      : '<span class="rule-target missing" title="指定的订阅已被删除，暂时走当前节点">订阅已删除 · 暂走代理</span>'
+  }
+  if (action.startsWith('node:')) {
+    const node = (state.config?.nodes || []).find(n => n.id === action.slice(5))
+    return node
+      ? `<span class="rule-target node">节点 · ${node.country ? regionFlag(node.country) + ' ' : ''}${escapeHtml(node.name)}</span>`
+      : '<span class="rule-target missing" title="指定的节点已被删除，暂时走当前节点">节点已失效 · 暂走代理</span>'
+  }
+  return `<span class="rule-target ${escapeHtml(action)}">${escapeHtml(ruleActionLabel(action))}</span>`
+}
+
+function renderRuleActionSelect() {
+  const value = state.customRuleForm.action
+  const basic = RULE_ACTIONS.filter(item => item.id !== 'node')
+  const regions = nodeRegions()
+  const nodes = state.config?.nodes || []
+  const subs = (state.config?.subscriptions || []).map(sub => ({ ...sub, count: nodes.filter(n => n.subscription === sub.id).length })).filter(sub => sub.count)
+  const groups = state.config?.node_groups || []
+  const protocols = [...new Set(nodes.map(n => n.protocol))]
+  const opt = (v, label) => `<option value="${escapeHtml(v)}" ${value === v ? 'selected' : ''}>${label}</option>`
+  return `<select id="ruleAction" class="select">${basic.map(item => opt(item.id, item.label)).join('')}${groups.length ? `<optgroup label="我的节点组">${groups.map(g => opt('group:' + g.id, `${escapeHtml(g.name)}（${groupNodes(g).length} 个节点）`)).join('')}</optgroup>` : ''}${protocols.length > 1 ? `<optgroup label="按协议（自动选延迟最低）">${protocols.map(pr => opt('proto:' + pr, `${escapeHtml(protocolLabel(pr))}（${nodes.filter(n => n.protocol === pr).length} 个节点）`)).join('')}</optgroup>` : ''}${subs.length ? `<optgroup label="按机场（自动选延迟最低）">${subs.map(sub => `<option value="sub:${escapeHtml(sub.id)}" ${value === 'sub:' + sub.id ? 'selected' : ''}>${escapeHtml(sub.name)}（${sub.count} 个节点）</option>`).join('')}</optgroup>` : ''}${regions.length ? `<optgroup label="按地区（自动选延迟最低）">${regions.map(({ code, count }) => `<option value="region:${escapeHtml(code)}" ${value === 'region:' + code ? 'selected' : ''}>${regionFlag(code)} ${escapeHtml(regionName(code))}（${count} 个节点）</option>`).join('')}</optgroup>` : ''}<option value="node" ${value === 'node' ? 'selected' : ''}>指定节点…</option><option value="new-group">＋ 新建节点组…</option></select>`
+}
+
+function renderRuleNodeSelect() {
+  const groups = nodeGroups(state.config?.nodes || [], 'subscription')
+  return `<label class="rule-field rule-node-field"><span>节点</span><select id="ruleNode" class="select"><option value="">选择节点</option>${groups.map(group => `<optgroup label="${escapeHtml(group.label)}">${group.nodes.map(n => `<option value="${escapeHtml(n.id)}" ${state.customRuleForm.node_id === n.id ? 'selected' : ''}>${n.country ? regionFlag(n.country) + ' ' : ''}${escapeHtml(n.name)}</option>`).join('')}</optgroup>`).join('')}</select></label>`
+}
+
+function ruleActionHint(action) {
+  if (action.startsWith('region:')) return `走${regionName(action.slice(7))}节点里延迟最低的；某个节点挂了自动换下一个`
+  if (action.startsWith('group:')) return '走这个节点组里延迟最低的节点；组里的节点会随订阅更新自动增减'
+  if (action.startsWith('proto:')) return `走 ${protocolLabel(action.slice(6))} 节点里延迟最低的；某个节点挂了自动换下一个`
+  if (action.startsWith('sub:')) return '走这个机场里延迟最低的节点；某个节点挂了自动换下一个'
+  return (RULE_ACTIONS.find(item => item.id === action) || RULE_ACTIONS[0]).hint
+}
 
 function validateCustomRule(matchType, value) {
   if (!value) return '请输入匹配内容'
@@ -1694,13 +1802,31 @@ function bindEvents() {
   const ruleAction = document.querySelector('#ruleAction')
   if (ruleAction) {
     ruleAction.value = state.customRuleForm.action
-    ruleAction.addEventListener('change', () => { state.customRuleForm.action = ruleAction.value })
+    ruleAction.addEventListener('change', () => {
+      if (ruleAction.value === 'new-group') { openGroupModal(null, true); return }
+      state.customRuleForm.action = ruleAction.value
+      renderApp()
+    })
   }
+  bindGroupEvents()
+  const ruleNode = document.querySelector('#ruleNode')
+  if (ruleNode) ruleNode.addEventListener('change', () => { state.customRuleForm.node_id = ruleNode.value })
+  document.querySelectorAll('[data-region]').forEach(btn => btn.addEventListener('click', () => {
+    state.nodeRegion = btn.dataset.region
+    localStorage.setItem('sbtun-ui-node-region', state.nodeRegion)
+    renderApp()
+  }))
+  document.querySelectorAll('.route-to-node').forEach(btn => btn.addEventListener('click', () => {
+    Object.assign(state.customRuleForm, { action: 'node', node_id: btn.dataset.id })
+    state.view = 'routing'
+    renderApp()
+  }))
   const addRuleBtn = document.querySelector('#addRuleBtn')
   if (addRuleBtn) addRuleBtn.addEventListener('click', () => {
-    const { match_type: matchType, action } = state.customRuleForm
+    const { match_type: matchType, node_id: nodeID } = state.customRuleForm
+    const action = state.customRuleForm.action === 'node' ? 'node:' + nodeID : state.customRuleForm.action
     const value = state.customRuleForm.value.trim()
-    const error = validateCustomRule(matchType, value)
+    const error = action === 'node:' ? '请选择节点' : validateCustomRule(matchType, value)
     if (error) return showToast(error, 'error')
     runOnce('customRule', async () => {
       await updateConfig(cfg => {
@@ -2475,3 +2601,85 @@ window.addEventListener('DOMContentLoaded', async () => {
     renderApp()
   }
 })
+
+// ---- 节点组（组合条件）----
+function renderNodeGroupsCard() {
+  const groups = state.config?.node_groups || []
+  const usedBy = id => (state.config?.custom_rules || []).filter(rule => rule.action === 'group:' + id).length
+  const health = id => state.nodeHealth?.[id]?.url
+  const fastest = g => groupNodes(g).map(n => ({ n, h: health(n.id) })).filter(x => x.h?.ok).sort((a, b) => a.h.latency_ms - b.h.latency_ms)[0]
+  const rows = groups.map(g => {
+    const count = groupNodes(g).length, best = fastest(g), used = usedBy(g.id)
+    return `<div class="group-row"><div class="group-main"><div class="group-title"><strong>${escapeHtml(g.name)}</strong><span class="muted">${count} 个节点${used ? ` · ${used} 条规则在用` : ''}</span></div><div class="group-conds">${groupConditions(g)}</div></div><div class="group-best">${best ? `<span class="muted">当前最快</span><span>${best.n.country ? regionFlag(best.n.country) + ' ' : ''}${escapeHtml(best.n.name)}</span><span class="latency">${best.h.latency_ms} ms</span>` : count ? '<span class="muted">还没测速</span>' : '<span class="rule-target missing">没有匹配的节点</span>'}</div><button class="btn btn-ghost btn-sm" data-edit-group="${escapeHtml(g.id)}">编辑</button></div>`
+  }).join('')
+  return `<section class="card"><div class="section-heading"><div><h2>节点组</h2><p class="muted">按地区、机场、协议、名称组合挑节点，规则可以直接走一个组，组内自动用最快的。</p></div><button class="btn btn-primary" id="newGroupBtn">新建节点组</button></div>${rows || '<p class="muted empty-hint">还没有节点组。</p>'}</section>`
+}
+
+function openGroupModal(id, fromRule = false) {
+  const g = (state.config?.node_groups || []).find(item => item.id === id)
+  state.groupModal = { id: g?.id || '', fromRule, name: g?.name || '', regions: [...(g?.regions || [])], subscriptions: [...(g?.subscriptions || [])], protocols: [...(g?.protocols || [])], keyword: g?.keyword || '', exclude: g?.exclude || '' }
+  renderApp()
+}
+
+function renderGroupModal() {
+  const m = state.groupModal
+  if (!m) return ''
+  const nodes = state.config?.nodes || []
+  const chip = (field, value, label, count) => `<button class="filter-btn ${m[field].includes(value) ? 'active' : ''}" data-group-chip="${field}" data-value="${escapeHtml(value)}">${label} <span class="muted">${count}</span></button>`
+  const subs = [...(state.config?.subscriptions || []).map(sub => sub.id), ...(nodes.some(n => !n.subscription) ? [''] : [])]
+  const protocols = [...new Set(nodes.map(n => n.protocol))]
+  const matched = groupNodes(m)
+  return `<div class="modal" id="groupModal" role="dialog" aria-modal="true" aria-labelledby="groupModalTitle"><div class="modal-backdrop" data-close-group></div>
+    <section class="modal-panel group-modal">
+      <header class="modal-header"><h2 id="groupModalTitle">${m.id ? '编辑节点组' : '新建节点组'}</h2><button class="icon-btn" data-close-group aria-label="关闭" title="关闭">×</button></header>
+      <div class="modal-body group-form">
+        <label class="rule-field"><span>名称</span><input id="groupName" class="input" value="${escapeHtml(m.name)}" placeholder="例如：美国 hy2、流媒体解锁" /></label>
+        <div class="group-dim"><span>机场</span><div class="filter-row">${subs.map(id => chip('subscriptions', id, escapeHtml(subscriptionName(id)), nodes.filter(n => (n.subscription || '') === id).length)).join('')}</div></div>
+        <div class="group-dim"><span>地区</span><div class="filter-row">${nodeRegions().map(({ code, count }) => chip('regions', code, regionLabel(code), count)).join('')}</div></div>
+        <div class="group-dim"><span>协议</span><div class="filter-row">${protocols.map(pr => chip('protocols', pr, escapeHtml(protocolLabel(pr)), nodes.filter(n => n.protocol === pr).length)).join('')}</div></div>
+        <div class="group-keywords"><label class="rule-field"><span>名称包含</span><input id="groupKeyword" class="input" value="${escapeHtml(m.keyword)}" placeholder="IPLC 解锁（任一即可）" /></label><label class="rule-field"><span>名称排除</span><input id="groupExclude" class="input" value="${escapeHtml(m.exclude)}" placeholder="过期 剩余 官网" /></label></div>
+        <p class="muted modal-hint">不选的项表示不限；同一项里选多个是“任一”，不同项之间是“同时满足”。订阅更新后组里的节点会自动增减。</p>
+        <div class="group-preview"><div class="group-preview-head">匹配 <strong>${matched.length}</strong> 个节点</div>${matched.slice(0, 12).map(n => `<span class="group-node">${n.country ? regionFlag(n.country) + ' ' : ''}${escapeHtml(n.name)} <span class="muted">${escapeHtml(protocolLabel(n.protocol))}</span></span>`).join('')}${matched.length > 12 ? `<span class="muted">… 还有 ${matched.length - 12} 个</span>` : ''}</div>
+      </div>
+      <footer class="modal-footer">${m.id ? '<button class="btn btn-ghost danger" id="deleteGroupBtn">删除</button>' : ''}<button class="btn btn-ghost" data-close-group>取消</button><button class="btn btn-primary" id="saveGroupBtn" ${matched.length ? '' : 'disabled'}>${m.fromRule ? '保存并用于这条规则' : '保存'}</button></footer>
+    </section></div>`
+}
+
+function bindGroupEvents() {
+  document.querySelector('#newGroupBtn')?.addEventListener('click', () => openGroupModal(null))
+  document.querySelectorAll('[data-edit-group]').forEach(btn => btn.addEventListener('click', () => openGroupModal(btn.dataset.editGroup)))
+  const m = state.groupModal
+  if (!m) return
+  document.querySelectorAll('[data-close-group]').forEach(el => el.addEventListener('click', () => { state.groupModal = null; renderApp() }))
+  document.querySelectorAll('[data-group-chip]').forEach(btn => btn.addEventListener('click', () => {
+    const list = m[btn.dataset.groupChip], value = btn.dataset.value
+    list.includes(value) ? list.splice(list.indexOf(value), 1) : list.push(value)
+    renderApp()
+  }))
+  for (const [sel, field] of [['#groupName', 'name'], ['#groupKeyword', 'keyword'], ['#groupExclude', 'exclude']]) {
+    const input = document.querySelector(sel)
+    // 关键词改动要刷新预览：失焦时重绘，输入时只记值，避免打字时丢焦点
+    input?.addEventListener('input', () => { m[field] = input.value })
+    if (field !== 'name') input?.addEventListener('change', () => renderApp())
+  }
+  document.querySelector('#saveGroupBtn')?.addEventListener('click', () => runOnce('group', async () => {
+    const name = m.name.trim()
+    if (!name) throw new Error('请填写节点组名称')
+    const id = m.id || 'g' + Date.now().toString(36)
+    await updateConfig(cfg => {
+      cfg.node_groups = cfg.node_groups || []
+      if (cfg.node_groups.some(g => g.id !== id && g.name === name)) throw new Error('已有同名节点组')
+      const group = { id, name, regions: m.regions, subscriptions: m.subscriptions, protocols: m.protocols, keyword: m.keyword.trim(), exclude: m.exclude.trim() }
+      const i = cfg.node_groups.findIndex(g => g.id === id)
+      i >= 0 ? cfg.node_groups.splice(i, 1, group) : cfg.node_groups.push(group)
+    })
+    if (m.fromRule) state.customRuleForm.action = 'group:' + id
+    state.groupModal = null
+    showToast('节点组已保存', 'success')
+  }))
+  document.querySelector('#deleteGroupBtn')?.addEventListener('click', () => runOnce('group', async () => {
+    await updateConfig(cfg => { cfg.node_groups = (cfg.node_groups || []).filter(g => g.id !== m.id) })
+    state.groupModal = null
+    showToast('节点组已删除，用它的规则暂走代理', 'success')
+  }))
+}

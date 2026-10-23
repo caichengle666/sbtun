@@ -51,7 +51,9 @@ func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth, resol
 		return nil, err
 	}
 
+	targets, groups := ruleTargets(cfg, proxy)
 	outbounds, endpoints := splitEndpoints(proxy)
+	outbounds = append(outbounds, groups...)
 	outbounds = append(outbounds, map[string]any{"type": "direct", "tag": "direct", "domain_resolver": "dns-local"}, map[string]any{"type": "block", "tag": "block"})
 	if cfg.CaptureEnabled && len(normalizeCaptureDomains(cfg.CaptureDomains)) > 0 {
 		captureOutbound := map[string]any{
@@ -101,7 +103,7 @@ func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth, resol
 		Inbounds:  inbounds,
 		Outbounds: outbounds,
 		Endpoints: endpoints,
-		Route:     routeForMode(cfg.RoutingMode, cfg.CustomRules, cfg.DNSFilterRules, cfg.CaptureEnabled, cfg.CaptureDomains, exeDir),
+		Route:     routeForMode(cfg.RoutingMode, cfg.CustomRules, targets, cfg.DNSFilterRules, cfg.CaptureEnabled, cfg.CaptureDomains, exeDir),
 		Experimental: map[string]any{
 			"cache_file": map[string]any{"enabled": true},
 			"clash_api":  clashAPI,
@@ -210,7 +212,7 @@ func buildDNS(mode config.DNSMode, routeMode config.RoutingMode, nodeDomains []s
 	return map[string]any{"servers": servers, "rules": rules, "final": final, "strategy": "prefer_ipv4"}
 }
 
-func routeForMode(mode config.RoutingMode, custom, filterRules []config.Rule, captureEnabled bool, captureDomains []string, exeDir string) map[string]any {
+func routeForMode(mode config.RoutingMode, custom []config.Rule, targets map[string]string, filterRules []config.Rule, captureEnabled bool, captureDomains []string, exeDir string) map[string]any {
 	private := map[string]any{"ip_is_private": true, "outbound": "direct"}
 	dns := map[string]any{"protocol": "dns", "action": "hijack-dns"}
 	base := []map[string]any{
@@ -241,12 +243,12 @@ func routeForMode(mode config.RoutingMode, custom, filterRules []config.Rule, ca
 	}
 	base = append(base, map[string]any{"inbound": []string{"tun-in"}, "action": "resolve", "strategy": "prefer_ipv4"})
 	for _, r := range custom {
-		if rr, ok := customRule(r); ok {
+		if rr, ok := customRule(r, targets); ok {
 			base = append(base, rr)
 		}
 	}
 	for _, r := range filterRules {
-		if rr, ok := customRule(r); ok {
+		if rr, ok := customRule(r, nil); ok {
 			base = append(base, rr)
 		}
 	}
@@ -380,17 +382,21 @@ func ruleSetExists(exeDir, name string) bool {
 	return err == nil && !info.IsDir() && info.Size() > 0
 }
 
-func customRule(r config.Rule) (map[string]any, bool) {
+func customRule(r config.Rule, targets map[string]string) (map[string]any, bool) {
 	value := strings.TrimSpace(r.Value)
 	if value == "" {
 		return nil, false
 	}
-	action := strings.ToLower(strings.TrimSpace(r.Action))
-	if action != "proxy" && action != "direct" && action != "block" {
-		return nil, false
+	outbound, _ := config.SplitAction(r.Action)
+	if !config.IsBasicAction(r.Action) {
+		// 指向节点/节点组的规则：目标没了（节点删除、组里没有可用节点）就退回当前节点。
+		outbound = "proxy"
+		if tag := targets[strings.TrimSpace(r.Action)]; tag != "" {
+			outbound = tag
+		}
 	}
 	key := strings.ToLower(strings.TrimSpace(r.MatchType))
-	rule := map[string]any{"outbound": action}
+	rule := map[string]any{"outbound": outbound}
 	switch key {
 	case "domain_suffix":
 		rule["domain_suffix"] = []string{value}

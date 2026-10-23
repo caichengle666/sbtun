@@ -32,6 +32,9 @@ func captureRoute(flow capture.Flow, cfg config.Config) string {
 	case config.RoutingCustom:
 		for _, rule := range cfg.CustomRules {
 			if captureRuleMatches(rule, flow, host) {
+				if !config.IsBasicAction(rule.Action) {
+					return "proxy" // 指定节点/节点组也是走代理
+				}
 				return strings.ToLower(strings.TrimSpace(rule.Action))
 			}
 		}

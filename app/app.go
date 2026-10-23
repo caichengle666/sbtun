@@ -570,10 +570,26 @@ func (a *App) TestNode(id string) NodeHealthDTO {
 	if err != nil {
 		return NodeHealthDTO{NodeID: id, Message: err.Error()}
 	}
+	result := a.testNodeWithExit(cfg, id)
+	a.saveExits([]NodeHealthDTO{result})
+	return result
+}
+
+// testNodeWithExit 测速；成功且节点还没查过落地时顺便查一次（只在用户手动测速时，后台自动切换不查）。
+func (a *App) testNodeWithExit(cfg config.Config, id string) NodeHealthDTO {
 	for _, node := range cfg.Nodes {
-		if node.ID == id {
-			return a.testNode(a.ctx, node)
+		if node.ID != id {
+			continue
 		}
+		result := a.testNode(a.ctx, node)
+		if result.URL.OK && node.ExitIP == "" {
+			ctx := a.ctx
+			if ctx == nil {
+				ctx = context.Background()
+			}
+			result.ExitIP, result.Country = detectExit(ctx, a.binary, node)
+		}
+		return result
 	}
 	return NodeHealthDTO{NodeID: id, Message: "节点不存在"}
 }
@@ -706,8 +722,13 @@ func (a *App) UpdateNode(id string, node config.Node) error {
 			if next.Nodes[i].ID != id {
 				continue
 			}
+			old := next.Nodes[i]
 			node.ID = id
-			node.Subscription = next.Nodes[i].Subscription
+			node.Subscription = old.Subscription
+			node.Country, node.ExitIP = "", ""
+			if nodeFingerprint(node) == nodeFingerprint(old) {
+				node.Country, node.ExitIP = old.Country, old.ExitIP
+			}
 			next.Nodes[i] = node
 			return nil
 		}
@@ -728,10 +749,22 @@ func (a *App) UpdateNodeFromLink(id, link string) error {
 	return a.UpdateNode(id, nodes[0])
 }
 
-// TestNodes checks nodes sequentially to keep resource usage bounded.
 // TestNodes tests up to four nodes at a time and keeps the order of ids.
 func (a *App) TestNodes(ids []string) []NodeHealthDTO {
 	results := make([]NodeHealthDTO, len(ids))
+	if a.manager == nil {
+		for i, id := range ids {
+			results[i] = NodeHealthDTO{NodeID: id, Message: "配置管理器未初始化"}
+		}
+		return results
+	}
+	cfg, err := a.manager.Load()
+	if err != nil {
+		for i, id := range ids {
+			results[i] = NodeHealthDTO{NodeID: id, Message: err.Error()}
+		}
+		return results
+	}
 	slots := make(chan struct{}, 4)
 	var wg sync.WaitGroup
 	for i, id := range ids {
@@ -740,10 +773,11 @@ func (a *App) TestNodes(ids []string) []NodeHealthDTO {
 		go func() {
 			defer wg.Done()
 			defer func() { <-slots }()
-			results[i] = a.TestNode(id)
+			results[i] = a.testNodeWithExit(cfg, id)
 		}()
 	}
 	wg.Wait()
+	a.saveExits(results)
 	return results
 }
 
