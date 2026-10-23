@@ -119,7 +119,11 @@ func main() {
 		if status.CurrentNodeID != "" {
 			currentID = status.CurrentNodeID
 		}
-		fmt.Printf("路由模式: %s\nDNS 模式: %s\n当前节点: %s\n节点数量: %d\n", cfg.RoutingMode, cfg.DNSMode, currentID, len(cfg.Nodes))
+		running := "未运行"
+		if status.Running {
+			running = "运行中"
+		}
+		fmt.Printf("状态: %s\n路由模式: %s\nDNS 模式: %s\n当前节点: %s\n节点数量: %d\n", running, cfg.RoutingMode, cfg.DNSMode, nodeLabel(cfg.Nodes, currentID), len(cfg.Nodes))
 		if status.Selector != "" {
 			fmt.Printf("运行时 selector: %s\n", status.Selector)
 		}
@@ -1050,8 +1054,21 @@ func listNodes(application *app.App) error {
 		}
 		fmt.Printf("%s %d\t%s\t%s\t%s\t%s:%d\t%s\n", marker, i+1, node.Name, region, node.Protocol, node.Server, node.Port, source)
 	}
-	fmt.Printf("当前节点: %s\n", currentID)
+	fmt.Printf("当前节点: %s\n", nodeLabel(cfg.Nodes, currentID))
 	return nil
+}
+
+// nodeLabel 把节点 ID 显示成“编号 名称”，找不到时原样返回。
+func nodeLabel(nodes []config.Node, id string) string {
+	for i, node := range nodes {
+		if node.ID == id {
+			return fmt.Sprintf("%d %s", i+1, node.Name)
+		}
+	}
+	if id == "" {
+		return "--"
+	}
+	return id
 }
 
 func certificateCLIUsage() string {

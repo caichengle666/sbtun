@@ -68,6 +68,7 @@ func (a *App) Startup(ctx context.Context) {
 		}
 	}()
 	go a.StartTray()
+	go a.watchConfigFile()
 	go a.monitorNodes()
 	go a.autoBackupLoop()
 	go a.subscriptionUpdateLoop()
@@ -83,6 +84,7 @@ func (a *App) StartMonitoring() {
 	if a.ctx == nil || a.runtime == nil {
 		return
 	}
+	go a.watchConfigFile()
 	go a.monitorNodes()
 	go a.autoBackupLoop()
 	go a.subscriptionUpdateLoop()
