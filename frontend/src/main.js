@@ -386,10 +386,8 @@ function selectedNodeIDs() {
 
 function visibleNodeIDs() {
   const query = state.nodeSearch.trim().toLowerCase()
-  // 记住的地区筛选已经没有节点时当作“全部”，免得列表空着又找不到筛选条
-  const regionFilter = nodeRegions().some(r => r.code === state.nodeRegion) ? state.nodeRegion : ''
   return (state.config?.nodes || [])
-    .filter(node => (state.nodeFilter === 'all' || node.protocol === state.nodeFilter) && (!regionFilter || node.country === regionFilter) && (!query || `${node.name} ${node.server} ${node.port} ${node.protocol} ${node.country || ''} ${regionName(node.country || '')}`.toLowerCase().includes(query)))
+    .filter(node => protoMatches(node) && regionMatches(node) && (!query || `${node.name} ${node.server} ${node.port} ${node.protocol} ${node.country || ''} ${regionName(node.country || '')}`.toLowerCase().includes(query)))
     .map(node => node.id)
 }
 
@@ -1048,19 +1046,36 @@ function renderNodes() {
         <select id="nodeGroupBy" class="select node-tool-select" aria-label="分组方式"><option value="protocol" ${state.nodeGroupBy === 'protocol' ? 'selected' : ''}>按协议分组</option><option value="subscription" ${state.nodeGroupBy === 'subscription' ? 'selected' : ''}>按订阅分组</option><option value="region" ${state.nodeGroupBy === 'region' ? 'selected' : ''}>按地区分组</option></select>
         <select id="nodeSort" class="select node-tool-select" aria-label="排序方式"><option value="default" ${state.nodeSort === 'default' ? 'selected' : ''}>默认顺序</option><option value="latency" ${state.nodeSort === 'latency' ? 'selected' : ''}>延迟从低到高</option></select></div>
       <div class="node-filters">${filterBtns.map(([id, label]) => {
-    const count = id === 'all' ? allNodes.length : allNodes.filter(n => n.protocol === id).length
-    if (!count && id !== 'all' && state.nodeFilter !== id) return ''
-    return `<button class="filter-btn ${state.nodeFilter === id ? 'active' : ''}" data-filter="${id}">${label} (${count})</button>`
+    const pool = allNodes.filter(regionMatches)
+    const count = id === 'all' ? pool.length : pool.filter(n => n.protocol === id).length
+    if (!allNodes.some(n => n.protocol === id) && id !== 'all' && state.nodeFilter !== id) return ''
+    return `<button class="filter-btn ${state.nodeFilter === id ? 'active' : ''} ${count ? '' : 'empty-chip'}" data-filter="${id}">${label} (${count})</button>`
   }).join('')}</div>${renderRegionChips()}</div>`
   // 列表单独放一层：搜索时只重绘列表，不动搜索框（避免打断输入法）
   return toolsHtml + `<div id="nodeList">${renderNodeList()}</div>`
 }
 
+// 协议和地区两排筛选叠加：每排的数字按另一排当前的筛选来数，点哪个都不会出现“写着 1 个却是空的”。
+// 记住的地区已经没有节点时当作“全部”，免得列表空着又找不到筛选条。
+function activeRegionFilter() {
+  const r = state.nodeRegion
+  if (r === 'none') return (state.config?.nodes || []).some(n => !n.country) ? r : 'all'
+  return nodeRegions().some(item => item.code === r) ? r : 'all'
+}
+const protoMatches = n => state.nodeFilter === 'all' || n.protocol === state.nodeFilter
+const regionMatches = n => { const r = activeRegionFilter(); return r === 'all' || (r === 'none' ? !n.country : n.country === r) }
+
 function renderRegionChips() {
+  const all = state.config?.nodes || []
   const regions = nodeRegions()
-  if (!regions.length) return ''
-  const unknown = (state.config?.nodes || []).filter(n => !n.country).length
-  return `<div class="node-filters region-filters"><span class="region-filters-label">地区</span><button class="filter-btn ${state.nodeRegion === 'all' ? 'active' : ''}" data-region="all">全部</button>${regions.map(({ code, count }) => `<button class="filter-btn ${state.nodeRegion === code ? 'active' : ''}" data-region="${escapeHtml(code)}">${regionLabel(code)} ${count}</button>`).join('')}${unknown ? `<span class="region-unknown" title="测速时会顺带查询落地 IP">${unknown} 个未检测</span>` : ''}</div>`
+  const unknownAll = all.filter(n => !n.country)
+  if (!regions.length && !unknownAll.length) return ''
+  const pool = all.filter(protoMatches)
+  const active = activeRegionFilter()
+  const chip = (value, label, count) => `<button class="filter-btn ${active === value ? 'active' : ''} ${count ? '' : 'empty-chip'}" data-region="${escapeHtml(value)}">${label} ${count}</button>`
+  const unknown = pool.filter(n => !n.country).length
+  const detect = unknownAll.length ? `<button class="btn btn-ghost btn-small" id="detectRegions" ${state.batchTesting ? 'disabled' : ''} title="测速一次，成功的节点会查出落地 IP 和地区；测速失败的节点查不了">${state.batchTesting ? '检测中…' : `检测地区（${unknownAll.length}）`}</button>` : ''
+  return `<div class="node-filters region-filters"><span class="region-filters-label">地区</span>${chip('all', '全部', pool.length)}${regions.map(({ code }) => chip(code, regionLabel(code), pool.filter(n => n.country === code).length)).join('')}${unknownAll.length ? chip('none', '未检测', unknown) : ''}${detect}</div>`
 }
 
 function renderNodeList() {
@@ -1071,7 +1086,7 @@ function renderNodeList() {
   const visible = new Set(visibleNodeIDs())
   const filtered = allNodes.filter(n => visible.has(n.id))
   if (!allNodes.length) return '<div class="empty">还没有节点，点右上角“导入 / 添加”</div>'
-  if (!filtered.length) return '<div class="empty">没有匹配的节点</div>'
+  if (!filtered.length) return '<div class="empty">没有匹配的节点<br><button class="btn btn-ghost" id="clearNodeFilters">清除筛选</button></div>'
   const bySubscription = state.nodeGroupBy === 'subscription'
   const row = n => {
     const current = currentNodeID === n.id
@@ -2171,7 +2186,20 @@ function bindEvents() {
       renderApp()
     }
   })
-  document.querySelectorAll('.node-filters .filter-btn').forEach(btn => {
+  document.querySelector('#detectRegions')?.addEventListener('click', async () => {
+    if (state.batchTesting) return
+    const ids = (state.config?.nodes || []).filter(n => !n.country).map(n => n.id)
+    state.batchTesting = true
+    try {
+      await testNodes(ids)
+      const left = (state.config?.nodes || []).filter(n => !n.country).length
+      showToast(left ? `已检测 ${ids.length - left} 个，${left} 个测速失败查不了地区` : `已检测 ${ids.length} 个节点的地区`, left ? 'error' : 'success')
+    } finally {
+      state.batchTesting = false
+      renderApp()
+    }
+  })
+  document.querySelectorAll('[data-filter]').forEach(btn => {
     btn.addEventListener('click', () => {
       state.nodeFilter = btn.dataset.filter
       localStorage.setItem('sbtun-ui-node-filter', state.nodeFilter)
@@ -2448,6 +2476,13 @@ function bindEvents() {
 
 // 节点列表里的事件；搜索时只重绘列表，单独重新绑定
 function bindNodeList(root) {
+  root.querySelector('#clearNodeFilters')?.addEventListener('click', () => {
+    state.nodeFilter = 'all'
+    state.nodeRegion = 'all'
+    state.nodeSearch = ''
+    for (const key of ['sbtun-ui-node-filter', 'sbtun-ui-node-region', 'sbtun-ui-node-search']) localStorage.removeItem(key)
+    renderApp()
+  })
   root.querySelector('#importFromSearch')?.addEventListener('click', () => {
     resetManualForm()
     state.manualForm.url = state.nodeSearch.trim()
