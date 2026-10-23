@@ -17,12 +17,40 @@ func configureProcess(cmd *exec.Cmd) {
 	cmd.SysProcAttr = &syscall.SysProcAttr{HideWindow: true, CreationFlags: 0x08000000}
 }
 
-// requestGracefulStop is not available on Windows: sing-box runs without a
-// console, so there is no console control event to deliver. The process is
-// killed instead; Wintun removes the adapter when its handle closes, and the
-// TUN manager cleans up the remaining routes and DNS settings.
+var (
+	kernel32              = windows.NewLazySystemDLL("kernel32.dll")
+	procAttachConsole     = kernel32.NewProc("AttachConsole")
+	procFreeConsole       = kernel32.NewProc("FreeConsole")
+	procGetConsoleWindow  = kernel32.NewProc("GetConsoleWindow")
+	procSetCtrlHandler    = kernel32.NewProc("SetConsoleCtrlHandler")
+	procGenerateCtrlEvent = kernel32.NewProc("GenerateConsoleCtrlEvent")
+	consoleMu             sync.Mutex
+	// swallowCtrl 吞掉转发 Ctrl+C 时自己也会收到的那一份。用回调而不是 SetConsoleCtrlHandler(NULL, TRUE)：
+	// 后者的“忽略 Ctrl+C”会被之后启动的 sing-box 继承，下次就关不掉了。
+	swallowCtrl = sync.OnceFunc(func() {
+		procSetCtrlHandler.Call(windows.NewCallback(func(uint32) uintptr { return 1 }), 1)
+	})
+)
+
+// requestGracefulStop 给 sing-box 发 Ctrl+C，让它自己撤掉 TUN 地址、路由和 DNS，
+// 不然被强杀后地址可能残留，下次启动报 “set ipv4 address: The object already exists”。
+// sing-box 以 CREATE_NO_WINDOW 启动，有自己的隐藏控制台：GUI 版（本身没有控制台）
+// 临时挂到那个控制台上发送 Ctrl+C 再脱离。CLI 版自己占着终端，不能脱离，仍走强杀。
 func requestGracefulStop(cmd *exec.Cmd) error {
-	return errors.New("graceful stop unsupported on windows")
+	consoleMu.Lock()
+	defer consoleMu.Unlock()
+	if hwnd, _, _ := procGetConsoleWindow.Call(); hwnd != 0 {
+		return errors.New("当前进程有控制台，无法转发 Ctrl+C")
+	}
+	if ok, _, err := procAttachConsole.Call(uintptr(cmd.Process.Pid)); ok == 0 {
+		return err
+	}
+	defer procFreeConsole.Call()
+	swallowCtrl()
+	if ok, _, err := procGenerateCtrlEvent.Call(windows.CTRL_C_EVENT, 0); ok == 0 {
+		return err
+	}
+	return nil
 }
 
 // killOnCloseJob 是带 KILL_ON_JOB_CLOSE 的 Job 对象，句柄随 sbtun 进程存活；

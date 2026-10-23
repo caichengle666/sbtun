@@ -3,6 +3,7 @@
 package tun
 
 import (
+	"net"
 	"os/exec"
 	"strconv"
 	"strings"
@@ -14,7 +15,7 @@ func cleanupPlatform(name string) error {
 	_ = runWindows("netsh", "interface", "ipv4", "set", "address", "name="+name, "source=dhcp")
 	_ = runWindows("netsh", "interface", "set", "interface", name, "admin=disabled")
 	_ = runWindows("netsh", "interface", "set", "interface", name, "admin=enabled")
-	return nil
+	return recoverPlatform()
 }
 
 func cleanupRoutesPlatform(name string) error {
@@ -68,4 +69,30 @@ func interfaceIndex(name string) (string, bool) {
 
 func configurePlatform(string) error { return nil }
 
-func recoverPlatform() error { return nil }
+// recoverPlatform 清掉上次没清干净的 TUN 地址（sing-box 被强杀、断电、蓝屏时会残留）。
+// 只动 sbtun 自己的网卡：现在的 sbtun，以及旧版用过、且已经不在工作状态的 tun0
+// （活动中的 tun0 可能属于别的客户端）。只在没有实例运行时调用。
+func recoverPlatform() error {
+	interfaces, err := net.Interfaces()
+	if err != nil {
+		return nil
+	}
+	for _, iface := range interfaces {
+		if iface.Name != InterfaceName && !(strings.EqualFold(iface.Name, "tun0") && iface.Flags&net.FlagUp == 0) {
+			continue
+		}
+		addresses, _ := iface.Addrs()
+		for _, address := range addresses {
+			ipNet, ok := address.(*net.IPNet)
+			if !ok {
+				continue
+			}
+			if ip4 := ipNet.IP.To4(); ip4 != nil && ip4[0] == 172 && ip4[1] >= 18 && ip4[1] <= 31 {
+				_ = runWindows("netsh", "interface", "ipv4", "delete", "address", "name="+iface.Name, "address="+ip4.String())
+			} else if ip4 == nil && strings.HasPrefix(ipNet.IP.String(), "fdfe:dcba:9876:") {
+				_ = runWindows("netsh", "interface", "ipv6", "delete", "address", "interface="+iface.Name, "address="+ipNet.IP.String())
+			}
+		}
+	}
+	return nil
+}
