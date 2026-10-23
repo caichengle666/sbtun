@@ -8,6 +8,7 @@ import (
 	"os/exec"
 	"sync"
 	"syscall"
+	"time"
 	"unsafe"
 
 	"golang.org/x/sys/windows"
@@ -25,31 +26,40 @@ var (
 	procSetCtrlHandler    = kernel32.NewProc("SetConsoleCtrlHandler")
 	procGenerateCtrlEvent = kernel32.NewProc("GenerateConsoleCtrlEvent")
 	consoleMu             sync.Mutex
-	// swallowCtrl 吞掉转发 Ctrl+C 时自己也会收到的那一份。用回调而不是 SetConsoleCtrlHandler(NULL, TRUE)：
-	// 后者的“忽略 Ctrl+C”会被之后启动的 sing-box 继承，下次就关不掉了。
-	swallowCtrl = sync.OnceFunc(func() {
-		procSetCtrlHandler.Call(windows.NewCallback(func(uint32) uintptr { return 1 }), 1)
-	})
 )
 
 // requestGracefulStop 给 sing-box 发 Ctrl+C，让它自己撤掉 TUN 地址、路由和 DNS，
 // 不然被强杀后地址可能残留，下次启动报 “set ipv4 address: The object already exists”。
 // sing-box 以 CREATE_NO_WINDOW 启动，有自己的隐藏控制台：GUI 版（本身没有控制台）
 // 临时挂到那个控制台上发送 Ctrl+C 再脱离。CLI 版自己占着终端，不能脱离，仍走强杀。
+//
+// 挂上去时自己也会收到这份 Ctrl+C。注册回调吞掉不可靠（Windows 实测 GUI 进程照样被结束，
+// 表现为改规则重载时闪退），所以发送期间用 SetConsoleCtrlHandler(NULL, TRUE) 忽略，
+// 等 sing-box 退出后再恢复：忽略标志会被之后启动的进程继承，必须在启动下一个 sing-box 前恢复。
 func requestGracefulStop(cmd *exec.Cmd) error {
 	consoleMu.Lock()
 	defer consoleMu.Unlock()
 	if hwnd, _, _ := procGetConsoleWindow.Call(); hwnd != 0 {
 		return errors.New("当前进程有控制台，无法转发 Ctrl+C")
 	}
+	h, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(cmd.Process.Pid))
+	if err != nil {
+		return err
+	}
+	defer windows.CloseHandle(h)
+	procSetCtrlHandler.Call(0, 1)
+	defer procSetCtrlHandler.Call(0, 0)
 	if ok, _, err := procAttachConsole.Call(uintptr(cmd.Process.Pid)); ok == 0 {
 		return err
 	}
-	defer procFreeConsole.Call()
-	swallowCtrl()
-	if ok, _, err := procGenerateCtrlEvent.Call(windows.CTRL_C_EVENT, 0); ok == 0 {
+	ok, _, err := procGenerateCtrlEvent.Call(windows.CTRL_C_EVENT, 0)
+	procFreeConsole.Call()
+	if ok == 0 {
 		return err
 	}
+	// Ctrl+C 是异步投递的：等 sing-box 退出（最多 3 秒，超时由调用方强杀），再留一点时间让投递给自己的那份处理完。
+	windows.WaitForSingleObject(h, uint32(gracefulStopTimeout/time.Millisecond))
+	time.Sleep(100 * time.Millisecond)
 	return nil
 }
 
