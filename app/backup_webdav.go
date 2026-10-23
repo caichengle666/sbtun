@@ -126,6 +126,22 @@ func (a *App) ListWebDAVBackups() ([]WebDAVBackupDTO, error) {
 	return client.list()
 }
 
+// DeleteWebDAVBackup 删除一份云端备份。
+func (a *App) DeleteWebDAVBackup(name string) error {
+	if !isBackupFile(name) || strings.ContainsAny(name, `/\`) {
+		return fmt.Errorf("不是 sbtun 备份文件: %s", name)
+	}
+	settings, err := a.webDAVSettings()
+	if err != nil {
+		return err
+	}
+	client, err := newWebDAVClient(settings)
+	if err != nil {
+		return err
+	}
+	return client.delete(name)
+}
+
 // RestoreFromWebDAV 用指定备份整体覆盖本机的节点、订阅、规则和设置（WebDAV 设置保留本机的）。
 // 订阅节点按地址重新拉取。返回的提示说明哪些订阅或规则文件没能下载。
 func (a *App) RestoreFromWebDAV(name string) (string, error) {
@@ -579,7 +595,7 @@ func (c *webdavClient) delete(name string) error {
 	}
 	resp.Body.Close()
 	if resp.StatusCode/100 != 2 && resp.StatusCode != http.StatusNotFound {
-		return webdavStatusError("删除旧备份", resp)
+		return webdavStatusError("删除备份", resp)
 	}
 	return nil
 }

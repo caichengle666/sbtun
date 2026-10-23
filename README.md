@@ -357,6 +357,7 @@ backup set <地址> <用户名> <密码> [加密密码]   设置并测试 WebDAV
 backup                          立即备份
 backup list                     列出云端备份
 backup restore <编号>           用云端备份覆盖本机配置
+backup delete <编号>            删除一份云端备份
 backup auto <on|off>            内容有变化时自动备份（sbtun 运行时生效）
 backup clear                    清除 WebDAV 设置
 ```

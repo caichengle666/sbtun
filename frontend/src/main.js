@@ -773,7 +773,7 @@ function renderBackupModal() {
         ? '<p class="muted">读取中…</p>'
         : !b.list.length
           ? '<p class="muted">云端还没有备份。</p>'
-          : `<ul class="node-list backup-list">${b.list.map(item => `<li class="node-item"><div class="node-info"><div class="node-row"><span class="node-name" title="${escapeHtml(item.name)}">${escapeHtml(item.modified || item.name)}</span><span class="node-server">${escapeHtml(item.name)} · ${(item.size / 1024).toFixed(1)} KB${item.encrypted ? ' · 已加密' : ''}</span></div></div><div class="node-actions"><button class="btn btn-ghost restore-backup" data-name="${escapeHtml(item.name)}" ${busy ? 'disabled' : ''}>${b.busy === item.name ? '恢复中…' : '恢复'}</button></div></li>`).join('')}</ul>`
+          : `<ul class="node-list backup-list">${b.list.map(item => `<li class="node-item"><div class="node-info"><div class="node-row"><span class="node-name" title="${escapeHtml(item.name)}">${escapeHtml(item.modified || item.name)}</span><span class="node-server">${escapeHtml(item.name)} · ${(item.size / 1024).toFixed(1)} KB${item.encrypted ? ' · 已加密' : ''}</span></div></div><div class="node-actions"><button class="btn btn-ghost restore-backup" data-name="${escapeHtml(item.name)}" ${busy ? 'disabled' : ''}>${b.busy === item.name ? '恢复中…' : '恢复'}</button><button class="btn btn-danger delete-backup" data-name="${escapeHtml(item.name)}" ${busy ? 'disabled' : ''}>${b.busy === 'delete:' + item.name ? '删除中…' : '删除'}</button></div></li>`).join('')}</ul>`
   return `<div class="modal" id="backupModal" role="dialog" aria-modal="true" aria-labelledby="backupModalTitle"><div class="modal-backdrop" data-close-backup></div>
     <section class="modal-panel backup-modal">
       <header class="modal-header"><h2 id="backupModalTitle">云端备份（WebDAV）</h2><button class="icon-btn" data-close-backup aria-label="关闭" title="关闭">×</button></header>
@@ -886,6 +886,15 @@ function bindBackupModal() {
       await refreshConfig()
       await refreshRules()
       showToast(warning ? '已恢复，' + warning : '已恢复备份', warning ? '' : 'success')
+    })
+  }))
+  document.querySelectorAll('.delete-backup').forEach(btn => btn.addEventListener('click', () => {
+    const name = btn.dataset.name
+    if (!window.confirm('删除这份云端备份？删除后无法找回。')) return
+    runBackupAction('delete:' + name, async b => {
+      await window.go.app.App.DeleteWebDAVBackup(name)
+      b.list = (b.list || []).filter(item => item.name !== name)
+      showToast('已删除备份', 'success')
     })
   }))
 }

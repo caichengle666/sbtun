@@ -324,7 +324,7 @@ func validateBackupArgs(args []string) error {
 		return nil
 	case len(args) == 2 && args[0] == "auto" && (args[1] == "on" || args[1] == "off"):
 		return nil
-	case len(args) == 2 && args[0] == "restore":
+	case len(args) == 2 && (args[0] == "restore" || args[0] == "delete"):
 		if index, err := strconv.Atoi(args[1]); err != nil || index < 1 {
 			return fmt.Errorf("备份编号无效: %s", args[1])
 		}
@@ -404,7 +404,7 @@ func runBackupCommand(application *app.App, args []string) error {
 			}
 			fmt.Printf("%2d. %s  %s  %.1f KB%s\n", i+1, item.Name, item.Modified, float64(item.Size)/1024, lock)
 		}
-	case "restore":
+	case "restore", "delete":
 		list, err := application.ListWebDAVBackups()
 		if err != nil {
 			return err
@@ -413,11 +413,19 @@ func runBackupCommand(application *app.App, args []string) error {
 		if index > len(list) {
 			return fmt.Errorf("备份编号超出范围: %d", index)
 		}
-		warning, err := application.RestoreFromWebDAV(list[index-1].Name)
+		name := list[index-1].Name
+		if args[0] == "delete" {
+			if err := application.DeleteWebDAVBackup(name); err != nil {
+				return err
+			}
+			fmt.Println("已删除:", name)
+			return nil
+		}
+		warning, err := application.RestoreFromWebDAV(name)
 		if err != nil {
 			return err
 		}
-		fmt.Println("已恢复:", list[index-1].Name)
+		fmt.Println("已恢复:", name)
 		if warning != "" {
 			fmt.Println("提示:", warning)
 		}

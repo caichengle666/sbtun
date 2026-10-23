@@ -331,7 +331,7 @@ func cliUsage(command string, args []string) string {
 	case "kernel":
 		return "sbtun kernel <version|update>"
 	case "backup":
-		return "sbtun backup [list|restore <编号>|set <WebDAV地址> <用户名> <密码> [加密密码]|auto <on|off>|clear]"
+		return "sbtun backup [list|restore <编号>|delete <编号>|set <WebDAV地址> <用户名> <密码> [加密密码]|auto <on|off>|clear]"
 	}
 	return ""
 }
@@ -629,6 +629,7 @@ func printHelp() {
 		{"backup", "立即备份手动节点、订阅地址、规则和设置（订阅节点不备份）"},
 		{"backup list", "列出云端备份，保留最近 10 份"},
 		{"backup restore <编号>", "用云端备份整体覆盖本机，订阅节点重新拉取"},
+		{"backup delete <编号>", "删除一份云端备份"},
 		{"backup auto <on|off>", "开启后内容有变化时自动备份"},
 		{"backup clear", "清除 WebDAV 设置"},
 	})

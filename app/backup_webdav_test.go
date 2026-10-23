@@ -115,6 +115,15 @@ func TestWebDAVBackupSkipsSubscriptionNodesAndRestores(t *testing.T) {
 					t.Fatalf("node %s subscription=%q", n.Name, n.Subscription)
 				}
 			}
+			if err := b.DeleteWebDAVBackup("../config.json"); err == nil {
+				t.Fatal("non-backup name accepted")
+			}
+			if err := b.DeleteWebDAVBackup(name); err != nil {
+				t.Fatal(err)
+			}
+			if list, err := b.ListWebDAVBackups(); err != nil || len(list) != 0 {
+				t.Fatalf("after delete list=%+v err=%v", list, err)
+			}
 		})
 	}
 }

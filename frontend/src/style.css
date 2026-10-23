@@ -866,7 +866,9 @@ h2 { color: var(--text); letter-spacing: 0; }
 .backup-modal .modal-body { max-height: 620px; max-height: min(70vh, 620px); overflow-y: auto; }
 .backup-modal .setting-field .input { flex: 1; }
 .backup-list-heading { margin-top: 18px; }
-.backup-list .node-item { cursor: default; }
+.backup-list .node-item { grid-template-columns: minmax(0, 1fr) auto; cursor: default; }
+.backup-list .node-row { flex-wrap: wrap; row-gap: 2px; }
+.backup-list .node-name { flex-shrink: 0; }
 
 /* 侧栏「更新内核」入口（桌面端） */
 .kernel-update-btn { width: 100%; min-height: 26px; margin-top: 2px; font-size: 11px; }
