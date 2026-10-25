@@ -138,3 +138,34 @@ func TestSyncIfUnchangedSkipsIdenticalConfig(t *testing.T) {
 		t.Fatal("已停止时不应报告无需重载")
 	}
 }
+
+// 运行中只切换当前节点（Clash API 已无缝切换）时，配置文件变化不应触发重启 sing-box。
+func TestSyncIfUnchangedIgnoresNodeSelection(t *testing.T) {
+	r, dir := newReloadTestRuntime(t)
+	cfg := reloadTestConfig("a", 1080)
+	cfg.Nodes = append(cfg.Nodes, config.Node{ID: "b", Name: "b", Protocol: "socks", Server: "127.0.0.1", Port: 1081})
+	if err := r.Start(context.Background(), cfg); err != nil {
+		t.Fatal(err)
+	}
+	defer r.Stop()
+	switched := cfg
+	switched.CurrentNodeID = "b"
+	if ok, err := r.SyncIfUnchanged(switched); err != nil || !ok {
+		t.Fatalf("只切节点时应跳过重启: ok=%v err=%v", ok, err)
+	}
+	data, _ := os.ReadFile(r.configPath())
+	if !bytes.Contains(data, []byte(`"default": "node-b"`)) && !bytes.Contains(data, []byte(`"default":"node-b"`)) {
+		t.Fatal("runtime.json 应写入新的当前节点，下次启动用它")
+	}
+	if ok, _ := r.SyncIfUnchanged(switched); !ok {
+		t.Fatal("再次同步相同配置也应跳过")
+	}
+	changed := switched
+	changed.Nodes = []config.Node{cfg.Nodes[0], {ID: "b", Name: "b", Protocol: "socks", Server: "127.0.0.1", Port: 1082}}
+	if ok, _ := r.SyncIfUnchanged(changed); ok {
+		t.Fatal("节点参数变了必须重载")
+	}
+	if n := countRuns(t, dir, 1); n != 1 {
+		t.Fatalf("sing-box 启动次数=%d want 1", n)
+	}
+}

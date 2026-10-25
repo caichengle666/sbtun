@@ -178,14 +178,26 @@ func (r *RuntimeCoordinator) SyncIfUnchanged(cfg config.Config) (bool, error) {
 	if err != nil {
 		return false, err
 	}
-	if !bytes.Equal(data, r.activeData) {
+	if !bytes.Equal(data, r.activeData) && !r.onlySelectionChanged(cfg) {
 		return false, nil
 	}
 	if err := atomicWrite(r.configPath(), data, nil); err != nil {
 		return false, fmt.Errorf("写入运行配置失败: %w", err)
 	}
 	r.activeConfig = cfg
+	r.activeData = data
 	return true, nil
+}
+
+// onlySelectionChanged 判断新配置和运行中的配置是否只差当前节点：切节点只改了 selector 的默认值，
+// 运行中靠 Clash API 无缝切换，不需要重启 sing-box。
+func (r *RuntimeCoordinator) onlySelectionChanged(cfg config.Config) bool {
+	if cfg.CurrentNodeID == r.activeConfig.CurrentNodeID {
+		return false
+	}
+	cfg.CurrentNodeID = r.activeConfig.CurrentNodeID
+	data, err := r.buildConfig(cfg)
+	return err == nil && bytes.Equal(data, r.activeData)
 }
 
 func (r *RuntimeCoordinator) startConfigLocked(ctx context.Context, cfg config.Config) error {
