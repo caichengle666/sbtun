@@ -109,9 +109,8 @@ func (a *App) scheduleExitReload() {
 		exitReload.timer.Stop()
 	}
 	exitReload.timer = time.AfterFunc(3*time.Second, func() {
-		a.operationMu.Lock()
-		defer a.operationMu.Unlock()
-		_ = a.reloadIfRunningLocked()
+		// 配置监视可能已经应用过这次修改；生成的配置没变时这里不会再重启一次。
+		_ = a.applyExternalConfig()
 	})
 }
 
