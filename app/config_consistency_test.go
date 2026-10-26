@@ -71,7 +71,7 @@ func TestSetCaptureSettingsPreservesOtherConfiguration(t *testing.T) {
 	dir := t.TempDir()
 	manager := config.NewManager(filepath.Join(dir, "config.json"))
 	cfg := config.Default()
-	cfg.RoutingMode = config.RoutingCustom
+	cfg.RoutingMode = config.RoutingGlobal
 	cfg.Nodes = []config.Node{{ID: "one", Name: "one", Protocol: "socks", Server: "127.0.0.1", Port: 1080}}
 	cfg.CurrentNodeID = "one"
 	cfg.CustomRules = []config.Rule{{MatchType: "domain_keyword", Value: "example", Action: "proxy"}}

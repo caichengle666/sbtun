@@ -7,6 +7,8 @@ import (
 	"os/exec"
 	"strings"
 	"time"
+
+	"github.com/caichengle666/sbtun/core/rules"
 )
 
 func (a *App) validateRuleSet(path string) error {
@@ -19,9 +21,9 @@ func (a *App) validateRuleSet(path string) error {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 30*time.Second)
 	defer cancel()
-	// match 会按 sing-box 实际加载规则集的方式解析 binary 格式，兼容
-	// sing-box SRS 和由 AdGuard DNS 规则转换得到的 SRS。
-	command := exec.CommandContext(ctx, a.binary, "rule-set", "match", "--format", "binary", path, "example.com")
+	// match 会按 sing-box 实际加载规则集的方式解析：.srs（含 AdGuard 转换的）按 binary，
+	// 文本列表转换出的 .json 按 source。
+	command := exec.CommandContext(ctx, a.binary, "rule-set", "match", "--format", rules.FileFormat(path), path, "example.com")
 	configureProcess(command)
 	result, err := command.CombinedOutput()
 	if err == nil {

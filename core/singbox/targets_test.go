@@ -11,7 +11,7 @@ import (
 )
 
 func TestRuleTargetsBuildGroups(t *testing.T) {
-	cfg := testConfig(config.RoutingCustom)
+	cfg := testConfig(config.RoutingGlobal)
 	cfg.Subscriptions = []config.Subscription{{ID: "s1", Name: "机场", URL: "https://sub.example/s"}}
 	cfg.Nodes = []config.Node{
 		{ID: "n1", Name: "美国 1", Protocol: "socks", Server: "127.0.0.1", Port: 1080, Country: "US", Subscription: "s1"},

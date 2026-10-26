@@ -202,6 +202,7 @@ func (a *App) RestoreFromWebDAV(name string) (string, error) {
 		if payload.CurrentNode != "" {
 			restored.CurrentNodeID = payload.CurrentNode
 		}
+		config.Migrate(&restored)
 		ensureCurrentNode(&restored)
 		*next = restored
 		return nil

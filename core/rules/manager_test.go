@@ -44,7 +44,7 @@ func TestAddAndUpdateDoesNotSaveRuleWhenValidationFails(t *testing.T) {
 	defer server.Close()
 	manager := NewManager(dir)
 	before := len(manager.sets)
-	if err := manager.AddAndUpdate("invalid", server.URL, func(string) error { return errors.New("invalid srs") }); err == nil {
+	if err := manager.AddAndUpdate("invalid", server.URL, "", func(string) error { return errors.New("invalid srs") }); err == nil {
 		t.Fatal("AddAndUpdate should reject an invalid rule-set")
 	}
 	if len(manager.sets) != before {

@@ -15,10 +15,15 @@ func TestCaptureRouteLabels(t *testing.T) {
 	if got := captureRoute(flow, config.Config{RoutingMode: config.RoutingGlobal}); got != "proxy" {
 		t.Fatalf("global route=%q", got)
 	}
-	cfg := config.Config{RoutingMode: config.RoutingCustom, CustomRules: []config.Rule{{MatchType: "domain_suffix", Value: "example.com", Action: "block"}}}
+	cfg := config.Config{RoutingMode: config.RoutingDirect, CustomRules: []config.Rule{{MatchType: "domain_suffix", Value: "example.com", Action: "block"}}}
 	if got := captureRoute(flow, cfg); got != "block" {
-		t.Fatalf("custom route=%q", got)
+		t.Fatalf("直连模式下屏蔽规则仍应生效: %q", got)
 	}
+	cfg.CustomRules[0].Action = "proxy"
+	if got := captureRoute(flow, cfg); got != "direct" {
+		t.Fatalf("直连模式下非屏蔽规则应停用: %q", got)
+	}
+	cfg.CustomRules[0].Action = "block"
 	flow.Error = "timeout"
 	if got := captureRoute(flow, cfg); got != "failed" {
 		t.Fatalf("failed route=%q", got)
@@ -27,7 +32,7 @@ func TestCaptureRouteLabels(t *testing.T) {
 
 func TestCaptureRouteCustomFallbackAndPort(t *testing.T) {
 	flow := capture.Flow{Host: "api.example.com", URL: "https://api.example.com/v1"}
-	cfg := config.Config{RoutingMode: config.RoutingCustom, CustomRules: []config.Rule{{MatchType: "port", Value: "443", Action: "direct"}}}
+	cfg := config.Config{RoutingMode: config.RoutingGlobal, CustomRules: []config.Rule{{MatchType: "port", Value: "443", Action: "direct"}}}
 	if got := captureRoute(flow, cfg); got != "direct" {
 		t.Fatalf("HTTPS port route=%q", got)
 	}

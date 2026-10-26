@@ -15,6 +15,7 @@ import (
 	"strings"
 
 	"github.com/caichengle666/sbtun/config"
+	"github.com/caichengle666/sbtun/core/rules"
 )
 
 type RuntimeConfig struct {
@@ -35,7 +36,8 @@ const (
 
 // BuildConfigWithAuth 将用户配置转换为 sing-box 运行配置，并用本地凭据保护
 // clash API 和抓包代理端口。resolved 是域名节点当前解析出的地址。
-// 四种模式在这里形成明确、可验证的路由闭环：智能分流、全局代理、全局直连、自定义规则。
+// 三种模式只决定内置的国内直连规则集开不开、匹配不到时走代理还是直连；
+// 自己的规则（分流规则、规则集）在智能和全局下优先生效，直连模式下只保留屏蔽类。
 func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth, resolved []netip.Addr) ([]byte, error) {
 	if err := config.Validate(cfg); err != nil {
 		return nil, err
@@ -51,7 +53,8 @@ func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth, resol
 		return nil, err
 	}
 
-	targets, groups := ruleTargets(cfg, proxy)
+	ruleSets := activeRuleSets(cfg.RoutingMode, exeDir)
+	targets, groups := ruleTargets(cfg, ruleSets, proxy)
 	outbounds, endpoints := splitEndpoints(proxy)
 	outbounds = append(outbounds, groups...)
 	outbounds = append(outbounds, map[string]any{"type": "direct", "tag": "direct", "domain_resolver": "dns-local"}, map[string]any{"type": "block", "tag": "block"})
@@ -99,11 +102,11 @@ func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth, resol
 	result := RuntimeConfig{
 		Schema:    "https://sing-box.sagernet.org/schema.json",
 		Log:       map[string]any{"level": "info", "timestamp": true},
-		DNS:       buildDNS(cfg.DNSMode, cfg.RoutingMode, NodeDomains(cfg.Nodes), hasRuleSet(activeRuleSets(cfg.RoutingMode, exeDir), "geosite-cn")),
+		DNS:       buildDNS(cfg.DNSMode, cfg.RoutingMode, NodeDomains(cfg.Nodes), hasRuleSet(ruleSets, "geosite-cn")),
 		Inbounds:  inbounds,
 		Outbounds: outbounds,
 		Endpoints: endpoints,
-		Route:     routeForMode(cfg.RoutingMode, cfg.CustomRules, targets, cfg.DNSFilterRules, cfg.CaptureEnabled, cfg.CaptureDomains, exeDir),
+		Route:     routeForMode(cfg, ruleSets, targets, exeDir),
 		Experimental: map[string]any{
 			"cache_file": map[string]any{"enabled": true},
 			"clash_api":  clashAPI,
@@ -212,7 +215,8 @@ func buildDNS(mode config.DNSMode, routeMode config.RoutingMode, nodeDomains []s
 	return map[string]any{"servers": servers, "rules": rules, "final": final, "strategy": "prefer_ipv4"}
 }
 
-func routeForMode(mode config.RoutingMode, custom []config.Rule, targets map[string]string, filterRules []config.Rule, captureEnabled bool, captureDomains []string, exeDir string) map[string]any {
+func routeForMode(cfg config.Config, ruleSets []configuredRuleSet, targets map[string]string, exeDir string) map[string]any {
+	mode, captureEnabled, captureDomains := cfg.RoutingMode, cfg.CaptureEnabled, cfg.CaptureDomains
 	private := map[string]any{"ip_is_private": true, "outbound": "direct"}
 	dns := map[string]any{"protocol": "dns", "action": "hijack-dns"}
 	base := []map[string]any{
@@ -242,40 +246,32 @@ func routeForMode(mode config.RoutingMode, custom []config.Rule, targets map[str
 		}
 	}
 	base = append(base, map[string]any{"inbound": []string{"tun-in"}, "action": "resolve", "strategy": "prefer_ipv4"})
-	for _, r := range custom {
-		if rr, ok := customRule(r, targets); ok {
-			base = append(base, rr)
-		}
-	}
-	for _, r := range filterRules {
+	// 屏蔽规则最先匹配，不会被分流规则抢走。
+	for _, r := range cfg.DNSFilterRules {
 		if rr, ok := customRule(r, nil); ok {
 			base = append(base, rr)
 		}
 	}
-	ruleSets := activeRuleSets(mode, exeDir)
+	for _, r := range cfg.CustomRules {
+		if mode == config.RoutingDirect && !config.IsBlockAction(r.Action) {
+			continue
+		}
+		if rr, ok := customRule(r, targets); ok {
+			base = append(base, rr)
+		}
+	}
 	for _, set := range ruleSets {
-		base = append(base, map[string]any{"rule_set": []string{set.ID}, "outbound": set.Action})
+		base = append(base, map[string]any{"rule_set": []string{set.ID}, "outbound": ruleOutbound(set.Action, targets)})
 	}
 	base = append(base, private)
 	final := "proxy"
-
-	switch mode {
-	case config.RoutingGlobal:
-		// 除本机/局域网地址外，全部进入代理。
-		final = "proxy"
-	case config.RoutingDirect:
-		// 所有流量直连，不允许 proxy 成为默认兜底。
+	if mode == config.RoutingDirect {
 		final = "direct"
-	case config.RoutingSmart:
-		// 中国域名/IP 直连；非中国域名和其余流量代理。
-		final = "proxy"
-	case config.RoutingCustom:
-		final = "proxy"
 	}
 
 	ruleSetConfigs := make([]map[string]any, 0, len(ruleSets))
 	for _, set := range ruleSets {
-		ruleSetConfigs = append(ruleSetConfigs, map[string]any{"type": "local", "tag": set.ID, "format": "binary", "path": filepath.Join(exeDir, "rules", filepath.Base(set.Path))})
+		ruleSetConfigs = append(ruleSetConfigs, map[string]any{"type": "local", "tag": set.ID, "format": rules.FileFormat(set.Path), "path": filepath.Join(exeDir, "rules", filepath.Base(set.Path))})
 	}
 	return map[string]any{
 		// 安卓上 sing-box 进程已被 VPN 排除，不需要（也未必有权限）监听网卡变化。
@@ -295,6 +291,8 @@ type configuredRuleSet struct {
 	Action  string `json:"action"`
 }
 
+// activeRuleSets 返回要写进配置的规则集：用户添加的排在前面且优先，直连模式下只留屏蔽类；
+// 内置的国内/国外规则集只在智能模式下用。
 func activeRuleSets(mode config.RoutingMode, exeDir string) []configuredRuleSet {
 	sets := configuredRuleSets(exeDir)
 	userSets := make([]configuredRuleSet, 0, len(sets))
@@ -303,13 +301,14 @@ func activeRuleSets(mode config.RoutingMode, exeDir string) []configuredRuleSet 
 		if !set.Enabled || !ruleSetExists(exeDir, filepath.Base(set.Path)) {
 			continue
 		}
-		if set.Source == "default" {
+		switch {
+		case set.Source == "default":
 			if mode == config.RoutingSmart {
 				defaultSets = append(defaultSets, set)
 			}
-			continue
+		case mode != config.RoutingDirect || config.IsBlockAction(set.Action):
+			userSets = append(userSets, set)
 		}
-		userSets = append(userSets, set)
 	}
 	return append(userSets, defaultSets...)
 }
@@ -387,14 +386,7 @@ func customRule(r config.Rule, targets map[string]string) (map[string]any, bool)
 	if value == "" {
 		return nil, false
 	}
-	outbound, _ := config.SplitAction(r.Action)
-	if !config.IsBasicAction(r.Action) {
-		// 指向节点/节点组的规则：目标没了（节点删除、组里没有可用节点）就退回当前节点。
-		outbound = "proxy"
-		if tag := targets[strings.TrimSpace(r.Action)]; tag != "" {
-			outbound = tag
-		}
-	}
+	outbound := ruleOutbound(r.Action, targets)
 	key := strings.ToLower(strings.TrimSpace(r.MatchType))
 	rule := map[string]any{"outbound": outbound}
 	switch key {
@@ -415,6 +407,19 @@ func customRule(r config.Rule, targets map[string]string) (map[string]any, bool)
 		return nil, false
 	}
 	return rule, true
+}
+
+// ruleOutbound 把规则去向换成出站标签；指向节点/节点组的目标没了（节点删除、组里没有可用节点）
+// 就退回当前节点。
+func ruleOutbound(action string, targets map[string]string) string {
+	if config.IsBasicAction(action) {
+		kind, _ := config.SplitAction(action)
+		return kind
+	}
+	if tag := targets[strings.TrimSpace(action)]; tag != "" {
+		return tag
+	}
+	return "proxy"
 }
 
 func parsePort(s string) int {

@@ -86,6 +86,12 @@ func IsBasicAction(action string) bool {
 	return arg == "" && (kind == "proxy" || kind == "direct" || kind == "block")
 }
 
+// IsBlockAction 说明去向是不是屏蔽；直连模式下只有屏蔽类规则生效。
+func IsBlockAction(action string) bool {
+	kind, arg := SplitAction(action)
+	return kind == "block" && arg == ""
+}
+
 func ValidateAction(action string) error {
 	kind, arg := SplitAction(action)
 	switch kind {

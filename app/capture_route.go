@@ -24,20 +24,22 @@ func captureRoute(flow capture.Flow, cfg config.Config) string {
 	if ip := net.ParseIP(host); ip != nil && (ip.IsPrivate() || ip.IsLoopback() || ip.IsLinkLocalUnicast()) {
 		return "direct"
 	}
+	// 自己的规则优先；直连模式下只有屏蔽规则生效。
+	for _, rule := range cfg.CustomRules {
+		if cfg.RoutingMode == config.RoutingDirect && !config.IsBlockAction(rule.Action) {
+			continue
+		}
+		if captureRuleMatches(rule, flow, host) {
+			if !config.IsBasicAction(rule.Action) {
+				return "proxy" // 指定节点/节点组也是走代理
+			}
+			return strings.ToLower(strings.TrimSpace(rule.Action))
+		}
+	}
 	switch cfg.RoutingMode {
 	case config.RoutingDirect:
 		return "direct"
 	case config.RoutingGlobal:
-		return "proxy"
-	case config.RoutingCustom:
-		for _, rule := range cfg.CustomRules {
-			if captureRuleMatches(rule, flow, host) {
-				if !config.IsBasicAction(rule.Action) {
-					return "proxy" // 指定节点/节点组也是走代理
-				}
-				return strings.ToLower(strings.TrimSpace(rule.Action))
-			}
-		}
 		return "proxy"
 	default:
 		return "smart"

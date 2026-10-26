@@ -50,6 +50,7 @@ func (m *Manager) loadLocked() (Config, error) {
 	if err := json.Unmarshal(data, &cfg); err != nil {
 		return Config{}, fmt.Errorf("配置格式错误: %w", err)
 	}
+	Migrate(&cfg)
 	if err := Validate(cfg); err != nil {
 		return Config{}, err
 	}
@@ -152,7 +153,7 @@ func Validate(cfg Config) error {
 		return fmt.Errorf("不支持的配置版本: %d", cfg.Version)
 	}
 	switch cfg.RoutingMode {
-	case RoutingSmart, RoutingGlobal, RoutingDirect, RoutingCustom:
+	case RoutingSmart, RoutingGlobal, RoutingDirect:
 	default:
 		return fmt.Errorf("未知路由模式: %q", cfg.RoutingMode)
 	}

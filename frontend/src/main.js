@@ -50,7 +50,7 @@ const state = {
   customRuleForm: { match_type: 'domain_suffix', value: '', action: 'proxy', node_id: '' },
   customRuleImport: '',
   rules: null,
-  ruleSetForm: { name: '', url: '' },
+  ruleSetForm: { name: '', url: '', action: 'block', node_id: '' },
   editingRuleSetID: '',
   ruleFilter: 'all',
   ruleUpdating: '',
@@ -118,10 +118,9 @@ const NAV_ICONS = {
 }
 
 const MODES = [
-  { id: 'smart', name: '智能分流', desc: '国内直连，其余自动代理' },
-  { id: 'global', name: '全局代理', desc: '所有非本机流量走代理' },
-  { id: 'direct', name: '全局直连', desc: '所有流量直接连接' },
-  { id: 'custom', name: '自定义', desc: '按用户规则精细控制' },
+  { id: 'smart', name: '智能分流', desc: '国内直连，国外走代理' },
+  { id: 'global', name: '全局代理', desc: '除局域网外全部走代理' },
+  { id: 'direct', name: '全局直连', desc: '全部直连，只保留阻断规则' },
 ]
 
 const RULE_MATCH_TYPES = [
@@ -369,7 +368,7 @@ function viewLabel(view) {
 }
 
 function viewTitle(view) {
-  return { overview: '运行概览', nodes: '节点管理', routing: '路由模式', rules: '智能分流规则集', capture: 'HTTP 请求分析' }[view] || '运行概览'
+  return { overview: '运行概览', nodes: '节点管理', routing: '路由模式', rules: '规则集与过滤', capture: 'HTTP 请求分析' }[view] || '运行概览'
 }
 
 function activeNodeID() {
@@ -619,8 +618,8 @@ function renderRoutingPage() {
   const matchType = RULE_MATCH_TYPES.find(item => item.id === state.customRuleForm.match_type) || RULE_MATCH_TYPES[0]
   const diagnostics = state.diagnostics
   return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div><div class="network-options"><div class="network-options-title">网络选项</div><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>节点失效自动切换</strong><small>当前节点连续两次测试失败时，切换到延迟最低的可用节点，优先同一订阅</small></span><span class="toggle-switch"><input id="autoSwitchToggle" type="checkbox" ${state.config?.auto_switch_disabled ? '' : 'checked'}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用 IPv6</strong><small>${escapeHtml(state.ipv6Status?.message || '正在检测设备 IPv6')}</small></span><span class="toggle-switch"><input id="ipv6Toggle" type="checkbox" ${state.config?.ipv6_enabled ? 'checked' : ''} ${busyAttr('ipv6')}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row" data-desktop-only><span class="setting-toggle-copy"><strong>启用 WebRTC 防泄漏</strong><small>防止 WebRTC 通过直连暴露真实 IPv4/IPv6</small></span><span class="toggle-switch"><input id="webrtcProtectionToggle" type="checkbox" ${state.config?.webrtc_protection_enabled ? 'checked' : ''} ${busyAttr('webrtc')}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用诊断信息</strong><small>显示当前 selector 和运行节点，仅用于排查问题</small></span><span class="toggle-switch"><input id="diagnosticsToggle" type="checkbox" ${state.config?.diagnostics_enabled ? 'checked' : ''} ${busyAttr('diagnostics')}><span aria-hidden="true"></span></span></label></div></section>${state.config?.diagnostics_enabled ? `<section class="card"><h2>运行诊断</h2><div class="diagnostics-grid"><span>当前配置节点</span><strong>${escapeHtml(diagnostics?.current_node_id || '未选择')}</strong><span>实际 selector</span><strong>${escapeHtml(diagnostics?.selector || '未读取')}</strong><span>状态</span><strong>${escapeHtml(diagnostics?.message || '读取中')}</strong></div></section>` : ''}
-    ${state.config?.routing_mode === 'custom' ? renderNodeGroupsCard() : ''}
-    ${state.config?.routing_mode === 'custom' ? `<section class="card"><div class="section-heading"><div><h2>自定义分流规则</h2><p class="muted">先选择匹配对象，再填写内容和处理方式。</p></div></div><div id="customRulesPanel">${renderCustomRules()}</div><div class="rule-editor ${state.customRuleForm.action === 'node' ? 'with-node' : ''}"><label class="rule-field"><span>匹配对象</span><select id="ruleMatchType" class="select">${RULE_MATCH_TYPES.map(item => `<option value="${item.id}" ${item.id === matchType.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-field"><span>匹配内容</span><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="${matchType.placeholder}" /></label><label class="rule-field"><span>去向</span>${renderRuleActionSelect()}</label>${state.customRuleForm.action === 'node' ? renderRuleNodeSelect() : ''}<button id="addRuleBtn" class="btn btn-primary" ${busyAttr('customRule')}>${state.editingCustomRule ? '保存修改' : '添加规则'}</button>${state.editingCustomRule ? '<button id="cancelEditRule" class="btn btn-ghost">取消</button>' : ''}<small class="rule-hint value-hint" id="ruleValueHint">${matchType.hint}</small><small class="rule-hint action-hint" id="ruleActionHint">${ruleActionHint(state.customRuleForm.action)}</small></div><details class="rule-import" open><summary>批量导入规则</summary><div class="rule-import-body"><textarea id="ruleImport" class="input" rows="3" placeholder="每行一条，例如：proxy,domain_suffix,example.com；也认 Clash 写法：DOMAIN-SUFFIX,openai.com,美国"></textarea><button id="importRuleBtn" class="btn btn-ghost" ${busyAttr('importRule')}>导入</button></div></details></section>` : ''}
+    ${renderNodeGroupsCard()}
+    ${`<section class="card"><div class="section-heading"><div><h2>我的分流规则</h2><p class="muted">${state.config?.routing_mode === 'direct' ? '全局直连模式下只有去向为“阻断”的规则生效。' : '优先于路由模式生效；规则集在“分流规则”页添加，也可以选去向。'}</p></div></div><div id="customRulesPanel">${renderCustomRules()}</div><div class="rule-editor ${state.customRuleForm.action === 'node' ? 'with-node' : ''}"><label class="rule-field"><span>匹配对象</span><select id="ruleMatchType" class="select">${RULE_MATCH_TYPES.map(item => `<option value="${item.id}" ${item.id === matchType.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-field"><span>匹配内容</span><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="${matchType.placeholder}" /></label><label class="rule-field"><span>去向</span>${renderRuleActionSelect()}</label>${state.customRuleForm.action === 'node' ? renderRuleNodeSelect() : ''}<button id="addRuleBtn" class="btn btn-primary" ${busyAttr('customRule')}>${state.editingCustomRule ? '保存修改' : '添加规则'}</button>${state.editingCustomRule ? '<button id="cancelEditRule" class="btn btn-ghost">取消</button>' : ''}<small class="rule-hint value-hint" id="ruleValueHint">${matchType.hint}</small><small class="rule-hint action-hint" id="ruleActionHint">${ruleActionHint(state.customRuleForm.action)}</small></div><details class="rule-import" open><summary>批量导入规则</summary><div class="rule-import-body"><textarea id="ruleImport" class="input" rows="3" placeholder="粘贴规则或填链接：Clash/Surge 配置、ACL4SSR 模板都行；引用的 RULE-SET 列表会各自变成一个规则集"></textarea><button id="importRuleBtn" class="btn btn-ghost" ${busyAttr('importRule')}>导入</button></div></details></section>`}
   </div>`
 }
 
@@ -631,7 +630,7 @@ function renderRulesPage() {
     ${state.rulesTab === 'sets' ? `
     <section class="card rules-card">
       <div class="section-heading rules-page-heading">
-        <div><h2>规则集</h2><p class="muted">管理默认规则集和用户添加的 DNS 规则集。</p></div>
+        <div><h2>规则集</h2><p class="muted">内置规则只用于智能分流；自己添加的整份生效、整份更新，可以选去向。</p></div>
         <select id="ruleSetFilter" class="select rule-filter-select" aria-label="筛选规则集">
           <option value="all" ${filter === 'all' ? 'selected' : ''}>全部规则</option>
           <option value="default" ${filter === 'default' ? 'selected' : ''}>默认规则</option>
@@ -642,20 +641,21 @@ function renderRulesPage() {
       <div class="rule-layout">
         <div class="rule-list-column">
           <div id="rulesPanel">${renderRules()}</div>
-          <div class="rules-toolbar"><span class="rules-summary-note">启用的规则集会参与当前路由模式，更新失败时保留旧文件。</span><button id="updateAllRules" class="btn btn-primary" ${state.ruleUpdating || state.allRulesUpdating ? 'disabled' : ''}>${state.allRulesUpdating ? '更新中...' : '更新全部规则集'}</button></div>
+          <div class="rules-toolbar"><span class="rules-summary-note">更新失败时保留旧文件。</span><button id="updateAllRules" class="btn btn-primary" ${state.ruleUpdating || state.allRulesUpdating ? 'disabled' : ''}>${state.allRulesUpdating ? '更新中...' : '更新全部规则集'}</button></div>
         </div>
         <aside class="rule-set-form card">
           <h3>${state.editingRuleSetID ? '编辑规则集' : '添加规则集'}</h3>
-          <p class="muted">添加 sing-box SRS 或 DNS 域名规则集 URL。</p>
+          <p class="muted">支持 .srs、Clash/Surge 规则列表、域名或 IP 列表的链接。</p>
           <label class="rule-form-field"><span>规则集名称</span><input id="ruleSetName" class="input" value="${escapeHtml(state.ruleSetForm.name)}" placeholder="例如 广告过滤规则" /></label>
           <label class="rule-form-field"><span>规则集 URL</span><input id="ruleSetURL" class="input" value="${escapeHtml(state.ruleSetForm.url)}" placeholder="https://example.com/rules.srs" /></label>
+          ${state.rules?.find(r => r.id === state.editingRuleSetID)?.source === 'default' ? '' : `<label class="rule-form-field"><span>去向</span>${renderTargetSelect('ruleSetAction', state.ruleSetForm.action, { blockFirst: true })}</label>${state.ruleSetForm.action === 'node' ? renderNodePicker('ruleSetNode', state.ruleSetForm.node_id) : ''}`}
           <div class="rule-form-actions"><button id="addRuleSetBtn" class="btn btn-primary" ${busyAttr('ruleSet')}>${state.editingRuleSetID ? '保存修改' : '添加规则集'}</button>${state.editingRuleSetID ? '<button id="cancelEditRuleSet" class="btn btn-ghost">取消</button>' : `<a class="btn btn-ghost rule-source-link" href="https://github.com/razaxq/dns-blocklists-sing-box/blob/main/README_zh.md" target="_blank" rel="noopener noreferrer">查找规则集</a><button id="restoreDefaultRules" class="btn btn-ghost" ${busyAttr('ruleSet')}>恢复默认规则</button>`}</div>
         </aside>
       </div>
     </section>
     ` : `
     <section class="card dns-filter-card">
-      <div class="section-heading"><div><h2>手动 DNS 过滤规则</h2><p class="muted">单独添加域名或 IP，命中后直接阻断。优先级高于规则集。</p></div><button id="openFilterRuleBtn" class="btn btn-primary">添加过滤规则</button></div>
+      <div class="section-heading"><div><h2>手动 DNS 过滤规则</h2><p class="muted">单独添加域名或 IP，命中后直接阻断，优先级最高。</p></div><button id="openFilterRuleBtn" class="btn btn-primary">添加过滤规则</button></div>
       ${state.dnsFilterFormOpen ? `<div class="dns-filter-editor"><label class="rule-form-field"><span>匹配对象</span><select id="filterRuleMatchType" class="select">${RULE_MATCH_TYPES.filter(item => item.id !== 'port').map(item => `<option value="${item.id}" ${item.id === state.filterRuleForm.match_type ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-form-field"><span>匹配内容</span><input id="filterRuleValue" class="input" value="${escapeHtml(state.filterRuleForm.value)}" placeholder="例如 ads.example.com" /></label><div class="rule-form-actions"><button id="addFilterRuleBtn" class="btn btn-primary" ${busyAttr('filterRule')}>${state.editingFilterRule ? '保存修改' : '添加规则'}</button><button id="cancelFilterRuleBtn" class="btn btn-ghost">取消</button></div></div>` : ''}
       ${renderDNSFilterRules()}
       <div class="rules-toolbar dns-filter-toolbar"><span class="rules-summary-note">共 ${(state.config?.dns_filter_rules || []).length} 条手动过滤规则</span></div>
@@ -1031,7 +1031,7 @@ function renderRules() {
     return `
     <div class="rule-set-row">
       <button class="rule-switch ${r.enabled ? 'on' : ''} toggle-rule" data-id="${id}" ${busyAttr('rule:' + r.id)} aria-label="${r.enabled ? '停用' : '启用'} ${escapeHtml(r.name)}"><span></span></button>
-      <div class="rule-set-main"><div class="rule-set-title"><strong>${escapeHtml(r.name)}</strong><span class="rule-tag ${r.source === 'default' ? 'default' : 'custom'}">${r.source === 'default' ? '默认' : '用户添加'}</span></div><div class="rule-set-file">${r.exists ? escapeHtml(formatRuleInfo(r)) : `<button class="rule-inline-download update-rule" data-id="${id}" ${state.ruleUpdating || state.allRulesUpdating ? 'disabled' : ''}>${state.ruleUpdating === r.id ? '下载中...' : '立即下载'}</button>`}</div></div>
+      <div class="rule-set-main"><div class="rule-set-title"><strong>${escapeHtml(r.name)}</strong><span class="rule-tag ${r.source === 'default' ? 'default' : 'custom'}">${r.source === 'default' ? '默认' : '用户添加'}</span></div><div class="rule-set-file">${r.source === 'default' ? '' : ruleTarget(r.action || 'block') + ' '}${r.exists ? escapeHtml(formatRuleInfo(r)) : `<button class="rule-inline-download update-rule" data-id="${id}" ${state.ruleUpdating || state.allRulesUpdating ? 'disabled' : ''}>${state.ruleUpdating === r.id ? '下载中...' : '立即下载'}</button>`}</div></div>
       <span class="rule-tag ${r.exists ? 'ready' : 'missing'}">${r.exists ? '已下载' : '未下载'}</span>
       <span class="rule-set-date">${r.updated_at ? escapeHtml(new Date(r.updated_at).toLocaleDateString('zh-CN')) : '尚未更新'}</span>
       <details class="rule-menu" data-rule-menu-id="${id}"><summary aria-label="规则集操作">⋯</summary><div class="rule-menu-list"><button class="rule-menu-action update-rule" data-id="${id}" ${state.ruleUpdating || state.allRulesUpdating ? 'disabled' : ''}>${state.ruleUpdating === r.id ? '更新中...' : '更新'}</button><button class="rule-menu-action edit-rule" data-id="${id}">编辑</button><button class="rule-menu-action rule-copy-url" data-url="${escapeHtml(r.url || '')}">查看 URL</button><button class="rule-menu-action danger delete-rule" data-id="${id}" ${busyAttr('rule:' + r.id)}>删除</button></div></details>
@@ -1437,7 +1437,7 @@ async function refreshSingBoxVersion() {
 
 function renderCustomRules() {
   const rules = state.config?.custom_rules || []
-  if (!rules.length) return '<div class="empty">暂无自定义规则</div>'
+  if (!rules.length) return '<div class="empty">还没有分流规则</div>'
   return rules.map((rule, index) => `
     <div class="node-item rule-item ${state.editingCustomRule && ruleIndex(rules, state.editingCustomRule) === index ? 'editing' : ''}">
       <span class="badge">${escapeHtml(ruleMatchLabel(rule.match_type))}</span>
@@ -1536,20 +1536,34 @@ function ruleTarget(action) {
 }
 
 function renderRuleActionSelect() {
-  const value = state.customRuleForm.action
-  const basic = RULE_ACTIONS.filter(item => item.id !== 'node')
+  return renderTargetSelect('ruleAction', state.customRuleForm.action, { newGroup: true })
+}
+
+function renderRuleNodeSelect() {
+  return renderNodePicker('ruleNode', state.customRuleForm.node_id)
+}
+
+// 去向下拉：代理/直连/阻断、节点组、协议、机场、地区（组内自动选最快）、指定节点。
+function renderTargetSelect(id, value, { newGroup = false, blockFirst = false } = {}) {
+  let basic = RULE_ACTIONS.filter(item => item.id !== 'node')
+  if (blockFirst) basic = [...basic.filter(item => item.id === 'block'), ...basic.filter(item => item.id !== 'block')]
   const regions = nodeRegions()
   const nodes = state.config?.nodes || []
   const subs = (state.config?.subscriptions || []).map(sub => ({ ...sub, count: nodes.filter(n => n.subscription === sub.id).length })).filter(sub => sub.count)
   const groups = state.config?.node_groups || []
   const protocols = [...new Set(nodes.map(n => n.protocol))]
   const opt = (v, label) => `<option value="${escapeHtml(v)}" ${value === v ? 'selected' : ''}>${label}</option>`
-  return `<select id="ruleAction" class="select">${basic.map(item => opt(item.id, item.label)).join('')}${groups.length ? `<optgroup label="我的节点组">${groups.map(g => opt('group:' + g.id, `${escapeHtml(g.name)}（${groupNodes(g).length} 个节点）`)).join('')}</optgroup>` : ''}${protocols.length > 1 ? `<optgroup label="按协议（自动选延迟最低）">${protocols.map(pr => opt('proto:' + pr, `${escapeHtml(protocolLabel(pr))}（${nodes.filter(n => n.protocol === pr).length} 个节点）`)).join('')}</optgroup>` : ''}${subs.length ? `<optgroup label="按机场（自动选延迟最低）">${subs.map(sub => `<option value="sub:${escapeHtml(sub.id)}" ${value === 'sub:' + sub.id ? 'selected' : ''}>${escapeHtml(sub.name)}（${sub.count} 个节点）</option>`).join('')}</optgroup>` : ''}${regions.length ? `<optgroup label="按地区（自动选延迟最低）">${regions.map(({ code, count }) => `<option value="region:${escapeHtml(code)}" ${value === 'region:' + code ? 'selected' : ''}>${regionFlag(code)} ${escapeHtml(regionName(code))}（${count} 个节点）</option>`).join('')}</optgroup>` : ''}<option value="node" ${value === 'node' ? 'selected' : ''}>指定节点…</option><option value="new-group">＋ 新建节点组…</option></select>`
+  return `<select id="${id}" class="select">${basic.map(item => opt(item.id, item.label)).join('')}${groups.length ? `<optgroup label="我的节点组">${groups.map(g => opt('group:' + g.id, `${escapeHtml(g.name)}（${groupNodes(g).length} 个节点）`)).join('')}</optgroup>` : ''}${protocols.length > 1 ? `<optgroup label="按协议（自动选延迟最低）">${protocols.map(pr => opt('proto:' + pr, `${escapeHtml(protocolLabel(pr))}（${nodes.filter(n => n.protocol === pr).length} 个节点）`)).join('')}</optgroup>` : ''}${subs.length ? `<optgroup label="按机场（自动选延迟最低）">${subs.map(sub => opt('sub:' + sub.id, `${escapeHtml(sub.name)}（${sub.count} 个节点）`)).join('')}</optgroup>` : ''}${regions.length ? `<optgroup label="按地区（自动选延迟最低）">${regions.map(({ code, count }) => opt('region:' + code, `${regionFlag(code)} ${escapeHtml(regionName(code))}（${count} 个节点）`)).join('')}</optgroup>` : ''}${opt('node', '指定节点…')}${newGroup ? '<option value="new-group">＋ 新建节点组…</option>' : ''}</select>`
 }
 
-function renderRuleNodeSelect() {
+function renderNodePicker(id, value) {
   const groups = nodeGroups(state.config?.nodes || [], 'subscription')
-  return `<label class="rule-field rule-node-field"><span>节点</span><select id="ruleNode" class="select"><option value="">选择节点</option>${groups.map(group => `<optgroup label="${escapeHtml(group.label)}">${group.nodes.map(n => `<option value="${escapeHtml(n.id)}" ${state.customRuleForm.node_id === n.id ? 'selected' : ''}>${n.country ? regionFlag(n.country) + ' ' : ''}${escapeHtml(n.name)}</option>`).join('')}</optgroup>`).join('')}</select></label>`
+  return `<label class="rule-field rule-node-field"><span>节点</span><select id="${id}" class="select"><option value="">选择节点</option>${groups.map(group => `<optgroup label="${escapeHtml(group.label)}">${group.nodes.map(n => `<option value="${escapeHtml(n.id)}" ${value === n.id ? 'selected' : ''}>${n.country ? regionFlag(n.country) + ' ' : ''}${escapeHtml(n.name)}</option>`).join('')}</optgroup>`).join('')}</select></label>`
+}
+
+// 表单里“指定节点”拆成 node + node_id 两个值，存盘时合成 node:<id>；反过来也一样。
+function splitTarget(action) {
+  return action && action.startsWith('node:') ? { action: 'node', node_id: action.slice(5) } : { action: action || 'block', node_id: '' }
 }
 
 function ruleActionHint(action) {
@@ -1893,10 +1907,15 @@ function bindEvents() {
     const source = state.customRuleImport.trim()
     if (!source) return showToast('请输入规则链接、文件路径或文本', 'error')
     runOnce('importRule', async () => {
-      const count = await window.go.app.App.ImportCustomRules(source)
+      const result = await window.go.app.App.ImportCustomRules(source)
       state.customRuleImport = ''
       await refreshConfig()
-      showToast('已导入 ' + count + ' 条规则', 'success')
+      if (result.rule_sets) await refreshRules()
+      const parts = [result.rules && result.rules + ' 条规则', result.rule_sets && result.rule_sets + ' 个规则集（在“分流规则”页）'].filter(Boolean)
+      let text = parts.length ? '已导入 ' + parts.join('、') : '没有导入新内容'
+      if (result.existing) text += '，' + result.existing + ' 个规则集已存在'
+      if (result.failed?.length) text += '；' + result.failed.length + ' 个下载失败：' + result.failed[0]
+      showToast(text, result.failed?.length ? 'error' : 'success')
     }, importRuleBtn)
   })
   document.querySelectorAll('.edit-custom-rule').forEach(btn => btn.addEventListener('click', () => {
@@ -2299,7 +2318,7 @@ function bindEvents() {
     const rule = state.rules?.find(item => item.id === btn.dataset.id)
     if (!rule) return
     state.editingRuleSetID = rule.id
-    state.ruleSetForm = { name: rule.name, url: rule.url }
+    state.ruleSetForm = { name: rule.name, url: rule.url, ...splitTarget(rule.action) }
     renderApp()
     document.querySelector('#ruleSetName')?.focus()
   }))
@@ -2308,16 +2327,26 @@ function bindEvents() {
   const ruleSetURL = document.querySelector('#ruleSetURL')
   if (ruleSetName) ruleSetName.addEventListener('input', () => { state.ruleSetForm.name = ruleSetName.value })
   if (ruleSetURL) ruleSetURL.addEventListener('input', () => { state.ruleSetForm.url = ruleSetURL.value })
+  const ruleSetAction = document.querySelector('#ruleSetAction')
+  if (ruleSetAction) ruleSetAction.addEventListener('change', () => {
+    state.ruleSetForm.action = ruleSetAction.value
+    renderApp()
+  })
+  const ruleSetNode = document.querySelector('#ruleSetNode')
+  if (ruleSetNode) ruleSetNode.addEventListener('change', () => { state.ruleSetForm.node_id = ruleSetNode.value })
   const addRuleSetBtn = document.querySelector('#addRuleSetBtn')
   if (addRuleSetBtn) addRuleSetBtn.addEventListener('click', () => {
     const name = state.ruleSetForm.name.trim()
     const url = state.ruleSetForm.url.trim()
     if (!name || !url) return showToast('请输入规则集名称和 URL', 'error')
+    const { action: kind, node_id: nodeID } = state.ruleSetForm
+    if (kind === 'node' && !nodeID) return showToast('请选择节点', 'error')
+    const action = kind === 'node' ? 'node:' + nodeID : kind
     const editingID = state.editingRuleSetID
     runOnce('ruleSet', async () => {
-      if (editingID) await window.go.app.App.EditRuleSet(editingID, name, url)
-      else await window.go.app.App.AddRuleSet(name, url)
-      state.ruleSetForm = { name: '', url: '' }
+      if (editingID) await window.go.app.App.EditRuleSet(editingID, name, url, action)
+      else await window.go.app.App.AddRuleSet(name, url, action)
+      state.ruleSetForm = { name: '', url: '', action: 'block', node_id: '' }
       state.editingRuleSetID = ''
       await refreshRules()
       showToast(editingID ? '规则集已修改' : '规则集已添加', 'success')
@@ -2326,7 +2355,7 @@ function bindEvents() {
   const cancelEditRuleSet = document.querySelector('#cancelEditRuleSet')
   if (cancelEditRuleSet) cancelEditRuleSet.addEventListener('click', () => {
     state.editingRuleSetID = ''
-    state.ruleSetForm = { name: '', url: '' }
+    state.ruleSetForm = { name: '', url: '', action: 'block', node_id: '' }
     renderApp()
   })
   document.querySelectorAll('.toggle-rule').forEach(btn => btn.addEventListener('click', () => {

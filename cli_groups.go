@@ -251,3 +251,24 @@ func runGroupsCommand(application *app.App, args []string) error {
 	}
 	return nil
 }
+
+func describeRuleImport(r app.RuleImportResult) string {
+	parts := []string{}
+	if r.Rules > 0 {
+		parts = append(parts, fmt.Sprintf("%d 条规则", r.Rules))
+	}
+	if r.RuleSets > 0 {
+		parts = append(parts, fmt.Sprintf("%d 个规则集", r.RuleSets))
+	}
+	text := "没有导入新内容"
+	if len(parts) > 0 {
+		text = "已导入 " + strings.Join(parts, "、")
+	}
+	if r.Existing > 0 {
+		text += fmt.Sprintf("，%d 个规则集已存在", r.Existing)
+	}
+	for _, f := range r.Failed {
+		text += "\n下载失败: " + f
+	}
+	return text
+}

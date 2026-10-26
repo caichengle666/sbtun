@@ -164,7 +164,6 @@ func TestRoutingModes(t *testing.T) {
 		{config.RoutingSmart, "proxy"},
 		{config.RoutingGlobal, "proxy"},
 		{config.RoutingDirect, "direct"},
-		{config.RoutingCustom, "proxy"},
 	}
 	for _, tc := range cases {
 		data, err := BuildConfig(testConfig(tc.mode), "D:\\test")
@@ -688,5 +687,69 @@ func TestTunIPv4AddressSkipsUsed(t *testing.T) {
 	}
 	if got := tunIPv4Address(nil); got != "172.18.0.1/30" {
 		t.Fatalf("got %s", got)
+	}
+}
+
+// 屏蔽规则排最前；用户规则集可指向节点组，.json 规则集按 source 加载；直连模式只保留屏蔽类规则。
+func TestMyRulesOrderAndDirectMode(t *testing.T) {
+	exeDir := t.TempDir()
+	rulesDir := filepath.Join(exeDir, "rules")
+	if err := os.MkdirAll(rulesDir, 0o755); err != nil {
+		t.Fatal(err)
+	}
+	for _, name := range []string{"ads.srs", "stream.json"} {
+		if err := os.WriteFile(filepath.Join(rulesDir, name), []byte("test"), 0o600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	setsJSON := `[{"id":"ads","path":"ads.srs","enabled":true,"source":"custom","action":"block"},{"id":"stream","path":"stream.json","enabled":true,"source":"custom","action":"group:g1"}]`
+	if err := os.WriteFile(filepath.Join(rulesDir, "sets.json"), []byte(setsJSON), 0o600); err != nil {
+		t.Fatal(err)
+	}
+	build := func(mode config.RoutingMode) (rules []map[string]any, ruleSets []any) {
+		cfg := testConfig(mode)
+		cfg.Nodes = append(cfg.Nodes, config.Node{ID: "n2", Name: "美国", Protocol: "socks", Server: "127.0.0.2", Port: 1080})
+		cfg.NodeGroups = []config.NodeGroup{{ID: "g1", Name: "流媒体", Keyword: "美国"}}
+		cfg.CustomRules = []config.Rule{
+			{MatchType: "domain_suffix", Value: "ad.example", Action: "proxy"},
+			{MatchType: "domain_suffix", Value: "bad.example", Action: "block"},
+		}
+		cfg.DNSFilterRules = []config.Rule{{MatchType: "domain_suffix", Value: "ad.example", Action: "block"}}
+		data, err := BuildConfig(cfg, exeDir)
+		if err != nil {
+			t.Fatal(err)
+		}
+		var runtime RuntimeConfig
+		if err := json.Unmarshal(data, &runtime); err != nil {
+			t.Fatal(err)
+		}
+		for _, r := range runtime.Route["rules"].([]any) {
+			if m := r.(map[string]any); m["action"] == nil {
+				rules = append(rules, m)
+			}
+		}
+		set, _ := runtime.Route["rule_set"].([]any)
+		return rules, set
+	}
+	rules, sets := build(config.RoutingGlobal)
+	got := []string{}
+	for _, r := range rules {
+		got = append(got, fmt.Sprintf("%v %v %v", r["domain_suffix"], r["rule_set"], r["outbound"]))
+	}
+	want := []string{"[ad.example] <nil> block", "[ad.example] <nil> proxy", "[bad.example] <nil> block", "<nil> [ads] block", "<nil> [stream] node-n2", "<nil> <nil> direct"}
+	if strings.Join(got, "|") != strings.Join(want, "|") {
+		t.Fatalf("global rules=%v", got)
+	}
+	if len(sets) != 2 || sets[1].(map[string]any)["format"] != "source" {
+		t.Fatalf("rule_set=%v", sets)
+	}
+	rules, sets = build(config.RoutingDirect)
+	got = got[:0]
+	for _, r := range rules {
+		got = append(got, fmt.Sprintf("%v %v %v", r["domain_suffix"], r["rule_set"], r["outbound"]))
+	}
+	want = []string{"[ad.example] <nil> block", "[bad.example] <nil> block", "<nil> [ads] block", "<nil> <nil> direct"}
+	if strings.Join(got, "|") != strings.Join(want, "|") || len(sets) != 1 {
+		t.Fatalf("direct rules=%v sets=%v", got, sets)
 	}
 }

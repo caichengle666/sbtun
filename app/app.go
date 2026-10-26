@@ -1100,25 +1100,38 @@ func (a *App) ListRules() []rules.RuleInfo {
 	return a.rulesManager.List()
 }
 
-func (a *App) AddRuleSet(name, url string) error {
+func (a *App) AddRuleSet(name, url, action string) error {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
 	if a.rulesManager == nil {
 		return errors.New("规则管理器未初始化")
 	}
-	if err := a.rulesManager.AddAndUpdate(name, url, a.validateRuleSet); err != nil {
+	if err := a.rulesManager.AddAndUpdate(name, url, action, a.validateRuleSet); err != nil {
 		return err
 	}
 	return a.reloadIfRunningLocked()
 }
 
-func (a *App) EditRuleSet(id, name, url string) error {
+func (a *App) EditRuleSet(id, name, url, action string) error {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
 	if a.rulesManager == nil {
 		return errors.New("规则管理器未初始化")
 	}
-	if err := a.rulesManager.EditAndUpdate(id, name, url, a.validateRuleSet); err != nil {
+	if err := a.rulesManager.EditAndUpdate(id, name, url, action, a.validateRuleSet); err != nil {
+		return err
+	}
+	return a.reloadIfRunningLocked()
+}
+
+// SetRuleSetAction 修改用户规则集命中后的去向（屏蔽、代理、直连或节点/节点组等）。
+func (a *App) SetRuleSetAction(id, action string) error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	if a.rulesManager == nil {
+		return errors.New("规则管理器未初始化")
+	}
+	if err := a.rulesManager.SetAction(id, action); err != nil {
 		return err
 	}
 	return a.reloadIfRunningLocked()

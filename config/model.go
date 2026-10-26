@@ -7,8 +7,15 @@ const (
 	RoutingSmart  RoutingMode = "smart"
 	RoutingGlobal RoutingMode = "global"
 	RoutingDirect RoutingMode = "direct"
-	RoutingCustom RoutingMode = "custom"
 )
+
+// Migrate 把旧版配置升级到当前格式：已取消的“自定义”模式等于全局代理加自己的规则，
+// 现在自己的规则在智能和全局模式下都生效，所以改为全局，行为不变。
+func Migrate(cfg *Config) {
+	if cfg.RoutingMode == "custom" {
+		cfg.RoutingMode = RoutingGlobal
+	}
+}
 
 // DNSMode 定义 DNS 管理策略。
 type DNSMode string

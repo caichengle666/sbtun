@@ -239,10 +239,10 @@ func main() {
 			fmt.Println("节点已切换")
 		}
 	case "add-rule":
-		var ruleCount int
-		ruleCount, err = application.ImportCustomRules(commandArgs[0])
+		var result app.RuleImportResult
+		result, err = application.ImportCustomRules(commandArgs[0])
 		if err == nil {
-			fmt.Printf("已导入 %d 条规则\n", ruleCount)
+			fmt.Println(describeRuleImport(result))
 		}
 	case "stop":
 		err = stopRunningInstance()
@@ -311,7 +311,7 @@ func cliUsage(command string, args []string) string {
 	case "add-rule":
 		return "sbtun add-rule <链接|文件|文本>"
 	case "rules":
-		return "sbtun rules [list|add <名称> <SRS_URL>|edit <ID> <名称> <SRS_URL>|delete <ID>|enable <ID>|disable <ID>|restore|update <ID>|update-all]"
+		return "sbtun rules [list|add <名称> <链接> [去向]|edit <ID> <名称> <链接> [去向]|action <ID> <去向>|delete <ID>|enable <ID>|disable <ID>|restore|update <ID>|update-all]"
 	case "subs":
 		return "sbtun subs [list|update [编号]|delete <编号>|auto <小时|off>]"
 	case "capture":
@@ -382,8 +382,10 @@ func validateCLIArgs(command string, args []string) error {
 			return usageError(command, args)
 		}
 		switch config.RoutingMode(args[0]) {
-		case config.RoutingSmart, config.RoutingGlobal, config.RoutingDirect, config.RoutingCustom:
+		case config.RoutingSmart, config.RoutingGlobal, config.RoutingDirect:
 			return nil
+		case "custom":
+			return errors.New("自定义模式已取消：自己的分流规则和规则集在 smart、global 下都会优先生效，请用 sbtun route global")
 		default:
 			return fmt.Errorf("无效路由模式: %s", args[0])
 		}
@@ -445,9 +447,11 @@ func validateCLIArgs(command string, args []string) error {
 			return nil
 		case len(args) == 2 && (args[0] == "update" || args[0] == "enable" || args[0] == "disable") && strings.TrimSpace(args[1]) != "":
 			return nil
-		case len(args) == 3 && args[0] == "add" && strings.TrimSpace(args[1]) != "" && strings.TrimSpace(args[2]) != "":
+		case (len(args) == 3 || len(args) == 4) && args[0] == "add" && strings.TrimSpace(args[1]) != "" && strings.TrimSpace(args[2]) != "":
 			return nil
-		case len(args) == 4 && args[0] == "edit" && strings.TrimSpace(args[1]) != "" && strings.TrimSpace(args[2]) != "" && strings.TrimSpace(args[3]) != "":
+		case (len(args) == 4 || len(args) == 5) && args[0] == "edit" && strings.TrimSpace(args[1]) != "" && strings.TrimSpace(args[2]) != "" && strings.TrimSpace(args[3]) != "":
+			return nil
+		case len(args) == 3 && args[0] == "action" && strings.TrimSpace(args[1]) != "" && strings.TrimSpace(args[2]) != "":
 			return nil
 		case len(args) == 2 && args[0] == "delete" && strings.TrimSpace(args[1]) != "":
 			return nil
@@ -587,14 +591,14 @@ func printHelp() {
 		{"subs auto <小时|off>", "设置订阅自动更新间隔（默认 24 小时），off 关闭"},
 	})
 	printHelpGroup("路由与规则", []helpEntry{
-		{"route <模式>", "设置路由: smart/global/direct/custom"},
+		{"route <模式>", "设置路由: smart（国内直连）/global（全部代理）/direct（全部直连）；自己的规则在 smart、global 下优先，direct 下只保留屏蔽"},
 		{"auto-switch <on|off>", "开启或关闭节点失效自动切换"},
 		{"set ipv6 <on|off>", "开启或关闭 IPv6"},
 		{"set webrtc <on|off>", "开启或关闭 WebRTC 防泄漏"},
 		{"set diagnostics <on|off>", "开启或关闭诊断信息"},
 		{"diag", "查看运行诊断（需先开启诊断信息）"},
-		{"add-rule <链接|文件|文本>", "批量导入自定义规则"},
-		{"custom", "列出自定义分流规则"},
+		{"add-rule <链接|文件|文本>", "批量导入分流规则；引用的 RULE-SET 列表各自成为规则集"},
+		{"custom", "列出分流规则"},
 		{"custom add <类型> <内容> <去向>", "添加分流规则，类型 domain_suffix/domain_keyword/domain/ip_cidr/port；去向 proxy/direct/block，或节点组名、节点名、订阅名、协议(hy2)、地区(美国/US)"},
 		{"custom edit <编号> <类型> <内容> <去向>", "修改分流规则，参数同 add"},
 		{"custom delete <编号>", "删除分流规则"},
@@ -605,9 +609,10 @@ func printHelp() {
 		{"filter add <类型> <内容>", "添加 DNS 过滤（阻断）规则"},
 		{"filter edit <编号> <类型> <内容>", "修改 DNS 过滤规则"},
 		{"filter delete <编号>", "删除 DNS 过滤规则"},
-		{"rules list", "列出规则集"},
-		{"rules add <名称> <SRS_URL>", "添加广告或其他 SRS 规则集"},
-		{"rules edit <ID> <名称> <SRS_URL>", "编辑规则集"},
+		{"rules list", "列出规则集和去向"},
+		{"rules add <名称> <链接> [去向]", "添加规则集：.srs、Clash/Surge 规则列表或域名列表；去向默认 block（屏蔽广告），也可写 proxy/direct、节点组名、地区等"},
+		{"rules edit <ID> <名称> <链接> [去向]", "编辑规则集，不写去向则不变"},
+		{"rules action <ID> <去向>", "只修改规则集的去向"},
 		{"rules delete <ID>", "删除规则集"},
 		{"rules enable|disable <ID>", "启用或停用规则集"},
 		{"rules restore", "恢复默认规则集"},
@@ -657,6 +662,7 @@ func printHelp() {
   批量测试最多 4 个并行，不会同时启动大量检测进程。
   删除当前节点后会自动选择剩余节点。
   运行中修改 route 或 rules 会自动重载 sing-box。
+  匹配顺序：DNS 过滤（屏蔽）→ 分流规则 → 自己添加的规则集 → 内置国内/国外规则（仅 smart）→ 兜底。
   停止前台运行请按 Ctrl+C。`)
 }
 
@@ -798,6 +804,7 @@ func runSubsCommand(application *app.App, args []string) error {
 }
 
 func runRulesCommand(application *app.App, args []string) error {
+	cfg := application.GetConfig()
 	if len(args) == 0 || args[0] == "list" {
 		for _, rule := range application.ListRules() {
 			state := "已启用"
@@ -807,22 +814,57 @@ func runRulesCommand(application *app.App, args []string) error {
 			if !rule.Exists {
 				state += "，文件缺失"
 			}
-			fmt.Printf("%s\t%s\t%s\n", rule.ID, rule.Name, state)
+			target := "内置"
+			if rule.Source != "default" {
+				target = describeAction(cfg, rule.Action)
+			}
+			fmt.Printf("%s\t%s\t%s\t%s\n", rule.ID, rule.Name, target, state)
 		}
 		return nil
 	}
+	target := func(i int) (string, error) {
+		if len(args) <= i {
+			return "", nil
+		}
+		return cliRuleTarget(cfg, args[i])
+	}
 	switch args[0] {
 	case "add":
-		if err := application.AddRuleSet(args[1], args[2]); err != nil {
+		action, err := target(3)
+		if err != nil {
+			return err
+		}
+		if err := application.AddRuleSet(args[1], args[2], action); err != nil {
 			return err
 		}
 		fmt.Println("规则集已添加")
 		return nil
 	case "edit":
-		if err := application.EditRuleSet(args[1], args[2], args[3]); err != nil {
+		action, err := target(4)
+		if err != nil {
+			return err
+		}
+		if action == "" {
+			for _, rule := range application.ListRules() {
+				if rule.ID == args[1] {
+					action = rule.Action
+				}
+			}
+		}
+		if err := application.EditRuleSet(args[1], args[2], args[3], action); err != nil {
 			return err
 		}
 		fmt.Println("规则集已修改")
+		return nil
+	case "action":
+		action, err := target(2)
+		if err != nil {
+			return err
+		}
+		if err := application.SetRuleSetAction(args[1], action); err != nil {
+			return err
+		}
+		fmt.Println("规则集去向已改为", describeAction(cfg, action))
 		return nil
 	case "delete":
 		if err := application.DeleteRuleSet(args[1]); err != nil {

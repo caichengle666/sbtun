@@ -219,39 +219,33 @@ func (m *Manager) List() []RuleInfo {
 	return infos
 }
 
-// Add 添加一个用户自定义规则集，默认按 DNS 阻断规则使用。
-func (m *Manager) Add(name, rawURL string) error {
-	name = strings.TrimSpace(name)
-	rawURL = strings.TrimSpace(rawURL)
-	if name == "" || rawURL == "" {
-		return fmt.Errorf("规则集名称和 URL 不能为空")
+// AddAndUpdate 下载并校验新规则集后再保存。action 是命中后的去向，空表示屏蔽（广告规则最常见）。
+func (m *Manager) AddAndUpdate(name, rawURL, action string, validate RuleSetValidator) error {
+	if err := validateRuleSetInput(m.sets, strings.TrimSpace(name), strings.TrimSpace(rawURL), ""); err != nil {
+		return err
 	}
-	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
-		return fmt.Errorf("规则集 URL 必须使用 http:// 或 https://")
+	data, err := Fetch(strings.TrimSpace(rawURL))
+	if err != nil {
+		return fmt.Errorf("添加规则集失败: %w", err)
 	}
-	for _, set := range m.sets {
-		if set.URL == rawURL {
-			return fmt.Errorf("规则集已经存在")
-		}
-	}
-	hash := sha256.Sum256([]byte(rawURL))
-	id := "custom-" + hex.EncodeToString(hash[:])[:12]
-	fileName := id + ".srs"
-	m.sets = append(m.sets, RuleSet{ID: id, Name: name, URL: rawURL, Path: filepath.Join(m.rulesDir, fileName), Enabled: true, Source: "custom", Action: "block"})
-	return m.save()
+	return m.AddFetched(name, rawURL, action, data, validate)
 }
 
-// AddAndUpdate downloads and validates a new rule-set before saving its metadata.
-func (m *Manager) AddAndUpdate(name, rawURL string, validate RuleSetValidator) error {
+// AddFetched 用已经 Fetch 好的内容添加规则集，导入时可以先在锁外批量下载。
+func (m *Manager) AddFetched(name, rawURL, action string, data []byte, validate RuleSetValidator) error {
 	name = strings.TrimSpace(name)
 	rawURL = strings.TrimSpace(rawURL)
+	action, err := normalizeAction(action)
+	if err != nil {
+		return err
+	}
 	if err := validateRuleSetInput(m.sets, name, rawURL, ""); err != nil {
 		return err
 	}
 	hash := sha256.Sum256([]byte(rawURL))
 	id := "custom-" + hex.EncodeToString(hash[:])[:12]
-	set := RuleSet{ID: id, Name: name, URL: rawURL, Path: filepath.Join(m.rulesDir, id+".srs"), Enabled: true, Source: "custom", Action: "block"}
-	if err := m.download(set, validate); err != nil {
+	set := RuleSet{ID: id, Name: name, URL: rawURL, Path: filepath.Join(m.rulesDir, id+".srs"), Enabled: true, Source: "custom", Action: action}
+	if set.Path, err = install(set.Path, data, validate); err != nil {
 		return fmt.Errorf("添加规则集失败: %w", err)
 	}
 	m.sets = append(m.sets, set)
@@ -263,33 +257,30 @@ func (m *Manager) AddAndUpdate(name, rawURL string, validate RuleSetValidator) e
 	return nil
 }
 
-// Edit 修改规则集名称和 URL，保留现有规则集 ID 与启用状态。
-func (m *Manager) Edit(id, name, rawURL string) error {
-	name = strings.TrimSpace(name)
-	rawURL = strings.TrimSpace(rawURL)
-	if name == "" || rawURL == "" {
-		return fmt.Errorf("规则集名称和 URL 不能为空")
-	}
-	if !strings.HasPrefix(rawURL, "http://") && !strings.HasPrefix(rawURL, "https://") {
-		return fmt.Errorf("规则集 URL 必须使用 http:// 或 https://")
-	}
-	for i := range m.sets {
-		if m.sets[i].ID == id {
-			for j, other := range m.sets {
-				if j != i && other.URL == rawURL {
-					return fmt.Errorf("规则集已经存在")
-				}
-			}
-			m.sets[i].Name = name
-			m.sets[i].URL = rawURL
-			return m.save()
+// HasURL 说明这个链接是否已经添加过。
+func (m *Manager) HasURL(rawURL string) bool {
+	for _, set := range m.sets {
+		if set.URL == strings.TrimSpace(rawURL) {
+			return true
 		}
 	}
-	return fmt.Errorf("未知规则集: %s", id)
+	return false
 }
 
-// EditAndUpdate validates the replacement before changing the saved rule-set.
-func (m *Manager) EditAndUpdate(id, name, rawURL string, validate RuleSetValidator) error {
+func normalizeAction(action string) (string, error) {
+	action = strings.TrimSpace(action)
+	if action == "" {
+		return "block", nil
+	}
+	if config.IsBasicAction(action) {
+		kind, _ := config.SplitAction(action)
+		return kind, nil
+	}
+	return action, config.ValidateAction(action)
+}
+
+// EditAndUpdate 修改名称、链接和去向；链接变了先下载校验通过再保存。内置规则集的去向不能改。
+func (m *Manager) EditAndUpdate(id, name, rawURL, action string, validate RuleSetValidator) error {
 	for i := range m.sets {
 		if m.sets[i].ID != id {
 			continue
@@ -300,15 +291,51 @@ func (m *Manager) EditAndUpdate(id, name, rawURL string, validate RuleSetValidat
 			return err
 		}
 		set := m.sets[i]
+		if set.Source != "default" {
+			var err error
+			if set.Action, err = normalizeAction(action); err != nil {
+				return err
+			}
+		}
 		set.Name = name
-		set.URL = rawURL
-		if err := m.download(set, validate); err != nil {
-			return fmt.Errorf("更新规则集失败: %w", err)
+		if _, err := os.Stat(set.Path); rawURL != set.URL || err != nil {
+			set.URL = rawURL
+			path, err := m.download(set, validate)
+			if err != nil {
+				return fmt.Errorf("更新规则集失败: %w", err)
+			}
+			m.replacePath(&set, path)
 		}
 		m.sets[i] = set
 		return m.save()
 	}
 	return fmt.Errorf("未知规则集: %s", id)
+}
+
+// SetAction 只改用户规则集命中后的去向。
+func (m *Manager) SetAction(id, action string) error {
+	action, err := normalizeAction(action)
+	if err != nil {
+		return err
+	}
+	for i := range m.sets {
+		if m.sets[i].ID == id {
+			if m.sets[i].Source == "default" {
+				return fmt.Errorf("内置规则集的去向不能修改")
+			}
+			m.sets[i].Action = action
+			return m.save()
+		}
+	}
+	return fmt.Errorf("未知规则集: %s", id)
+}
+
+// replacePath 在规则集格式变化（.srs ↔ 文本转换的 .json）时换上新文件并删掉旧的。
+func (m *Manager) replacePath(set *RuleSet, path string) {
+	if path != set.Path {
+		_ = os.Remove(set.Path)
+		set.Path = path
+	}
 }
 
 func (m *Manager) SetEnabled(id string, enabled bool) error {
@@ -333,10 +360,6 @@ func (m *Manager) Delete(id string) error {
 		return m.save()
 	}
 	return fmt.Errorf("未知规则集: %s", id)
-}
-
-func (m *Manager) RestoreDefaults() error {
-	return m.RestoreDefaultsWithValidation(nil)
 }
 
 // RestoreDefaultsWithValidation restores defaults and validates every download.
@@ -370,11 +393,6 @@ func (m *Manager) RestoreDefaultsWithValidation(validate RuleSetValidator) error
 	return nil
 }
 
-// Update 下载指定规则集的最新版本。
-func (m *Manager) Update(id string) error {
-	return m.UpdateWithValidation(id, nil)
-}
-
 // UpdateWithValidation installs a downloaded rule-set only after validation.
 func (m *Manager) UpdateWithValidation(id string, validate RuleSetValidator) error {
 	var target *RuleSet
@@ -387,59 +405,90 @@ func (m *Manager) UpdateWithValidation(id string, validate RuleSetValidator) err
 	if target == nil {
 		return fmt.Errorf("未知规则集: %s", id)
 	}
-	return m.download(*target, validate)
+	path, err := m.download(*target, validate)
+	if err != nil || path == target.Path {
+		return err
+	}
+	m.replacePath(target, path)
+	return m.save()
 }
 
-func (m *Manager) download(target RuleSet, validate RuleSetValidator) error {
-	client := &http.Client{Timeout: 30 * time.Second}
-	req, err := http.NewRequest(http.MethodGet, target.URL, nil)
+// download 下载规则集，校验通过后装到位，返回最终路径。
+func (m *Manager) download(target RuleSet, validate RuleSetValidator) (string, error) {
+	data, err := Fetch(target.URL)
 	if err != nil {
-		return fmt.Errorf("创建请求失败: %w", err)
+		return "", err
 	}
-	req.Header.Set("User-Agent", "sbtun/0.1.1")
+	return install(target.Path, data, validate)
+}
+
+// Fetch 下载规则集内容并统一格式：.srs 原样返回；文本列表（Clash/Surge 规则列表、域名列表等）
+// 转换成 sing-box 源格式 JSON。不碰管理器状态，可以在锁外并发调用。
+func Fetch(rawURL string) ([]byte, error) {
+	client := &http.Client{Timeout: 30 * time.Second}
+	req, err := http.NewRequest(http.MethodGet, rawURL, nil)
+	if err != nil {
+		return nil, fmt.Errorf("创建请求失败: %w", err)
+	}
+	req.Header.Set("User-Agent", "sbtun")
 	resp, err := client.Do(req)
 	if err != nil {
-		return fmt.Errorf("下载失败: %w", err)
+		return nil, fmt.Errorf("下载失败: %w", err)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode < 200 || resp.StatusCode >= 300 {
-		return fmt.Errorf("HTTP %d", resp.StatusCode)
+		return nil, fmt.Errorf("HTTP %d", resp.StatusCode)
 	}
-	if err := os.MkdirAll(filepath.Dir(target.Path), 0o755); err != nil {
-		return err
-	}
-	tmp, err := os.CreateTemp(filepath.Dir(target.Path), ".rule-*.tmp")
+	data, err := io.ReadAll(io.LimitReader(resp.Body, maxRuleSetBytes+1))
 	if err != nil {
-		return err
+		return nil, fmt.Errorf("下载失败: %w", err)
+	}
+	if len(data) > maxRuleSetBytes {
+		return nil, fmt.Errorf("规则集超过 %d MB 上限", maxRuleSetBytes>>20)
+	}
+	if isBinaryRuleSet(data) {
+		return data, nil
+	}
+	data, _, err = ConvertText(data)
+	return data, err
+}
+
+// install 把 Fetch 的结果写到同目录临时文件，校验通过后替换；扩展名按内容定为 .srs 或 .json。
+func install(path string, data []byte, validate RuleSetValidator) (string, error) {
+	ext := ".json"
+	if isBinaryRuleSet(data) {
+		ext = ".srs"
+	}
+	path = strings.TrimSuffix(path, filepath.Ext(path)) + ext
+	if err := os.MkdirAll(filepath.Dir(path), 0o755); err != nil {
+		return "", err
+	}
+	tmp, err := os.CreateTemp(filepath.Dir(path), ".rule-*"+ext)
+	if err != nil {
+		return "", err
 	}
 	tmpName := tmp.Name()
 	defer os.Remove(tmpName)
-	if _, err := io.Copy(tmp, resp.Body); err != nil {
+	if _, err := tmp.Write(data); err != nil {
 		tmp.Close()
-		return err
+		return "", err
 	}
 	if err := tmp.Sync(); err != nil {
 		tmp.Close()
-		return err
+		return "", err
 	}
 	if err := tmp.Close(); err != nil {
-		return err
+		return "", err
 	}
 	if validate != nil {
 		if err := validate(tmpName); err != nil {
-			return err
+			return "", err
 		}
 	}
-	if err := os.Rename(tmpName, target.Path); err != nil {
-		return err
-	}
-	return nil
+	return path, os.Rename(tmpName, path)
 }
 
-// UpdateAll 更新所有启用的规则集。
-func (m *Manager) UpdateAll() []error {
-	return m.UpdateAllWithValidation(nil)
-}
+const maxRuleSetBytes = 32 << 20
 
 // UpdateAllWithValidation updates all enabled rule-sets with validation.
 func (m *Manager) UpdateAllWithValidation(validate RuleSetValidator) []error {
