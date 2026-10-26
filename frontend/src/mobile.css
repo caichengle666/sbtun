@@ -9,7 +9,7 @@
 :root[data-platform="android"] [data-desktop-only] { display: none; }
 :root[data-platform="android"] body { padding: var(--safe-top) var(--safe-right) var(--bottom-pad) var(--safe-left); -webkit-user-select: none; user-select: none; }
 /* 安卓 WebView 对固定背景和大面积模糊重绘很慢，键盘弹出时会画花，这里不用 */
-:root[data-platform="android"][data-theme="glass"] body { background-attachment: scroll; }
+:root[data-platform="android"][data-theme="glass"] { background-attachment: scroll; }
 /* 键盘弹出时藏起底部标签栏，弹窗和提示抬到键盘上方 */
 :root[data-keyboard] .sidebar { display: none; }
 :root[data-keyboard] .workspace { padding-bottom: 20px; }

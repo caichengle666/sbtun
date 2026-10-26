@@ -396,9 +396,7 @@ textarea.input { resize: vertical; }
 .rules-summary-item small { overflow: hidden; color: #64748b; font-size: 11px; text-overflow: ellipsis; white-space: nowrap; }
 .rule-layout { display: grid; grid-template-columns: minmax(0, 1.55fr) minmax(360px, .85fr); align-items: start; gap: 18px; }
 .rule-list-column { min-width: 0; }
-.rule-set-list { display: grid; gap: 8px; max-height: 392px; padding-right: 4px; overflow-y: auto; overscroll-behavior: contain; scrollbar-color: var(--border) transparent; scrollbar-gutter: stable; scrollbar-width: thin; }
-.rule-set-list::-webkit-scrollbar { width: 6px; }
-.rule-set-list::-webkit-scrollbar-thumb { border-radius: 999px; background: var(--border); }
+.rule-set-list { display: grid; gap: 8px; max-height: 392px; padding-right: 4px; overflow-y: auto; overscroll-behavior: contain; scrollbar-gutter: stable; }
 .rule-set-row { display: grid; grid-template-columns: 34px minmax(0, 1fr) auto minmax(76px, auto) 34px; align-items: center; gap: 12px; min-width: 0; min-height: 72px; padding: 12px 14px; border: 1px solid #25284a; border-radius: 8px; background: #0d0e15; }
 .rule-set-row:hover { border-color: #3b416c; background: #101522; }
 .rule-switch { position: relative; width: 28px; height: 16px; padding: 0; border: 0; border-radius: 999px; background: #334155; cursor: pointer; }
@@ -820,7 +818,11 @@ h2 { color: var(--text); letter-spacing: 0; }
   --glass-blur: blur(22px) saturate(160%);
   --shadow: 0 18px 50px rgba(2, 6, 23, .35);
 }
-:root[data-theme="glass"] body {
+:root[data-theme="glass"] body { background: transparent; }
+/* 毛玻璃：渐变铺满整个窗口，改由 body 滚动，滚动条轨道透明、后面是同一层渐变，不再露出一条黑边 */
+:root[data-theme="glass"]:not([data-platform="android"]) { height: 100%; overflow: hidden; }
+:root[data-theme="glass"]:not([data-platform="android"]) body { box-sizing: border-box; height: 100%; min-height: 0; overflow-y: auto; }
+:root[data-theme="glass"] {
   background:
     radial-gradient(circle at 12% 18%, rgba(59, 130, 246, .55), transparent 42%),
     radial-gradient(circle at 88% 8%, rgba(168, 85, 247, .45), transparent 40%),
@@ -922,3 +924,13 @@ h2 { color: var(--text); letter-spacing: 0; }
 /* 正在修改的规则高亮 */
 .rule-item.editing { border-color: var(--accent, #22d3ee); box-shadow: 0 0 0 1px var(--accent, #22d3ee) inset; }
 .rule-set-file .rule-target { display: inline; margin: 0 6px 0 0; }
+
+/* 滚动条：细、圆角、轨道透明，悬停加深；深色/浅色用各自主题色，毛玻璃用半透明白 */
+::-webkit-scrollbar { width: 8px; height: 8px; }
+::-webkit-scrollbar-track, ::-webkit-scrollbar-corner { background: transparent; }
+::-webkit-scrollbar-thumb { border: 2px solid transparent; border-radius: 999px; background: rgba(68, 203, 187, .32); background-clip: padding-box; }
+::-webkit-scrollbar-thumb:hover { background-color: rgba(68, 203, 187, .6); }
+:root[data-theme="light"] ::-webkit-scrollbar-thumb { background-color: rgba(88, 120, 183, .45); }
+:root[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background-color: rgba(88, 120, 183, .7); }
+:root[data-theme="glass"] ::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, .22); }
+:root[data-theme="glass"] ::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, .4); }
