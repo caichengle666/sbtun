@@ -24,7 +24,7 @@ var trayIcon []byte
 
 func main() {
 	ensureElevated()
-	release, err := app.AcquireSingleInstance()
+	release, err := app.AcquireSingleInstanceAfterUpdate()
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)

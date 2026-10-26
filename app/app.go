@@ -62,6 +62,8 @@ func (a *App) Startup(ctx context.Context) {
 	_ = a.runtime.TUN.RecoverStale()
 	singbox.CleanupStale(a.workDir, a.binary)
 	_ = a.ClearStopRequest()
+	go cleanupUpdateLeftovers()
+	a.resumeAfterUpdate()
 	go func() {
 		if a.WaitForStopRequest(ctx) {
 			a.QuitApp()

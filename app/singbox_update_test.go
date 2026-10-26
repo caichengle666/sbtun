@@ -87,7 +87,7 @@ func TestLatestSingBoxReleaseFallsBackToOfficialReleasePageOnRateLimit(t *testin
 	}))
 	defer server.Close()
 
-	release, err := latestSingBoxRelease(context.Background(), server.Client(), server.URL+"/repos/SagerNet/sing-box/releases/latest")
+	release, err := latestGitHubRelease(context.Background(), server.Client(), server.URL+"/repos/SagerNet/sing-box/releases/latest", "sing-box")
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -196,7 +196,7 @@ func makeSingBoxTarGz(t *testing.T, content []byte) []byte {
 }
 
 func downloadSingBox(ctx context.Context, client *http.Client, releaseURL, goos, goarch string) ([]byte, string, error) {
-	release, err := latestSingBoxRelease(ctx, client, releaseURL)
+	release, err := latestGitHubRelease(ctx, client, releaseURL, "sing-box")
 	if err != nil {
 		return nil, "", err
 	}

@@ -873,8 +873,9 @@ h2 { color: var(--text); letter-spacing: 0; }
 .backup-list .node-name { flex-shrink: 0; }
 
 /* 侧栏「更新内核」入口（桌面端） */
-.kernel-update-btn { width: 100%; min-height: 26px; margin-top: 2px; font-size: 11px; }
-@media (min-width: 761px) and (max-width: 1000px) { .kernel-update-btn { display: none; } }
+.update-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 6px; margin-top: 2px; }
+.kernel-update-btn { width: 100%; min-height: 26px; padding: 0 6px; font-size: 11px; white-space: nowrap; }
+@media (min-width: 761px) and (max-width: 1000px) { .update-actions { display: none; } }
 
 /* color-mix 只给支持的内核（Chrome 111+）；旧内核用上面的普通颜色 */
 @supports (color: color-mix(in srgb, red 50%, blue)) {

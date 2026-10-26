@@ -257,6 +257,8 @@ func main() {
 		err = runCaptureCommand(application, commandArgs)
 	case "kernel":
 		err = runKernelCommand(application, commandArgs)
+	case "upgrade":
+		err = runUpgradeCommand(application)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -284,10 +286,10 @@ func hasHelpArg(args []string) bool {
 // `<command> -h` and argument validation errors.
 func cliUsage(command string, args []string) string {
 	switch command {
-	case "run", "start", "stop", "status", "nodes", "diag":
+	case "run", "start", "stop", "status", "nodes", "diag", "upgrade":
 		return "sbtun " + command
 	case "route":
-		return "sbtun route <smart|global|direct|custom>"
+		return "sbtun route <smart|global|direct>"
 	case "auto-switch":
 		return "sbtun auto-switch <on|off>"
 	case "add-node":
@@ -370,7 +372,7 @@ func validateCLIArgs(command string, args []string) error {
 	}
 
 	switch command {
-	case "run", "start", "stop", "status", "nodes", "diag":
+	case "run", "start", "stop", "status", "nodes", "diag", "upgrade":
 		return requireNoArgs()
 	case "auto-switch":
 		if len(args) != 1 || (args[0] != "on" && args[0] != "off") {
@@ -547,7 +549,7 @@ func validateCaptureArgs(args []string) error {
 
 func requiresElevation(command string, args []string) bool {
 	switch command {
-	case "run", "start", "stop", "route", "auto-switch", "add-node", "add-rule", "switch", "del", "delete", "edit", "set":
+	case "run", "start", "stop", "route", "auto-switch", "add-node", "add-rule", "switch", "del", "delete", "edit", "set", "upgrade":
 		return true
 	case "custom", "filter", "groups":
 		return len(args) > 0 && (args[0] == "add" || args[0] == "delete")
@@ -641,6 +643,7 @@ func printHelp() {
 	printHelpGroup("其他", []helpEntry{
 		{"kernel version", "查看当前 sing-box 内核版本"},
 		{"kernel update", "更新到 sing-box 官方最新稳定版"},
+		{"upgrade", "更新 sbtun 程序本体到最新版"},
 		{"help", "显示帮助"},
 		{"version", "显示版本并检查是否有新版本"},
 	})
@@ -924,6 +927,20 @@ func runKernelCommand(application *app.App, args []string) error {
 	default:
 		return usageError("kernel", args)
 	}
+}
+
+func runUpgradeCommand(application *app.App) error {
+	fmt.Println("正在下载新版本…")
+	result, err := application.UpdateApp()
+	if err != nil {
+		return err
+	}
+	if !result.Updated {
+		fmt.Printf("已是最新版本 v%s\n", result.CurrentVersion)
+		return nil
+	}
+	fmt.Printf("%s。正在运行的 sbtun（界面或 sbtun run）重新打开后生效\n", result.Message)
+	return nil
 }
 
 func runCaptureCommand(application *app.App, args []string) error {
@@ -1282,7 +1299,7 @@ func printAppUpdate() {
 	case err != nil:
 		fmt.Fprintln(os.Stderr, err)
 	case result.HasUpdate:
-		fmt.Printf("发现新版本 v%s: %s\n", result.LatestVersion, result.ReleaseURL)
+		fmt.Printf("发现新版本 v%s，运行 sbtun upgrade 更新: %s\n", result.LatestVersion, result.ReleaseURL)
 	default:
 		fmt.Println("已是最新版本")
 	}

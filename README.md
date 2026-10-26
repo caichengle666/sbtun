@@ -17,7 +17,7 @@ sbtun 负责节点、订阅、路由、规则集、健康检查和运行状态�
 - **流量分析**：按域名或关键词查看经过 TUN 的 HTTP/HTTPS 请求，并保存为 JSON。
 - **便携发布包**：GitHub Actions 构建 Windows、Linux、macOS 的 amd64 与 arm64 版本。
 - **三种主题**：深色、浅色和毛玻璃，右上角按钮循环切换；毛玻璃效果在各平台表现一致。
-- **新版本提示**：启动时及每 6 小时检查 GitHub Releases，有新版本时右上角显示提示，点击打开下载页。
+- **程序更新**：启动时及每 6 小时检查 GitHub Releases，有新版本时右上角显示提示。桌面版点提示或左下角“更新程序”即可下载、校验 SHA-256、替换程序文件并自动重启，代理开着时重启后自动重连；sing-box、规则和配置保持不变。安卓版点提示打开下载页。
 
 ## 界面预览
 
@@ -367,14 +367,15 @@ backup auto <on|off>            内容有变化时自动备份（sbtun 运行时
 backup clear                    清除 WebDAV 设置
 ```
 
-### 内核管理
+### 程序与内核更新
 
 ```text
+upgrade                         更新 sbtun 程序本体到最新版
 kernel version                  查看 sing-box 版本
 kernel update                   更新到官方最新稳定版
 ```
 
-运行中修改节点、路由或规则时，sbtun 会同步配置并重载运行时。更新 sing-box 前需要先停止当前实例。
+运行中修改节点、路由或规则时，sbtun 会同步配置并重载运行时。更新 sing-box 前需要先停止当前实例。`upgrade` 只替换 sbtun 程序文件（Windows/Linux 为 sbtun、sbtun-cli 等，macOS 为整个 sbtun.app），已打开的界面或 `sbtun run` 重新启动后生效。
 
 ---
 

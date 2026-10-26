@@ -18,7 +18,7 @@ var assets embed.FS
 var trayIcon []byte
 
 func main() {
-	releaseInstance, err := app.AcquireSingleInstance()
+	releaseInstance, err := app.AcquireSingleInstanceAfterUpdate()
 	if err != nil {
 		app.ShowSingleInstanceMessage()
 		return

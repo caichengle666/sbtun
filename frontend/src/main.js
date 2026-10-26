@@ -35,6 +35,7 @@ const state = {
   version: '',
   singBoxVersion: '',
   appUpdate: null,
+  appUpdating: false,
   autoSwitch: null,
   singBoxUpdating: false,
   statusState: 'stopped',
@@ -323,7 +324,10 @@ function render() {
             ${state.version ? `<span class="app-version" title="管理器版本 v${escapeHtml(state.version)}">程序 v${escapeHtml(state.version)}</span>` : ''}
             <span class="app-version" title="sing-box 内核版本 ${state.singBoxVersion ? 'v' + escapeHtml(state.singBoxVersion) : '读取中'}">内核 ${state.singBoxVersion ? 'v' + escapeHtml(state.singBoxVersion) : '--'}</span>
           </div>
-          ${IS_ANDROID ? '' : `<button id="updateSingBox" class="btn btn-ghost kernel-update-btn" title="检查 sing-box 官方稳定版并更新（同 sbtun kernel update）" ${state.singBoxUpdating ? 'disabled' : ''}>${state.singBoxUpdating ? '正在检查更新…' : '更新内核'}</button>`}
+          ${IS_ANDROID ? '' : `<div class="update-actions">
+            <button id="updateApp" class="btn btn-ghost kernel-update-btn" title="下载 sbtun 最新版并自动重启（同 sbtun upgrade）" ${state.appUpdating ? 'disabled' : ''}>${state.appUpdating ? '正在更新…' : '更新程序'}</button>
+            <button id="updateSingBox" class="btn btn-ghost kernel-update-btn" title="检查 sing-box 官方稳定版并更新（同 sbtun kernel update）" ${state.singBoxUpdating ? 'disabled' : ''}>${state.singBoxUpdating ? '正在更新…' : '更新内核'}</button>
+          </div>`}
         </div>
       </aside>
 
@@ -334,7 +338,7 @@ function render() {
             <h1>${viewTitle(state.view)}</h1>
           </div>
           <div class="topbar-actions">
-            ${state.appUpdate?.has_update ? `<button id="appUpdate" class="update-pill" type="button" title="当前 v${escapeHtml(state.appUpdate.current_version)}，点击打开下载页"><span class="update-dot" aria-hidden="true"></span>新版本 v${escapeHtml(state.appUpdate.latest_version)}</button>` : ''}
+            ${state.appUpdate?.has_update ? `<button id="appUpdate" class="update-pill" type="button" title="当前 v${escapeHtml(state.appUpdate.current_version)}，${IS_ANDROID ? '点击打开下载页' : '点击下载并自动重启'}" ${state.appUpdating ? 'disabled' : ''}><span class="update-dot" aria-hidden="true"></span>${state.appUpdating ? '正在更新…' : '新版本 v' + escapeHtml(state.appUpdate.latest_version)}</button>` : ''}
             <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换主题" title="切换到${nextTheme().name}主题">${THEME_ICONS[nextTheme().id]}</button>
             <button id="power" data-power class="switch ${state.running ? 'on' : ''}" ${busyAttr('power')}>${powerLabel()}</button>
           </div>
@@ -1426,6 +1430,28 @@ async function checkAppUpdate() {
   }
 }
 
+// 下载新版替换程序文件，成功后启动新版本并退出当前进程（代理在运行时新版本会自动重连）。
+async function updateApp() {
+  if (state.appUpdating) return
+  state.appUpdating = true
+  renderApp()
+  try {
+    const result = await window.go.app.App.UpdateApp()
+    if (!result.updated) {
+      if (state.appUpdate) state.appUpdate.has_update = false
+      showToast(result.message || '已是最新版本', 'success')
+      return
+    }
+    showToast(result.message + '，正在重启…', 'success')
+    await window.go.app.App.RestartApp()
+  } catch (e) {
+    showToast('更新程序失败：' + errorText(e), 'error')
+  } finally {
+    state.appUpdating = false
+    renderApp()
+  }
+}
+
 async function refreshSingBoxVersion() {
   try {
     state.singBoxVersion = await window.go.app.App.SingBoxVersion()
@@ -1751,8 +1777,10 @@ function bindEvents() {
     state.documentEventsBound = true
   }
   document.querySelector('#appUpdate')?.addEventListener('click', () => {
-    if (state.appUpdate?.release_url) window.runtime.BrowserOpenURL(state.appUpdate.release_url)
+    if (!IS_ANDROID) updateApp()
+    else if (state.appUpdate?.release_url) window.runtime.BrowserOpenURL(state.appUpdate.release_url)
   })
+  document.querySelector('#updateApp')?.addEventListener('click', updateApp)
   const themeToggle = document.querySelector('#themeToggle')
   if (themeToggle) {
     themeToggle.addEventListener('click', () => {
