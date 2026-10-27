@@ -11,3 +11,7 @@ func preserveFileMetadata(path string, info os.FileInfo) error {
 func applyInvokerOwnership(path string) error {
 	return nil
 }
+
+func ShareWithInvoker(string, os.FileMode) error { return nil }
+
+func ShareTreeWithInvoker(string) {}

@@ -3,17 +3,14 @@ package app
 import (
 	"bytes"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"io"
 	"net/http"
 	"os"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/caichengle666/sbtun/config"
-	"github.com/caichengle666/sbtun/core/rules"
 	"gopkg.in/yaml.v3"
 )
 
@@ -37,26 +34,32 @@ func (a *App) ImportCustomRules(source string) (RuleImportResult, error) {
 	if err != nil {
 		return result, err
 	}
-	fetched := fetchRuleSets(refs)
+	urls := make([]string, len(refs))
+	for i, ref := range refs {
+		urls[i] = ref.URL
+	}
+	fetched := a.fetchRuleURLs(urls)
 
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
+	var added []string
 	for i, ref := range refs {
 		switch {
 		case a.rulesManager == nil:
-			return result, errors.New("规则管理器未初始化")
+			return result, errNoRulesManager
 		case a.rulesManager.HasURL(ref.URL):
 			result.Existing++
 		case fetched[i].err != nil:
 			result.Failed = append(result.Failed, ref.Name+": "+fetched[i].err.Error())
 		default:
-			if err := a.rulesManager.AddFetched(ref.Name, ref.URL, ref.Action, fetched[i].data, a.validateRuleSet); err != nil {
+			if id, err := a.rulesManager.Add(ref.Name, ref.URL, ref.Action, fetched[i].data, a.validateRuleSet); err != nil {
 				result.Failed = append(result.Failed, ref.Name+": "+err.Error())
 			} else {
-				result.RuleSets++
+				added = append(added, id)
 			}
 		}
 	}
+	result.RuleSets = len(added)
 	if len(parsed) == 0 {
 		if result.RuleSets == 0 {
 			if len(result.Failed) > 0 {
@@ -71,38 +74,25 @@ func (a *App) ImportCustomRules(source string) (RuleImportResult, error) {
 		next.CustomRules = append(next.CustomRules, parsed...)
 		return nil
 	}, true)
-	if err == nil {
-		result.Rules = len(parsed)
+	if err != nil {
+		// 规则没保存上，这次加的规则集也撤掉，不留一半。
+		for _, id := range added {
+			_ = a.rulesManager.Delete(id)
+		}
+		if len(added) > 0 {
+			a.resyncRuntimeLocked()
+		}
+		result.RuleSets = 0
+		return result, err
 	}
-	return result, err
+	result.Rules = len(parsed)
+	return result, nil
 }
 
 // ruleSetRef 是导入内容里引用的外部规则列表（Clash 的 RULE-SET + rule-providers、Surge 的 RULE-SET/DOMAIN-SET、
 // subconverter 的 ruleset=），导入后成为一个规则集，整体更新、整体改去向。
 type ruleSetRef struct {
 	Name, URL, Action string
-}
-
-type fetchedRuleSet struct {
-	data []byte
-	err  error
-}
-
-func fetchRuleSets(refs []ruleSetRef) []fetchedRuleSet {
-	out := make([]fetchedRuleSet, len(refs))
-	sem := make(chan struct{}, 4)
-	var wg sync.WaitGroup
-	for i, ref := range refs {
-		wg.Add(1)
-		go func(i int, url string) {
-			defer wg.Done()
-			sem <- struct{}{}
-			defer func() { <-sem }()
-			out[i].data, out[i].err = rules.Fetch(url)
-		}(i, ref.URL)
-	}
-	wg.Wait()
-	return out
 }
 
 func loadRuleSource(source string) ([]byte, error) {

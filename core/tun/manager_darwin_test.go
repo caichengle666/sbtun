@@ -22,3 +22,12 @@ func TestParseDNSServers(t *testing.T) {
 		t.Fatalf("got %v want %v", got, want)
 	}
 }
+
+// 恢复 DNS 时要认出停用的服务，跳过已经不存在的服务。
+func TestAllNetworkServicesIncludesDisabled(t *testing.T) {
+	out := "An asterisk (*) denotes that a network service is disabled.\nWi-Fi\n*Thunderbolt Bridge\n"
+	got := allNetworkServices(out)
+	if !got["Wi-Fi"] || !got["Thunderbolt Bridge"] || got["iPhone USB"] || len(got) != 2 {
+		t.Fatalf("got %v", got)
+	}
+}

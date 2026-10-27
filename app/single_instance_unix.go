@@ -6,15 +6,13 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strconv"
 	"syscall"
 )
 
 func AcquireSingleInstance() (func(), error) {
-	// A previous sudo launch may leave the shared /tmp lock owned by root.
-	// Use a per-UID fallback so an unprivileged CLI can recover cleanly while
-	// still preventing duplicate processes for that user.
-	path := filepath.Join(os.TempDir(), "sbtun-single-instance-"+strconv.Itoa(os.Getuid())+".lock")
+	path := filepath.Join(singleInstanceDir, "sbtun-single-instance-"+strconv.Itoa(os.Getuid())+".lock")
 	file, err := os.OpenFile(path, os.O_CREATE|os.O_RDWR, 0o600)
 	if err != nil {
 		return nil, fmt.Errorf("创建单实例锁失败: %w", err)
@@ -30,3 +28,13 @@ func AcquireSingleInstance() (func(), error) {
 		_ = file.Close()
 	}, nil
 }
+
+// singleInstanceDir 是固定的锁目录。不用 os.TempDir()：macOS 的 TMPDIR 每个用户不同，
+// pkexec/sudo 又可能重置环境，两个 root 实例会拿到不同的锁而同时运行。
+// 文件名带 uid：之前 sudo 留下的 root 锁文件不会挡住普通用户。安卓没有 /tmp，用应用私有的临时目录。
+var singleInstanceDir = func() string {
+	if runtime.GOOS == "android" {
+		return os.TempDir()
+	}
+	return "/tmp"
+}()

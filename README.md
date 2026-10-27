@@ -51,7 +51,7 @@ sbtun 负责节点、订阅、路由、规则集、健康检查和运行状态�
 .\sbtun-cli.exe status
 ```
 
-Windows 发布包包含 sing-box、Wintun DLL 和默认分流规则集。TUN 模式需要管理员权限。
+Windows 发布包包含 sing-box、Wintun DLL 和默认分流规则集。TUN 模式需要管理员权限。在普通终端执行需要管理员权限的命令（如 `switch`、`route`、`stop`）会弹出 UAC，命令的输出和退出码会带回原来的终端。
 
 ### Linux
 
@@ -69,6 +69,8 @@ chmod +x start-sbtun.sh
 chmod +x sbtun-cli
 ./sbtun-cli help
 ```
+
+需要管理员权限的命令（`run`、`stop`、改节点、路由、规则和规则集等）会自动通过 `pkexec` 或 `sudo` 重新运行。以管理员身份写下的配置、规则集等文件会交还给当前用户，之后不加 `sudo` 的查看命令（`status`、`nodes`、`rules` 等）照常可用。
 
 > [!NOTE]
 > Linux GUI 依赖 GTK3/WebKitGTK。官方发布包带有配套运行库和启动脚本；只复制 GUI 主程序可能导致 `libwebkit2gtk-4.0.so.37` 缺失。
@@ -90,6 +92,8 @@ xattr -dr com.apple.quarantine /Applications/sbtun.app
 ```bash
 sudo /Applications/sbtun.app/Contents/MacOS/sbtun-cli help
 ```
+
+macOS 的数据目录属于 root，所有命令都需要管理员权限，不加 `sudo` 时会自动用 `sudo` 重新运行。
 
 > [!NOTE]
 > macOS 上开启 TUN 时，sbtun 会把所有网络服务的 DNS 临时设为 `172.18.0.2`，由 TUN 接管 DNS，关闭 TUN 或退出时恢复原设置。如果程序被强制结束导致无法上网，重新打开 sbtun，或运行 `sudo sbtun-cli run` 后再停止，就会恢复 DNS。macOS 版没有菜单栏图标，关闭窗口即退出并关闭 TUN。
@@ -218,6 +222,8 @@ sbtun 可以管理分流规则集：
 - 可以添加 `.srs`，也可以直接填 Clash / Surge 规则列表、每行一个域名或 IP 段的列表、AdGuard `||example.com^` 列表、hosts 文件的链接，文本列表会转换成 sing-box 源格式（`.json`）。
 - 自己添加的规则集默认去向是阻断（广告过滤），也可以改成代理、直连或节点组、地区等；整份生效、整份更新，想让其中某个网站例外，就加一条分流规则，它优先。
 - 单个规则集更新失败时保留旧文件，避免把可用规则替换成损坏文件。
+- 直连下载失败（被墙，或者安卓上 App 自身不走 VPN）时，和订阅一样自动经已有节点下载。
+- 另开终端用 `sbtun-cli rules …` 修改规则集，正在运行的界面或 `sbtun run` 会自动应用。
 - 停用只改变启用状态；删除会同时移除记录和本地文件。
 - 手动 DNS 过滤规则优先级最高。
 

@@ -26,6 +26,7 @@ import (
 	"sync/atomic"
 	"time"
 
+	"github.com/caichengle666/sbtun/config"
 	"github.com/elazarl/goproxy"
 )
 
@@ -90,7 +91,7 @@ type Manager struct {
 	address   string
 	upstream  string
 	server    *http.Server
-	listener  net.Listener
+	listener  *trackingListener
 	transport *http.Transport
 	domains   []string
 	flows     []Flow
@@ -288,7 +289,8 @@ func (m *Manager) Start(ctx context.Context, domains []string) error {
 		return resp
 	})
 	server := &http.Server{Handler: proxy, ReadHeaderTimeout: 10 * time.Second}
-	m.listener = listener
+	tracked := &trackingListener{Listener: listener, conns: map[*trackedConn]struct{}{}}
+	m.listener = tracked
 	m.server = server
 	if err := os.WriteFile(m.runningMarkerPath(), []byte(strconv.Itoa(os.Getpid())), 0o600); err != nil {
 		m.server = nil
@@ -296,14 +298,60 @@ func (m *Manager) Start(ctx context.Context, domains []string) error {
 		_ = listener.Close()
 		return fmt.Errorf("写入分析器运行标记失败: %w", err)
 	}
+	_ = config.ShareWithInvoker(m.workDir, 0o700)
+	_ = config.ShareWithInvoker(m.runningMarkerPath(), 0o600)
 	m.flushSignal = make(chan struct{}, 1)
 	m.flushStop = make(chan struct{})
 	m.flushDone = make(chan struct{})
 	go m.flushLoop(m.flushSignal, m.flushStop, m.flushDone)
 	go func() {
-		_ = server.Serve(listener)
+		_ = server.Serve(tracked)
 	}()
 	return nil
+}
+
+// trackingListener 记住每个客户端连接。CONNECT 隧道被 Hijack 后 http.Server 不再管它，
+// 停止分析器时要逐个关掉，否则长连接（WebSocket、h2）会继续被解密记录。
+type trackingListener struct {
+	net.Listener
+	mu    sync.Mutex
+	conns map[*trackedConn]struct{}
+}
+
+type trackedConn struct {
+	net.Conn
+	owner *trackingListener
+}
+
+func (l *trackingListener) Accept() (net.Conn, error) {
+	conn, err := l.Listener.Accept()
+	if err != nil {
+		return nil, err
+	}
+	tracked := &trackedConn{Conn: conn, owner: l}
+	l.mu.Lock()
+	l.conns[tracked] = struct{}{}
+	l.mu.Unlock()
+	return tracked, nil
+}
+
+func (c *trackedConn) Close() error {
+	c.owner.mu.Lock()
+	delete(c.owner.conns, c)
+	c.owner.mu.Unlock()
+	return c.Conn.Close()
+}
+
+func (l *trackingListener) closeAll() {
+	l.mu.Lock()
+	conns := make([]*trackedConn, 0, len(l.conns))
+	for conn := range l.conns {
+		conns = append(conns, conn)
+	}
+	l.mu.Unlock()
+	for _, conn := range conns {
+		_ = conn.Close()
+	}
 }
 
 // finishFlow completes a captured flow once its response body has been fully
@@ -367,7 +415,7 @@ func tlsConfigFromClientSNI(ca *tls.Certificate) func(string, *goproxy.ProxyCtx)
 
 func (m *Manager) Stop() error {
 	m.mu.Lock()
-	server := m.server
+	server, listener := m.server, m.listener
 	m.server = nil
 	m.listener = nil
 	flushStop, flushDone := m.flushStop, m.flushDone
@@ -388,6 +436,7 @@ func (m *Manager) Stop() error {
 		_ = server.Close()
 		shutdownErr = nil
 	}
+	listener.closeAll()
 	if flushStop != nil {
 		close(flushStop)
 		<-flushDone

@@ -187,8 +187,54 @@ func (a *App) RestoreFromWebDAV(name string) (string, error) {
 		fetched[sub.ID] = nodes
 	}
 
+	// 本地还没有文件的规则集也在锁外下载。
+	var missingSets []rules.RuleSet
+	if a.rulesManager != nil {
+		dir := filepath.Dir(a.rulesManager.StatePath())
+		for _, set := range payload.RuleSets {
+			if _, err := os.Stat(filepath.Join(dir, filepath.Base(set.Path))); err != nil {
+				missingSets = append(missingSets, set)
+			}
+		}
+	}
+	urls := make([]string, len(missingSets))
+	for i, set := range missingSets {
+		urls[i] = set.URL
+	}
+	downloads := a.fetchRuleURLs(urls)
+
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
+	// 先换规则集，再改配置；配置保存或生效失败时把规则集换回去，不留一半新一半旧。
+	var oldSets []rules.RuleSet
+	replaced := false
+	if a.rulesManager != nil && len(payload.RuleSets) > 0 {
+		var loadErr error
+		oldSets, loadErr = a.rulesManager.Sets()
+		missing, err := a.rulesManager.Replace(payload.RuleSets)
+		if err != nil {
+			return "", err
+		}
+		replaced = loadErr == nil
+		var failed []string
+		for _, id := range missing {
+			err := errors.New("未下载")
+			for i, set := range missingSets {
+				if set.ID == id {
+					if err = downloads[i].err; err == nil {
+						err = a.rulesManager.Install(id, downloads[i].data, a.validateRuleSet)
+					}
+				}
+			}
+			if err != nil {
+				failed = append(failed, id)
+			}
+		}
+		if len(failed) > 0 {
+			warnings = append(warnings, "规则集下载失败，可稍后在规则页更新: "+strings.Join(failed, ", "))
+		}
+	}
+	// reload=true：运行中按校验过的新配置重载（配置和规则集都没变就不重启），失败自动回滚配置。
 	if err := a.mutateConfigAndSyncLocked(func(before config.Config, next *config.Config) error {
 		restored := payload.Config
 		restored.WebDAV = before.WebDAV
@@ -206,33 +252,20 @@ func (a *App) RestoreFromWebDAV(name string) (string, error) {
 		ensureCurrentNode(&restored)
 		*next = restored
 		return nil
-	}, false); err != nil {
+	}, true); err != nil {
+		if replaced {
+			if _, rollbackErr := a.rulesManager.Replace(oldSets); rollbackErr != nil {
+				err = fmt.Errorf("%w; 恢复规则集失败: %v", err, rollbackErr)
+			}
+			a.resyncRuntimeLocked()
+		}
 		return "", err
 	}
-	if a.rulesManager != nil && len(payload.RuleSets) > 0 {
-		missing, err := a.rulesManager.Replace(payload.RuleSets)
-		if err != nil {
-			return "", err
-		}
-		var failed []string
-		for _, id := range missing {
-			if err := a.rulesManager.UpdateWithValidation(id, a.validateRuleSet); err != nil {
-				failed = append(failed, id)
-			}
-		}
-		if len(failed) > 0 {
-			warnings = append(warnings, "规则集下载失败，可稍后在规则页更新: "+strings.Join(failed, ", "))
-		}
-	}
-	warning := strings.Join(warnings, "；")
-	if err := a.reloadIfRunningLocked(); err != nil {
-		return warning, err
-	}
 	// 刚恢复的内容和云端一致，不需要再自动上传。
-	if _, hash, err := a.buildBackupLocked(); err == nil {
+	if _, hash, err := a.buildBackup(); err == nil {
 		a.saveBackupHash(hash)
 	}
-	return warning, nil
+	return strings.Join(warnings, "；"), nil
 }
 
 func (a *App) webDAVSettings() (config.WebDAVSettings, error) {
@@ -249,13 +282,6 @@ func (a *App) webDAVSettings() (config.WebDAVSettings, error) {
 // buildBackup 生成备份内容和内容指纹。订阅节点不进备份，指纹也忽略当前选中的节点和
 // 订阅更新时间和流量：切换节点、订阅节点变了都不算变化，只有手动节点、订阅地址、规则、设置变了才算。
 func (a *App) buildBackup() (backupPayload, string, error) {
-	// 规则集列表由 operationMu 保护。
-	a.operationMu.Lock()
-	defer a.operationMu.Unlock()
-	return a.buildBackupLocked()
-}
-
-func (a *App) buildBackupLocked() (backupPayload, string, error) {
 	cfg, err := a.LoadConfig()
 	if err != nil {
 		return backupPayload{}, "", err
@@ -277,7 +303,10 @@ func (a *App) buildBackupLocked() (backupPayload, string, error) {
 	}
 	payload.Config = cfg
 	if a.rulesManager != nil {
-		payload.RuleSets = a.rulesManager.Sets()
+		// 规则集清单读不出时不能拿默认列表去覆盖云端备份。
+		if payload.RuleSets, err = a.rulesManager.Sets(); err != nil {
+			return backupPayload{}, "", err
+		}
 		for i := range payload.RuleSets {
 			payload.RuleSets[i].Path = filepath.Base(payload.RuleSets[i].Path)
 		}
@@ -310,7 +339,9 @@ func (a *App) lastBackupHash() string {
 func (a *App) saveBackupHash(hash string) {
 	data, _ := json.Marshal(map[string]string{"hash": hash})
 	_ = os.MkdirAll(a.workDir, 0o755)
-	_ = os.WriteFile(a.backupStatePath(), data, 0o600)
+	if os.WriteFile(a.backupStatePath(), data, 0o600) == nil {
+		_ = config.ShareWithInvoker(a.backupStatePath(), 0o600)
+	}
 }
 
 // autoBackupLoop 每分钟检查一次；内容和上次上传的不同、并且一分钟内没有再变时才上传。
@@ -448,6 +479,8 @@ func decodeBackup(data []byte, password string) (backupPayload, error) {
 	if payload.App != "sbtun" || payload.Version != 1 {
 		return backupPayload{}, errors.New("不是 sbtun 备份文件，或版本不支持")
 	}
+	// 旧版本的备份可能带着已取消的设置（如自定义路由模式），先迁移再校验。
+	config.Migrate(&payload.Config)
 	if err := config.Validate(payload.Config); err != nil {
 		return backupPayload{}, fmt.Errorf("备份中的配置无效: %w", err)
 	}

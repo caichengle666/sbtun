@@ -60,6 +60,10 @@ type AppSelfUpdateResult struct {
 // are left alone. The new version runs after RestartApp (GUI) or the next start (CLI).
 func (a *App) UpdateApp() (AppSelfUpdateResult, error) {
 	result := AppSelfUpdateResult{CurrentVersion: Version()}
+	if !a.appUpdateMu.TryLock() {
+		return result, errors.New("正在更新，请稍候")
+	}
+	defer a.appUpdateMu.Unlock()
 	if runtime.GOOS == "android" {
 		return result, errors.New("安卓版请下载新的 APK 安装")
 	}
@@ -253,7 +257,8 @@ func installPortable(archive, dir, goos string) error {
 		if !wanted[name] || staged[name] != "" {
 			return nil
 		}
-		target := filepath.Join(dir, name+".new")
+		// 文件名带随机后缀：GUI 和 CLI 同时更新时不会写到同一个文件上。
+		target := filepath.Join(dir, name+".new-"+strconv.FormatInt(time.Now().UnixNano(), 36))
 		if err := writeFileFrom(target, mode, content); err != nil {
 			return fmt.Errorf("写入 %s 失败: %w", name, err)
 		}
@@ -380,7 +385,7 @@ func cleanupUpdateLeftovers() {
 	for attempt := 0; attempt < 20; attempt++ {
 		left := 0
 		for _, dir := range dirs {
-			for _, pattern := range []string{"*.old-*", ".sbtun-update-*", "*.new"} {
+			for _, pattern := range []string{"*.old-*", ".sbtun-update-*", "*.new", "*.new-*"} {
 				matches, _ := filepath.Glob(filepath.Join(dir, pattern))
 				for _, path := range matches {
 					if !isUpdateLeftover(filepath.Base(path)) {
@@ -403,11 +408,11 @@ func isUpdateLeftover(name string) bool {
 	if strings.HasPrefix(name, ".sbtun-update-") {
 		return true
 	}
-	base := name
-	if index := strings.Index(name, ".old-"); index > 0 {
-		base = name[:index]
-	} else {
-		base = strings.TrimSuffix(name, ".new")
+	base := strings.TrimSuffix(name, ".new")
+	for _, marker := range []string{".old-", ".new-"} {
+		if index := strings.Index(name, marker); index > 0 {
+			base = name[:index]
+		}
 	}
 	switch base {
 	case "sbtun", "sbtun-cli", "sbtun.exe", "sbtun-cli.exe", "VERSION", "start-sbtun.sh", "sbtun.app":

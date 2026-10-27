@@ -25,7 +25,8 @@ func TestSaveWritesStateAtomically(t *testing.T) {
 	if tmp, _ := filepath.Glob(filepath.Join(dir, ".sets-*")); len(tmp) != 0 {
 		t.Fatalf("遗留临时文件: %v", tmp)
 	}
-	for _, info := range NewManager(dir).List() {
+	list, _ := NewManager(dir).List()
+	for _, info := range list {
 		if info.ID == "geosite-cn" && info.Enabled {
 			t.Fatal("重新加载后禁用状态丢失")
 		}
@@ -41,7 +42,7 @@ func TestCorruptStateRefusesSave(t *testing.T) {
 		t.Fatal(err)
 	}
 	m := NewManager(dir)
-	if m.LoadError() == nil {
+	if _, err := m.List(); err == nil {
 		t.Fatal("应报告清单损坏")
 	}
 	if err := m.SetEnabled("geosite-cn", false); err == nil {
@@ -51,7 +52,11 @@ func TestCorruptStateRefusesSave(t *testing.T) {
 		t.Fatal("损坏的清单被默认列表覆盖")
 	}
 	// 从备份整体替换属于用户主动覆盖，允许写入。
-	if _, err := m.Replace(m.Sets()); err != nil || m.LoadError() != nil {
-		t.Fatalf("Replace 后应能保存: %v", err)
+	defaults, _ := m.Sets()
+	if _, err := m.Replace(defaults); err != nil {
+		t.Fatalf("Replace 应能覆盖损坏的清单: %v", err)
+	}
+	if _, err := m.List(); err != nil {
+		t.Fatalf("Replace 后清单应可读: %v", err)
 	}
 }

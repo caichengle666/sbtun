@@ -159,7 +159,15 @@ func startNodeProxy(ctx context.Context, binary string, node config.Node, timeou
 	}
 	port := listener.Addr().(*net.TCPAddr).Port
 	_ = listener.Close()
-	data, err := singbox.BuildHealthConfig(node, port)
+	user, err := randomToken(8)
+	if err != nil {
+		return nil, err
+	}
+	pass, err := randomToken(16)
+	if err != nil {
+		return nil, err
+	}
+	data, err := singbox.BuildHealthConfig(node, port, user, pass)
 	if err != nil {
 		return nil, fmt.Errorf("配置失败: %v", err)
 	}
@@ -178,7 +186,8 @@ func startNodeProxy(ctx context.Context, binary string, node config.Node, timeou
 	configureProcess(p.cmd)
 	p.cmd.Stdout = &p.logs
 	p.cmd.Stderr = &p.logs
-	if err := p.cmd.Start(); err != nil {
+	// 绑定到 sbtun 的生命周期：sbtun 崩溃或被强杀时临时代理一起结束。
+	if err := singbox.StartProcess(p.cmd); err != nil {
 		_ = os.RemoveAll(dir)
 		return nil, fmt.Errorf("启动 sing-box 失败: %v", err)
 	}
@@ -187,7 +196,7 @@ func startNodeProxy(ctx context.Context, binary string, node config.Node, timeou
 		_ = p.cmd.Wait()
 		close(p.exited)
 	}()
-	proxyURL, _ := url.Parse(fmt.Sprintf("http://127.0.0.1:%d", port))
+	proxyURL := &url.URL{Scheme: "http", Host: p.addr, User: url.UserPassword(user, pass)}
 	p.client = &http.Client{Timeout: timeout, Transport: &http.Transport{Proxy: http.ProxyURL(proxyURL)}}
 	return p, nil
 }

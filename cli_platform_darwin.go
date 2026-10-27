@@ -6,17 +6,15 @@ import (
 	"fmt"
 	"os"
 	"os/exec"
-	"strconv"
-	"strings"
 	"syscall"
-	"time"
-
-	"github.com/caichengle666/sbtun/app"
 )
 
 func cliSignals() []os.Signal { return []os.Signal{os.Interrupt, syscall.SIGTERM} }
 
-func relaunchElevated() error {
+// redirectElevatedOutput 只有 Windows 需要：提权后的进程开在新控制台里，输出交给父进程回显。
+func redirectElevatedOutput() {}
+
+func relaunchElevated(string, []string) error {
 	if os.Geteuid() == 0 || os.Getenv("SBTUN_ELEVATED") == "1" {
 		return nil
 	}
@@ -30,37 +28,4 @@ func relaunchElevated() error {
 	}
 	args := append([]string{"sudo", "SBTUN_ELEVATED=1", exe}, os.Args[1:]...)
 	return syscall.Exec(path, args, os.Environ())
-}
-
-// stopRunningInstance finds the GUI or CLI by process name, asks it to stop
-// through the shared stop request file and waits until the process exits.
-func stopRunningInstance() error {
-	out, _ := exec.Command("pgrep", "^sbtun(-cli)?$").Output()
-	myPID := os.Getpid()
-	var pids []int
-	for _, field := range strings.Fields(string(out)) {
-		if pid, err := strconv.Atoi(field); err == nil && pid != myPID {
-			pids = append(pids, pid)
-		}
-	}
-	if len(pids) == 0 {
-		return fmt.Errorf("没有运行中的 sbtun 实例")
-	}
-	if err := app.RequestRunningInstanceStop(); err != nil {
-		return fmt.Errorf("发送停止请求失败: %w", err)
-	}
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		alive := false
-		for _, pid := range pids {
-			if syscall.Kill(pid, 0) == nil {
-				alive = true
-			}
-		}
-		if !alive {
-			return nil
-		}
-		time.Sleep(100 * time.Millisecond)
-	}
-	return fmt.Errorf("等待 sbtun 正常退出超时")
 }

@@ -101,8 +101,17 @@ func restoreDNS() error {
 		_ = os.Remove(dnsBackup)
 		return fmt.Errorf("系统 DNS 备份已损坏: %w", err)
 	}
+	// 备份之后被删除或改名的网络服务（USB 网卡、iPhone、第三方 VPN）跳过，否则备份永远删不掉，
+	// 之后每次停止都报错，还把用户后来改过的 DNS 覆盖回旧值。读不到当前列表时照旧全部恢复。
+	existing := map[string]bool{}
+	if out, err := exec.Command("networksetup", "-listallnetworkservices").Output(); err == nil {
+		existing = allNetworkServices(string(out))
+	}
 	var failed []string
 	for service, servers := range original {
+		if len(existing) > 0 && !existing[service] {
+			continue
+		}
 		if err := setDNSServers(service, servers); err != nil {
 			failed = append(failed, service)
 		}
@@ -131,6 +140,17 @@ func parseNetworkServices(output string) []string {
 			continue
 		}
 		services = append(services, line)
+	}
+	return services
+}
+
+// allNetworkServices 返回全部网络服务名，包括停用的（以 '*' 开头）。
+func allNetworkServices(output string) map[string]bool {
+	services := map[string]bool{}
+	for i, line := range strings.Split(output, "\n") {
+		if line = strings.TrimPrefix(strings.TrimSpace(line), "*"); i > 0 && line != "" {
+			services[line] = true
+		}
 	}
 	return services
 }

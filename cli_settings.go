@@ -28,19 +28,6 @@ func onOff(enabled bool) string {
 	return "关闭"
 }
 
-// mutateConfig saves a changed copy of the config through the same path the
-// GUI uses, so a running instance reloads it.
-func mutateConfig(application *app.App, mutate func(cfg *config.Config) error) error {
-	cfg, err := application.LoadConfig()
-	if err != nil {
-		return err
-	}
-	if err := mutate(&cfg); err != nil {
-		return err
-	}
-	return application.SaveConfig(cfg)
-}
-
 func validateRuleListArgs(command string, args []string, withAction bool) error {
 	switch {
 	case len(args) == 0, len(args) == 1 && args[0] == "list":
@@ -119,7 +106,7 @@ func runRuleListCommand(application *app.App, args []string, filter bool) error 
 			rest = rest[1:]
 		}
 		rule := config.Rule{MatchType: rest[0], Value: strings.TrimSpace(rest[1]), Action: "block"}
-		err := mutateConfig(application, func(cfg *config.Config) error {
+		err := app.UpdateConfig(application, func(cfg *config.Config) error {
 			if !filter {
 				action, err := cliRuleTarget(*cfg, rest[2])
 				if err != nil {
@@ -149,7 +136,7 @@ func runRuleListCommand(application *app.App, args []string, filter bool) error 
 		return err
 	case "delete":
 		index, _ := strconv.Atoi(args[1])
-		err := mutateConfig(application, func(cfg *config.Config) error {
+		err := app.UpdateConfig(application, func(cfg *config.Config) error {
 			rules := pick(cfg)
 			if index > len(*rules) {
 				return fmt.Errorf("规则编号超出范围: %d", index)
@@ -168,7 +155,7 @@ func runRuleListCommand(application *app.App, args []string, filter bool) error 
 func runSetCommand(application *app.App, args []string) error {
 	enabled := args[1] == "on"
 	names := map[string]string{"ipv6": "IPv6", "webrtc": "WebRTC 防泄漏", "diagnostics": "诊断信息"}
-	err := mutateConfig(application, func(cfg *config.Config) error {
+	err := app.UpdateConfig(application, func(cfg *config.Config) error {
 		switch args[0] {
 		case "ipv6":
 			cfg.IPv6Enabled = enabled

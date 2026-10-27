@@ -78,7 +78,7 @@ func TestInstallPortableWindowsZipReplacesOnlyProgramFiles(t *testing.T) {
 		t.Fatal("rules must not be extracted")
 	}
 	leftovers, _ := filepath.Glob(filepath.Join(dir, "*.old-*"))
-	staged, _ := filepath.Glob(filepath.Join(dir, "*.new"))
+	staged, _ := filepath.Glob(filepath.Join(dir, "*.new*"))
 	if len(leftovers)+len(staged) != 0 {
 		t.Fatalf("leftovers: %v %v", leftovers, staged)
 	}
@@ -120,7 +120,7 @@ func TestInstallPortableMissingBinaryKeepsOldFiles(t *testing.T) {
 	if got := readTestFile(t, filepath.Join(dir, "sbtun")); got != "old" {
 		t.Fatalf("sbtun changed to %q", got)
 	}
-	if staged, _ := filepath.Glob(filepath.Join(dir, "*.new")); len(staged) != 0 {
+	if staged, _ := filepath.Glob(filepath.Join(dir, "*.new*")); len(staged) != 0 {
 		t.Fatalf("staged files left: %v", staged)
 	}
 }
@@ -182,6 +182,8 @@ func TestUpdateLeftoverNames(t *testing.T) {
 	for name, want := range map[string]bool{
 		"sbtun.exe.old-abc":    true,
 		"sbtun-cli.new":        true,
+		"sbtun-cli.new-k3x9":   true,
+		"notes.new-k3x9":       false,
 		".sbtun-update-123":    true,
 		"sbtun.app.old-x":      true,
 		"config.json.old-x":    false,

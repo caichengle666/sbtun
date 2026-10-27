@@ -12,7 +12,6 @@ import (
 	"sort"
 	"strconv"
 	"strings"
-	"sync"
 	"time"
 
 	"github.com/caichengle666/sbtun/config"
@@ -208,28 +207,19 @@ type connectionLabeler struct {
 	ruleSets map[string]string
 }
 
-var (
-	ruleSetNamesMu sync.Mutex
-	ruleSetNames   = map[string]string{}
-)
-
 func (a *App) connectionLabeler() connectionLabeler {
 	l := connectionLabeler{}
 	if a.manager != nil {
 		l.cfg, _ = a.manager.Load()
 	}
-	ruleSetNamesMu.Lock()
-	defer ruleSetNamesMu.Unlock()
-	// 别和长时间的操作（测速、更新订阅）抢锁：拿不到就用上次的规则集名称。
-	if a.rulesManager != nil && a.operationMu.TryLock() {
-		names := map[string]string{}
-		for _, set := range a.rulesManager.Sets() {
-			names[set.ID] = set.Name
+	if a.rulesManager != nil {
+		if sets, err := a.rulesManager.Sets(); err == nil {
+			l.ruleSets = make(map[string]string, len(sets))
+			for _, set := range sets {
+				l.ruleSets[set.ID] = set.Name
+			}
 		}
-		a.operationMu.Unlock()
-		ruleSetNames = names
 	}
-	l.ruleSets = ruleSetNames
 	return l
 }
 

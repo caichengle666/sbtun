@@ -138,6 +138,8 @@ func (m *Manager) writeStoredFlows(flows []Flow) error {
 	if err := os.MkdirAll(m.workDir, 0o700); err != nil {
 		return fmt.Errorf("创建抓包目录失败: %w", err)
 	}
+	// sudo/pkexec 下交还调用者，普通用户的 sbtun capture list 也能读。
+	_ = config.ShareWithInvoker(m.workDir, 0o700)
 	data, err := json.Marshal(captureFile{Version: 1, Flows: flows})
 	if err != nil {
 		return fmt.Errorf("编码抓包文件失败: %w", err)
@@ -148,10 +150,6 @@ func (m *Manager) writeStoredFlows(flows []Flow) error {
 	}
 	temporaryPath := temporary.Name()
 	defer os.Remove(temporaryPath)
-	if err := temporary.Chmod(0o600); err != nil {
-		_ = temporary.Close()
-		return fmt.Errorf("设置抓包文件权限失败: %w", err)
-	}
 	if _, err := temporary.Write(data); err != nil {
 		_ = temporary.Close()
 		return fmt.Errorf("写入抓包文件失败: %w", err)
@@ -162,6 +160,9 @@ func (m *Manager) writeStoredFlows(flows []Flow) error {
 	}
 	if err := temporary.Close(); err != nil {
 		return fmt.Errorf("关闭抓包临时文件失败: %w", err)
+	}
+	if err := config.ShareWithInvoker(temporaryPath, 0o600); err != nil {
+		return fmt.Errorf("设置抓包文件权限失败: %w", err)
 	}
 	if err := config.ReplaceConfigFile(temporaryPath, m.storagePath()); err != nil {
 		return fmt.Errorf("替换抓包文件失败: %w", err)

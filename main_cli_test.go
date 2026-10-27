@@ -4,6 +4,7 @@ package main
 
 import (
 	"os"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -99,8 +100,18 @@ func TestValidateCLIArgsForSettingsAndRuleLists(t *testing.T) {
 			t.Fatalf("args=%v accepted", args)
 		}
 	}
-	if !requiresElevation("set", []string{"ipv6", "on"}) || !requiresElevation("custom", []string{"add"}) || requiresElevation("filter", nil) {
+	if !requiresElevation("set", []string{"ipv6", "on"}) || !requiresElevation("custom", []string{"add"}) || !requiresElevation("custom", []string{"edit"}) {
 		t.Fatal("elevation rules wrong")
+	}
+	// 规则集的写命令要提权，和运行中的 root 实例操作同一份文件；只读命令不提权（macOS 一律提权）。
+	if !requiresElevation("rules", []string{"add", "a", "https://x"}) || !requiresElevation("rules", []string{"update-all"}) {
+		t.Fatal("rules writes must elevate")
+	}
+	if readOnly := requiresElevation("filter", nil) || requiresElevation("rules", []string{"list"}); readOnly != (runtime.GOOS == "darwin") {
+		t.Fatal("read-only commands elevation wrong")
+	}
+	if !interactiveCommand("run", nil) || !interactiveCommand("edit", []string{"1"}) || interactiveCommand("edit", []string{"1", "n", "h", "443"}) || interactiveCommand("switch", []string{"1"}) {
+		t.Fatal("interactive commands wrong")
 	}
 }
 

@@ -33,7 +33,7 @@ func TestGeneratedProtocolConfigsPassSingBoxCheck(t *testing.T) {
 	}
 	for _, node := range cases {
 		t.Run(node.ID, func(t *testing.T) {
-			data, err := BuildHealthConfig(node, 18080)
+			data, err := BuildHealthConfig(node, 18080, "u", "p")
 			if err != nil {
 				t.Fatal(err)
 			}
@@ -132,13 +132,17 @@ func TestParseWireGuardReserved(t *testing.T) {
 }
 
 func TestHealthDNSUsesPlatformResolver(t *testing.T) {
-	data, err := BuildHealthConfig(config.Node{ID: "n1", Protocol: "socks", Server: "127.0.0.1", Port: 1080}, 18080)
+	data, err := BuildHealthConfig(config.Node{ID: "n1", Protocol: "socks", Server: "127.0.0.1", Port: 1080}, 18080, "u", "p")
 	if err != nil {
 		t.Fatal(err)
 	}
 	var generated map[string]any
 	if err := json.Unmarshal(data, &generated); err != nil {
 		t.Fatal(err)
+	}
+	inbound := generated["inbounds"].([]any)[0].(map[string]any)
+	if users, _ := inbound["users"].([]any); len(users) != 1 {
+		t.Fatalf("临时代理入站必须带认证: %+v", inbound)
 	}
 	dns := generated["dns"].(map[string]any)
 	servers := dns["servers"].([]any)

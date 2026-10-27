@@ -172,7 +172,7 @@ func runGroupsCommand(application *app.App, args []string) error {
 		if err != nil {
 			return err
 		}
-		err = mutateConfig(application, func(cfg *config.Config) error {
+		err = app.UpdateConfig(application, func(cfg *config.Config) error {
 			for _, existing := range cfg.NodeGroups {
 				if existing.Name == g.Name {
 					return errors.New("已有同名节点组")
@@ -194,7 +194,7 @@ func runGroupsCommand(application *app.App, args []string) error {
 		return err
 	case "delete":
 		index, _ := strconv.Atoi(args[1])
-		err := mutateConfig(application, func(cfg *config.Config) error {
+		err := app.UpdateConfig(application, func(cfg *config.Config) error {
 			if index > len(cfg.NodeGroups) {
 				return fmt.Errorf("节点组编号超出范围: %d", index)
 			}

@@ -5,8 +5,10 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"net/netip"
 	"os"
 	"path/filepath"
+	"slices"
 	"sort"
 	"strings"
 	"sync"
@@ -42,6 +44,9 @@ type RuntimeCoordinator struct {
 	activeConfig    config.Config
 	activeConfigSet bool
 	activeData      []byte // 正在运行的 sing-box 配置内容，用来判断重载是否真有必要
+	// activeResolved 是生成 activeData 时节点域名的解析结果。判断配置是否变化时沿用它，
+	// DNS 轮换或缓存过期换了 IP 不会被当成配置变化而重启、断开所有连接。
+	activeResolved []netip.Addr
 	// LocalAuth protects the clash API and capture proxy ports.
 	LocalAuth singbox.LocalAuth
 	resolver  nodeResolver
@@ -58,7 +63,7 @@ func NewRuntimeCoordinator(workDir, binary string) *RuntimeCoordinator {
 	} else if auth, genErr := newLocalAuth(); genErr == nil {
 		// Still protect the ports for this process even if the shared file
 		// cannot be written; the CLI then cannot reach this instance's API.
-		fmt.Printf("本地认证信息无法保存，仅本进程有效: %v\n", err)
+		fmt.Fprintf(os.Stderr, "本地认证信息无法保存，仅本进程有效: %v\n", err)
 		r.LocalAuth = auth
 	}
 	setClashAPISecret(r.LocalAuth.ClashSecret)
@@ -146,7 +151,7 @@ func (r *RuntimeCoordinator) Reload(ctx context.Context, cfg config.Config) erro
 		return fmt.Errorf("runtime cannot reload from state: %s", state)
 	}
 	// 先校验通过再替换 runtime.json；校验失败时旧配置原样保留，旧进程继续运行。
-	configPath, data, err := r.writeValidatedConfig(ctx, cfg)
+	built, err := r.writeValidatedConfig(ctx, cfg)
 	if err != nil {
 		return fmt.Errorf("%s: %w", ErrConfigInvalid, err)
 	}
@@ -163,7 +168,7 @@ func (r *RuntimeCoordinator) Reload(ctx context.Context, cfg config.Config) erro
 	if err := r.TUN.CleanupRoutes(); err != nil {
 		return r.fail(ErrSingBoxReload, fmt.Errorf("清理旧 TUN 路由失败: %w", err))
 	}
-	return r.launchLocked(ctx, cfg, configPath, data)
+	return r.launchLocked(ctx, cfg, built)
 }
 
 // SyncIfUnchanged 在运行中且新配置生成的 sing-box 配置与正在运行的完全一致时，只写回 runtime.json、不重启，
@@ -171,10 +176,11 @@ func (r *RuntimeCoordinator) Reload(ctx context.Context, cfg config.Config) erro
 func (r *RuntimeCoordinator) SyncIfUnchanged(cfg config.Config) (bool, error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	if r.State == nil || !r.State.IsRunning() || !r.activeConfigSet || captureConfigChanged(r.activeConfig, cfg) {
+	if r.State == nil || !r.State.IsRunning() || !r.activeConfigSet || captureConfigChanged(r.activeConfig, cfg) ||
+		!slices.Equal(singbox.NodeDomains(cfg.Nodes), singbox.NodeDomains(r.activeConfig.Nodes)) {
 		return false, nil
 	}
-	data, err := r.buildConfig(cfg)
+	data, err := r.buildConfig(cfg, r.activeResolved)
 	if err != nil {
 		return false, err
 	}
@@ -196,21 +202,21 @@ func (r *RuntimeCoordinator) onlySelectionChanged(cfg config.Config) bool {
 		return false
 	}
 	cfg.CurrentNodeID = r.activeConfig.CurrentNodeID
-	data, err := r.buildConfig(cfg)
+	data, err := r.buildConfig(cfg, r.activeResolved)
 	return err == nil && bytes.Equal(data, r.activeData)
 }
 
 func (r *RuntimeCoordinator) startConfigLocked(ctx context.Context, cfg config.Config) error {
 	r.State.Set(core.StateStarting, "")
-	configPath, data, err := r.writeValidatedConfig(ctx, cfg)
+	built, err := r.writeValidatedConfig(ctx, cfg)
 	if err != nil {
 		return r.fail(ErrConfigInvalid, err)
 	}
-	return r.launchLocked(ctx, cfg, configPath, data)
+	return r.launchLocked(ctx, cfg, built)
 }
 
 // launchLocked 用已校验并写好的配置启动 sing-box，并按需启停流量分析器。
-func (r *RuntimeCoordinator) launchLocked(ctx context.Context, cfg config.Config, configPath string, data []byte) error {
+func (r *RuntimeCoordinator) launchLocked(ctx context.Context, cfg config.Config, built builtConfig) error {
 	r.State.Set(core.StateStarting, "")
 	if r.Capture != nil {
 		if cfg.CaptureEnabled && len(cfg.CaptureDomains) > 0 {
@@ -221,7 +227,7 @@ func (r *RuntimeCoordinator) launchLocked(ctx context.Context, cfg config.Config
 			return r.fail(ErrCaptureStartFailed, err)
 		}
 	}
-	if err := r.SingBox.Start(ctx, r.Binary, configPath); err != nil {
+	if err := r.SingBox.Start(ctx, r.Binary, r.configPath()); err != nil {
 		return r.fail(ErrSingBoxStartFailed, err)
 	}
 	if r.ReadyCheck != nil {
@@ -247,7 +253,8 @@ func (r *RuntimeCoordinator) launchLocked(ctx context.Context, cfg config.Config
 	r.State.Set(core.StateRunning, "")
 	r.activeConfig = cfg
 	r.activeConfigSet = true
-	r.activeData = data
+	r.activeData = built.data
+	r.activeResolved = built.resolved
 	return nil
 }
 
@@ -287,15 +294,21 @@ func captureConfigChanged(before, after config.Config) bool {
 	return false
 }
 
-func (r *RuntimeCoordinator) buildConfig(cfg config.Config) ([]byte, error) {
-	return singbox.BuildConfigWithAuth(cfg, r.resourceDir(), r.LocalAuth, r.resolver.resolve(cfg.Nodes))
+// builtConfig 是一份生成好的 sing-box 配置和生成时用到的节点解析结果。
+type builtConfig struct {
+	data     []byte
+	resolved []netip.Addr
+}
+
+func (r *RuntimeCoordinator) buildConfig(cfg config.Config, resolved []netip.Addr) ([]byte, error) {
+	return singbox.BuildConfigWithAuth(cfg, r.resourceDir(), r.LocalAuth, resolved)
 }
 
 func (r *RuntimeCoordinator) configPath() string { return filepath.Join(r.WorkDir, "runtime.json") }
 
 // SyncConfig 生成并原子写入 runtime.json，不做 sing-box 校验（未运行时保存配置用）。
 func (r *RuntimeCoordinator) SyncConfig(cfg config.Config) (string, error) {
-	data, err := r.buildConfig(cfg)
+	data, err := r.buildConfig(cfg, r.resolver.resolve(cfg.Nodes))
 	if err != nil {
 		return "", err
 	}
@@ -310,24 +323,25 @@ func (r *RuntimeCoordinator) SyncConfig(cfg config.Config) (string, error) {
 
 // writeValidatedConfig 把配置写到临时文件，sing-box check 通过后才替换 runtime.json；
 // 任何一步失败都保留旧的 runtime.json，避免之后每次启动和内核升级校验都被坏配置卡住。
-func (r *RuntimeCoordinator) writeValidatedConfig(ctx context.Context, cfg config.Config) (string, []byte, error) {
+func (r *RuntimeCoordinator) writeValidatedConfig(ctx context.Context, cfg config.Config) (builtConfig, error) {
 	if err := config.Validate(cfg); err != nil {
-		return "", nil, err
+		return builtConfig{}, err
 	}
-	data, err := r.buildConfig(cfg)
-	if err != nil {
-		return "", nil, err
+	built := builtConfig{resolved: r.resolver.resolve(cfg.Nodes)}
+	var err error
+	if built.data, err = r.buildConfig(cfg, built.resolved); err != nil {
+		return builtConfig{}, err
 	}
 	if err := os.MkdirAll(r.WorkDir, 0o755); err != nil {
-		return "", nil, fmt.Errorf("创建运行目录失败: %w", err)
+		return builtConfig{}, fmt.Errorf("创建运行目录失败: %w", err)
 	}
-	err = atomicWrite(r.configPath(), data, func(tmp string) error {
+	err = atomicWrite(r.configPath(), built.data, func(tmp string) error {
 		return singbox.ValidateConfig(ctx, r.Binary, tmp)
 	})
 	if err != nil {
-		return "", nil, err
+		return builtConfig{}, err
 	}
-	return r.configPath(), data, nil
+	return built, nil
 }
 
 func (r *RuntimeCoordinator) resourceDir() string {
@@ -397,6 +411,7 @@ func (r *RuntimeCoordinator) Stop() error {
 	r.activeConfig = config.Config{}
 	r.activeConfigSet = false
 	r.activeData = nil
+	r.activeResolved = nil
 	return nil
 }
 
@@ -447,6 +462,10 @@ func atomicWrite(path string, data []byte, check func(tmp string) error) error {
 		if err := check(name); err != nil {
 			return err
 		}
+	}
+	// 含本地认证密钥，只有本人可读；sudo/pkexec 下交还调用者（内核更新校验要读它）。
+	if err := config.ShareWithInvoker(name, 0o600); err != nil {
+		return err
 	}
 	if err := config.ReplaceConfigFile(name, path); err != nil {
 		return fmt.Errorf("替换运行配置失败: %w", err)

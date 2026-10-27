@@ -46,10 +46,13 @@ func (a *App) SingBoxVersion() (string, error) {
 	return readSingBoxVersion(ctx, a.binary)
 }
 
+// UpdateSingBox 下载、写候选文件和校验都在 operationMu 外（最长 5 分钟，可随退出取消），
+// 锁内只做停止、替换、启动，不卡住切换节点、自动切换和退出。
 func (a *App) UpdateSingBox() (SingBoxUpdateResult, error) {
-	a.operationMu.Lock()
-	defer a.operationMu.Unlock()
-
+	if !a.kernelUpdateMu.TryLock() {
+		return SingBoxUpdateResult{}, errors.New("正在更新内核，请稍候")
+	}
+	defer a.kernelUpdateMu.Unlock()
 	if a.binary == "" {
 		return SingBoxUpdateResult{}, errors.New("sing-box 路径未初始化")
 	}
@@ -61,11 +64,7 @@ func (a *App) UpdateSingBox() (SingBoxUpdateResult, error) {
 		return SingBoxUpdateResult{}, fmt.Errorf("暂不支持 %s 架构的 sing-box 更新", runtime.GOARCH)
 	}
 
-	ctx := a.ctx
-	if ctx == nil {
-		ctx = context.Background()
-	}
-	ctx, cancel := context.WithTimeout(ctx, 5*time.Minute)
+	ctx, cancel := context.WithTimeout(a.baseContext(), 5*time.Minute)
 	defer cancel()
 	var err error
 	current := ""
@@ -107,6 +106,12 @@ func (a *App) UpdateSingBox() (SingBoxUpdateResult, error) {
 	defer os.Remove(tempPath)
 	if err := validateSingBoxCandidate(ctx, tempPath, filepath.Join(a.workDir, "runtime.json")); err != nil {
 		return result, err
+	}
+
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	if a.closing {
+		return result, errClosing
 	}
 
 	wasRunning := a.runtime != nil && a.runtime.State != nil && a.runtime.State.IsRunning()

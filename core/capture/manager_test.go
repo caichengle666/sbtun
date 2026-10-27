@@ -426,3 +426,49 @@ func TestManagerPersistsFlowsAndHonorsClearAcrossInstances(t *testing.T) {
 		t.Fatalf("flows after clear=%d err=%v", len(flows), err)
 	}
 }
+
+// 停止分析器时要关掉已经 Hijack 出去的 CONNECT 隧道，长连接不能继续走分析代理。
+func TestStopClosesHijackedTunnels(t *testing.T) {
+	echo, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer echo.Close()
+	go func() {
+		for {
+			conn, err := echo.Accept()
+			if err != nil {
+				return
+			}
+			go func() { _, _ = io.Copy(conn, conn) }()
+		}
+	}()
+	manager := NewManager(t.TempDir(), "127.0.0.1:0", "")
+	if err := manager.Start(context.Background(), []string{"unmatched.invalid"}); err != nil {
+		t.Fatal(err)
+	}
+	conn, err := net.Dial("tcp", manager.listener.Addr().String())
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer conn.Close()
+	target := "localhost:" + strings.TrimPrefix(echo.Addr().String(), "127.0.0.1:")
+	_, _ = conn.Write([]byte("CONNECT " + target + " HTTP/1.1\r\nHost: " + target + "\r\n\r\n"))
+	reader := bufio.NewReader(conn)
+	resp, err := http.ReadResponse(reader, &http.Request{Method: http.MethodConnect})
+	if err != nil || resp.StatusCode != http.StatusOK {
+		t.Fatalf("CONNECT resp=%v err=%v", resp, err)
+	}
+	_, _ = conn.Write([]byte("ping"))
+	buf := make([]byte, 4)
+	if _, err := io.ReadFull(reader, buf); err != nil || string(buf) != "ping" {
+		t.Fatalf("tunnel echo=%q err=%v", buf, err)
+	}
+	if err := manager.Stop(); err != nil {
+		t.Fatal(err)
+	}
+	_ = conn.SetReadDeadline(time.Now().Add(3 * time.Second))
+	if _, err := reader.ReadByte(); err == nil || errors.Is(err, os.ErrDeadlineExceeded) {
+		t.Fatalf("停止后隧道仍然打开: %v", err)
+	}
+}

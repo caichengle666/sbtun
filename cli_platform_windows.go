@@ -3,21 +3,50 @@
 package main
 
 import (
+	"bytes"
+	"errors"
 	"fmt"
 	"os"
 	"os/exec"
-	"path/filepath"
-	"strconv"
 	"strings"
-	"time"
+	"syscall"
 
-	"github.com/caichengle666/sbtun/app"
 	"golang.org/x/sys/windows"
 )
 
 func cliSignals() []os.Signal { return []os.Signal{os.Interrupt} }
 
-func relaunchElevated() error {
+// 提权后的进程开在新控制台窗口里，执行完就关；父进程用这个前置参数给它一个文件收集输出，结束后回显。
+// 用参数不用环境变量：经 UAC 提权的进程不一定继承父进程设置的环境变量。
+const elevatedLogFlag = "--sbtun-elevated-log="
+
+// errorCancelled 是父进程约定的退出码：用户在 UAC 里点了“否”或提权失败（sbtun 自己只用 0、1、2）。
+const errorCancelled = 1223
+
+func redirectElevatedOutput() {
+	if len(os.Args) < 2 || !strings.HasPrefix(os.Args[1], elevatedLogFlag) {
+		return
+	}
+	path := strings.TrimPrefix(os.Args[1], elevatedLogFlag)
+	os.Args = append(os.Args[:1], os.Args[2:]...)
+	if file, err := os.OpenFile(path, os.O_WRONLY|os.O_APPEND, 0); err == nil {
+		os.Stdout, os.Stderr = file, file
+	}
+}
+
+// elevatedArguments 把参数拼成 Windows 命令行（Start-Process 的 -ArgumentList 数组不给元素加引号，
+// 带空格的参数会被拆开、空参数会丢），再写成 PowerShell 单引号字符串。
+func elevatedArguments(args []string) string {
+	quoted := make([]string, len(args))
+	for i, arg := range args {
+		quoted[i] = syscall.EscapeArg(arg)
+	}
+	return psQuote(strings.Join(quoted, " "))
+}
+
+func psQuote(s string) string { return "'" + strings.ReplaceAll(s, "'", "''") + "'" }
+
+func relaunchElevated(command string, args []string) error {
 	if windows.GetCurrentProcessToken().IsElevated() {
 		return nil
 	}
@@ -28,59 +57,45 @@ func relaunchElevated() error {
 	if err != nil {
 		return fmt.Errorf("获取 CLI 路径失败: %w", err)
 	}
-	quotedArgs := make([]string, 0, len(os.Args))
-	quotedArgs = append(quotedArgs, "'"+strings.ReplaceAll(exe, "'", "''")+"'")
-	for _, arg := range os.Args[1:] {
-		quotedArgs = append(quotedArgs, "'"+strings.ReplaceAll(arg, "'", "''")+"'")
+	// 前台运行和交互式编辑要在新窗口里看输出、输入，不收集。
+	childArgs := os.Args[1:]
+	logPath := ""
+	if !interactiveCommand(command, args) {
+		log, err := os.CreateTemp("", "sbtun-elevated-*.log")
+		if err != nil {
+			return fmt.Errorf("创建输出文件失败: %w", err)
+		}
+		log.Close()
+		logPath = log.Name()
+		childArgs = append([]string{elevatedLogFlag + logPath}, childArgs...)
 	}
-	script := "$env:SBTUN_ELEVATED='1'; Start-Process -FilePath " + quotedArgs[0] + " -ArgumentList @(" + strings.Join(quotedArgs[1:], ",") + ") -Verb RunAs -Wait"
+	script := "$env:SBTUN_ELEVATED='1'; try { $p = Start-Process -FilePath " + psQuote(exe) + " -ArgumentList " + elevatedArguments(childArgs) +
+		" -Verb RunAs -Wait -PassThru -ErrorAction Stop } catch { [Console]::Error.WriteLine($_.Exception.Message); exit " +
+		fmt.Sprint(errorCancelled) + " }; exit $p.ExitCode"
 	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
-	if output, err := cmd.CombinedOutput(); err != nil {
-		return fmt.Errorf("请求管理员权限失败: %w: %s", err, strings.TrimSpace(string(output)))
+	var stderr bytes.Buffer
+	cmd.Stderr = &stderr
+	runErr := cmd.Run()
+	code := 0
+	var exitErr *exec.ExitError
+	if errors.As(runErr, &exitErr) {
+		code = exitErr.ExitCode()
+	} else if runErr != nil {
+		os.Remove(logPath)
+		return fmt.Errorf("请求管理员权限失败: %w", runErr)
 	}
-	os.Exit(0)
+	if logPath != "" {
+		output, _ := os.ReadFile(logPath)
+		os.Remove(logPath)
+		if code == 0 {
+			os.Stdout.Write(output)
+		} else {
+			os.Stderr.Write(output)
+		}
+	}
+	if code == errorCancelled {
+		return fmt.Errorf("请求管理员权限失败: %s", strings.TrimSpace(stderr.String()))
+	}
+	os.Exit(code)
 	return nil
-}
-
-func stopRunningInstance() error {
-	exe, err := os.Executable()
-	if err != nil {
-		return err
-	}
-	dir := strings.ReplaceAll(filepath.Dir(exe), "'", "''")
-	myPID := strconv.Itoa(os.Getpid())
-	script := "$p=Get-CimInstance Win32_Process | Where-Object { ($_.Name -eq 'sbtun.exe' -or $_.Name -eq 'sbtun-cli.exe') -and $_.ExecutablePath -and (Split-Path $_.ExecutablePath -Parent) -eq '" + dir + "' -and $_.ProcessId -ne " + myPID + " }; if(-not $p){exit 3}; $p.ProcessId"
-	cmd := exec.Command("powershell.exe", "-NoProfile", "-NonInteractive", "-Command", script)
-	output, err := cmd.CombinedOutput()
-	if err != nil {
-		return fmt.Errorf("停止 sbtun 失败: %w: %s", err, strings.TrimSpace(string(output)))
-	}
-	pidText := strings.TrimSpace(string(output))
-	pidFields := strings.Fields(pidText)
-	if len(pidFields) == 0 {
-		return fmt.Errorf("停止 sbtun 失败: 未找到运行实例 PID")
-	}
-	pid, err := strconv.ParseUint(pidFields[0], 10, 32)
-	if err != nil {
-		return fmt.Errorf("读取运行实例 PID 失败: %w", err)
-	}
-	handle, err := windows.OpenProcess(windows.SYNCHRONIZE, false, uint32(pid))
-	if err != nil {
-		return fmt.Errorf("等待 sbtun 退出失败: %w", err)
-	}
-	defer windows.CloseHandle(handle)
-	if err := app.RequestRunningInstanceStop(); err != nil {
-		return fmt.Errorf("发送停止请求失败: %w", err)
-	}
-	deadline := time.Now().Add(10 * time.Second)
-	for time.Now().Before(deadline) {
-		status, waitErr := windows.WaitForSingleObject(handle, 100)
-		if waitErr != nil {
-			return fmt.Errorf("等待 sbtun 退出失败: %w", waitErr)
-		}
-		if status == windows.WAIT_OBJECT_0 {
-			return nil
-		}
-	}
-	return fmt.Errorf("等待 sbtun 正常退出超时")
 }

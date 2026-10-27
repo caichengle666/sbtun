@@ -21,6 +21,7 @@ import (
 )
 
 func main() {
+	redirectElevatedOutput()
 	command, commandArgs, ok := parseCLIArgs(os.Args)
 	if !ok {
 		printHelp()
@@ -46,38 +47,37 @@ func main() {
 		fmt.Fprintln(os.Stderr, "edit 交互模式需要交互式终端；请直接在终端运行，或使用完整参数形式")
 		os.Exit(2)
 	}
-	ctx, stop := signal.NotifyContext(context.Background(), cliSignals()...)
-	defer stop()
-	application := app.New()
-	application.StartupCLI(ctx)
-	var err error
-	captureRun := command == "capture" && len(commandArgs) > 0 && commandArgs[0] == "run"
 	if requiresElevation(command, commandArgs) {
-		if err := relaunchElevated(); err != nil {
+		if err := relaunchElevated(command, commandArgs); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 	}
-	if captureRun {
-		if err := enableCapture(application, commandArgs[1:]); err != nil {
-			fmt.Fprintln(os.Stderr, err)
-			os.Exit(2)
-		}
-	}
+	ctx, stop := signal.NotifyContext(context.Background(), cliSignals()...)
+	defer stop()
+	application := app.New()
+	var err error
+	captureRun := command == "capture" && len(commandArgs) > 0 && commandArgs[0] == "run"
 	if command == "run" || command == "start" || captureRun {
-		application.StartMonitoring()
-	}
-	if command == "run" || command == "start" || captureRun {
+		// 先拿单实例锁：已经有实例在运行时不能改配置（打开抓包）或启动后台任务。
 		release, err := app.AcquireSingleInstance()
 		if err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
 		}
 		defer release()
+		application.StartupCLI(ctx)
+		if captureRun {
+			if err := enableCapture(application, commandArgs[1:]); err != nil {
+				fmt.Fprintln(os.Stderr, err)
+				os.Exit(2)
+			}
+		}
 		if err := application.ClearStopRequest(); err != nil {
 			fmt.Fprintln(os.Stderr, "清理旧停止请求失败:", err)
 			os.Exit(1)
 		}
+		application.StartMonitoring()
 		if err := application.Start(); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -107,6 +107,7 @@ func main() {
 		}
 		return
 	}
+	application.StartupCLI(ctx)
 	switch command {
 	case "status":
 		cfg, loadErr := application.LoadConfig()
@@ -554,11 +555,18 @@ func validateCaptureArgs(args []string) error {
 }
 
 func requiresElevation(command string, args []string) bool {
+	// macOS 的数据目录在 /Library/Application Support/sbtun，界面经 osascript 提权运行，
+	// 文件都属 root，不提权连配置都读不了。
+	if runtime.GOOS == "darwin" {
+		return true
+	}
 	switch command {
 	case "run", "start", "stop", "route", "auto-switch", "add-node", "add-rule", "switch", "del", "delete", "edit", "set", "upgrade":
 		return true
 	case "custom", "filter", "groups":
-		return len(args) > 0 && (args[0] == "add" || args[0] == "delete")
+		return len(args) > 0 && (args[0] == "add" || args[0] == "edit" || args[0] == "delete")
+	case "rules":
+		return len(args) > 0 && args[0] != "list"
 	case "capture":
 		if len(args) == 0 {
 			return false
@@ -569,6 +577,19 @@ func requiresElevation(command string, args []string) bool {
 		}
 	default:
 		return false
+	}
+	return false
+}
+
+// interactiveCommand 说明命令要占着终端（前台运行、交互式编辑），提权后不能收集它的输出。
+func interactiveCommand(command string, args []string) bool {
+	switch command {
+	case "run", "start":
+		return true
+	case "capture":
+		return len(args) > 0 && args[0] == "run"
+	case "edit":
+		return len(args) <= 1
 	}
 	return false
 }
@@ -819,7 +840,11 @@ func runSubsCommand(application *app.App, args []string) error {
 func runRulesCommand(application *app.App, args []string) error {
 	cfg := application.GetConfig()
 	if len(args) == 0 || args[0] == "list" {
-		for _, rule := range application.ListRules() {
+		list, err := application.ListRules()
+		if err != nil {
+			return err
+		}
+		for _, rule := range list {
 			state := "已启用"
 			if !rule.Enabled {
 				state = "已停用"
@@ -858,7 +883,11 @@ func runRulesCommand(application *app.App, args []string) error {
 			return err
 		}
 		if action == "" {
-			for _, rule := range application.ListRules() {
+			list, err := application.ListRules()
+			if err != nil {
+				return err
+			}
+			for _, rule := range list {
 				if rule.ID == args[1] {
 					action = rule.Action
 				}
@@ -961,18 +990,16 @@ func runCaptureCommand(application *app.App, args []string) error {
 		if err := enableCapture(application, args[1:]); err != nil {
 			return err
 		}
-		fmt.Println("抓包已启用；运行 sbtun capture run 可立即启动")
+		fmt.Println("抓包已启用：运行中的 sbtun 立即生效，未运行时用 sbtun capture run 启动")
 		return nil
 	case "disable":
-		cfg, err := application.LoadConfig()
-		if err != nil {
+		if err := app.UpdateConfig(application, func(cfg *config.Config) error {
+			cfg.CaptureEnabled = false
+			return nil
+		}); err != nil {
 			return err
 		}
-		cfg.CaptureEnabled = false
-		if err := application.SaveConfig(cfg); err != nil {
-			return err
-		}
-		fmt.Println("抓包已关闭，下次启动生效")
+		fmt.Println("抓包已关闭，运行中的 sbtun 立即生效")
 		return nil
 	case "status":
 		cfg, err := application.LoadConfig()
@@ -1056,18 +1083,35 @@ func runCaptureCommand(application *app.App, args []string) error {
 }
 
 func enableCapture(application *app.App, patterns []string) error {
-	cfg, err := application.LoadConfig()
-	if err != nil {
-		return err
+	return app.UpdateConfig(application, func(cfg *config.Config) error {
+		if normalized := normalizeCapturePatterns(patterns); len(normalized) > 0 {
+			cfg.CaptureDomains = normalized
+		}
+		if len(cfg.CaptureDomains) == 0 {
+			return fmt.Errorf("至少需要一个抓包域名或关键词")
+		}
+		cfg.CaptureEnabled = true
+		return nil
+	})
+}
+
+// stopRunningInstance 请求运行中的实例（界面或 sbtun run）退出，等它释放单实例锁。
+// 不按进程名和 PID 猜：Windows 上提权前的父进程也叫 sbtun-cli.exe，会等错进程。
+func stopRunningInstance() error {
+	if release, err := app.AcquireSingleInstance(); err == nil {
+		release()
+		return errors.New("没有运行中的 sbtun 实例")
 	}
-	if normalized := normalizeCapturePatterns(patterns); len(normalized) > 0 {
-		cfg.CaptureDomains = normalized
+	if err := app.RequestRunningInstanceStop(); err != nil {
+		return fmt.Errorf("发送停止请求失败: %w", err)
 	}
-	if len(cfg.CaptureDomains) == 0 {
-		return fmt.Errorf("至少需要一个抓包域名或关键词")
+	for deadline := time.Now().Add(10 * time.Second); time.Now().Before(deadline); time.Sleep(100 * time.Millisecond) {
+		if release, err := app.AcquireSingleInstance(); err == nil {
+			release()
+			return nil
+		}
 	}
-	cfg.CaptureEnabled = true
-	return application.SaveConfig(cfg)
+	return errors.New("等待 sbtun 正常退出超时")
 }
 
 func normalizeCapturePatterns(values []string) []string {

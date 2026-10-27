@@ -8,14 +8,14 @@ import (
 
 const configWatchInterval = time.Second
 
-// watchConfigFile 让运行中的实例（GUI 或 sbtun run）应用别的进程对 config.json 的修改，
-// 比如另开终端执行 sbtun custom add / groups add / route。生成的 sing-box 配置没变时不重启，
-// 所以自己保存配置触发的检测是无害的。
+// watchConfigFile 让运行中的实例（GUI 或 sbtun run）应用别的进程对 config.json 和规则集清单 sets.json 的修改，
+// 比如另开终端执行 sbtun custom add / groups add / route / rules add。生成的 sing-box 配置没变时不重启，
+// 所以自己保存触发的检测是无害的。
 func (a *App) watchConfigFile() {
 	if a.ctx == nil || a.manager == nil {
 		return
 	}
-	last := configStamp(a.manager.Path)
+	last := a.watchStamp()
 	ticker := time.NewTicker(configWatchInterval)
 	defer ticker.Stop()
 	for {
@@ -24,7 +24,7 @@ func (a *App) watchConfigFile() {
 			return
 		case <-ticker.C:
 		}
-		stamp := configStamp(a.manager.Path)
+		stamp := a.watchStamp()
 		if stamp == last {
 			continue
 		}
@@ -46,6 +46,14 @@ func (a *App) applyExternalConfig() error {
 		return err
 	}
 	return a.applyRuntimeConfigLocked(cfg, true, true)
+}
+
+func (a *App) watchStamp() string {
+	stamp := configStamp(a.manager.Path)
+	if a.rulesManager != nil {
+		stamp += "|" + configStamp(a.rulesManager.StatePath())
+	}
+	return stamp
 }
 
 // configStamp 用修改时间和大小判断文件是否被改过；读不到时返回空串。

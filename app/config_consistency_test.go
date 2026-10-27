@@ -147,3 +147,24 @@ func TestSetAutoSwitchPersists(t *testing.T) {
 		t.Fatal("auto switch should be enabled again")
 	}
 }
+
+// UpdateConfig 在文件锁里读最新配置再改，不会把别的进程刚写入的修改覆盖回去。
+func TestUpdateConfigKeepsConcurrentChanges(t *testing.T) {
+	a := newSubscriptionTestApp(t)
+	cfg := config.Default()
+	cfg.Nodes = []config.Node{{ID: "a", Name: "a", Protocol: "socks", Server: "127.0.0.1", Port: 1080}, {ID: "b", Name: "b", Protocol: "socks", Server: "127.0.0.1", Port: 1081}}
+	cfg.CurrentNodeID = "a"
+	if err := a.manager.Save(cfg); err != nil {
+		t.Fatal(err)
+	}
+	other := config.NewManager(a.manager.Path) // 运行中的实例自动切换了节点
+	if err := other.Update(func(_ config.Config, next *config.Config) error { next.CurrentNodeID = "b"; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if err := UpdateConfig(a, func(c *config.Config) error { c.IPv6Enabled = true; return nil }); err != nil {
+		t.Fatal(err)
+	}
+	if got := a.GetConfig(); got.CurrentNodeID != "b" || !got.IPv6Enabled {
+		t.Fatalf("got current=%s ipv6=%v", got.CurrentNodeID, got.IPv6Enabled)
+	}
+}

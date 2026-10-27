@@ -3,11 +3,14 @@ package app
 import (
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"sync/atomic"
 	"testing"
 
 	"github.com/caichengle666/sbtun/config"
+	"github.com/caichengle666/sbtun/core/rules"
 	"golang.org/x/net/webdav"
 )
 
@@ -225,5 +228,62 @@ func TestAutoBackupOnlyUploadsSettledChanges(t *testing.T) {
 	}
 	if puts.Load() != 1 {
 		t.Fatalf("puts=%d", puts.Load())
+	}
+}
+
+// v0.3.19 ~ v0.3.3x 的备份里路由模式可能是已取消的 custom，必须先迁移再校验，否则旧备份恢复不了。
+func TestDecodeBackupMigratesCustomRoutingMode(t *testing.T) {
+	cfg := config.Default()
+	cfg.RoutingMode = "custom"
+	data, err := encodeBackup(backupPayload{App: "sbtun", Version: 1, Config: cfg}, "")
+	if err != nil {
+		t.Fatal(err)
+	}
+	payload, err := decodeBackup(data, "")
+	if err != nil {
+		t.Fatalf("旧备份无法恢复: %v", err)
+	}
+	if err := config.Validate(payload.Config); err != nil {
+		t.Fatal(err)
+	}
+}
+
+// 配置恢复失败时，已经换上的规则集要换回去，不留一半新一半旧。
+func TestRestoreRollsBackRuleSetsWhenConfigFails(t *testing.T) {
+	dav, _ := newWebDAVTestServer(t)
+	dir := t.TempDir()
+	blocker := filepath.Join(dir, "blocked")
+	if err := os.WriteFile(blocker, nil, 0o600); err != nil {
+		t.Fatal(err)
+	}
+	a := New()
+	a.manager = config.NewManager(filepath.Join(dir, "config.json"))
+	a.runtime = NewRuntimeCoordinator(filepath.Join(blocker, "runtime-data"), "sing-box") // 运行配置写不进去
+	a.rulesManager = rules.NewManager(filepath.Join(dir, "rules"))
+	if err := a.rulesManager.SetEnabled("geosite-cn", false); err != nil {
+		t.Fatal(err)
+	}
+	before, _ := a.rulesManager.Sets()
+	settings := config.WebDAVSettings{URL: dav.URL + "/rollback", Username: "u", Password: "p"}
+	if err := a.SaveWebDAVSettings(settings); err != nil {
+		t.Fatal(err)
+	}
+	cfg := config.Default()
+	cfg.Nodes = []config.Node{{ID: "n", Name: "n", Protocol: "socks", Server: "127.0.0.1", Port: 1080}}
+	cfg.CurrentNodeID = "n"
+	if err := os.WriteFile(filepath.Join(dir, "rules", "ads.srs"), []byte("x"), 0o644); err != nil {
+		t.Fatal(err)
+	}
+	name, err := uploadBackup(settings, backupPayload{App: "sbtun", Version: 1, Config: cfg,
+		RuleSets: []rules.RuleSet{{ID: "ads", Name: "ads", URL: "https://example.com/ads.srs", Path: "ads.srs", Enabled: true}}})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if _, err := a.RestoreFromWebDAV(name); err == nil {
+		t.Fatal("运行配置写不进去时恢复应失败")
+	}
+	after, _ := a.rulesManager.Sets()
+	if len(after) != len(before) || after[0].Enabled != before[0].Enabled {
+		t.Fatalf("规则集没有回滚: %+v", after)
 	}
 }

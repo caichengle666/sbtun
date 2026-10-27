@@ -233,3 +233,7 @@ func (m *Manager) SetGenerationForTest(generation uint64) {
 		m.generation = generation
 	}
 }
+
+// StartProcess starts cmd bound to sbtun's lifetime (Pdeathsig on Linux, a
+// kill-on-close Job on Windows), so a crash never leaves sing-box behind.
+func StartProcess(cmd *exec.Cmd) error { return startProcess(cmd) }

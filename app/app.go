@@ -33,6 +33,8 @@ type App struct {
 	closing         bool                   // Shutdown 已开始，由 operationMu 保护；之后不再启动或重载代理
 	shutdownOnce    sync.Once
 	operationMu     sync.Mutex
+	kernelUpdateMu  sync.Mutex // 内核下载在 operationMu 外进行，靠它防止并发更新
+	appUpdateMu     sync.Mutex // 程序自更新同一时间只允许一个
 	trafficMu       sync.RWMutex
 	failoverMu      sync.Mutex
 	failover        failoverState
@@ -95,7 +97,10 @@ func (a *App) StartMonitoring() {
 func (a *App) startupCore(ctx context.Context) {
 	a.ctx = ctx
 	a.initPaths()
+	// 旧版本在 sudo/pkexec 下以 root 建的文件交还给调用者，否则之后不提权的 CLI 命令读不了。
+	config.ShareTreeWithInvoker(a.workDir)
 	a.initRuntime("")
+	config.ShareTreeWithInvoker(filepath.Dir(a.rulesManager.StatePath()))
 }
 
 // initRuntime 创建运行时和规则管理器；resourceDir 为空时规则放在 sing-box 所在目录。
@@ -427,6 +432,17 @@ func (a *App) SaveConfig(cfg config.Config) error {
 	}, true)
 }
 
+// UpdateConfig 在配置文件锁里读出最新配置、修改、保存并同步运行配置。CLI 用它改配置，
+// 不会把运行中实例刚写入的修改（自动切换的当前节点、订阅更新、测速落地）覆盖回去。
+// 写成包函数而不是方法：App 的导出方法会被 Wails 和安卓桥绑定给前端，函数参数没法绑定。
+func UpdateConfig(a *App, mutate func(*config.Config) error) error {
+	a.operationMu.Lock()
+	defer a.operationMu.Unlock()
+	return a.mutateConfigAndSyncLocked(func(_ config.Config, next *config.Config) error {
+		return mutate(next)
+	}, true)
+}
+
 func (a *App) SetCaptureSettings(enabled bool, domains []string) error {
 	a.operationMu.Lock()
 	defer a.operationMu.Unlock()
@@ -537,6 +553,16 @@ func (a *App) applyRuntimeConfigLocked(next config.Config, wasRunning, reload bo
 		return fmt.Errorf("生成运行配置失败: %w", err)
 	}
 	return nil
+}
+
+// resyncRuntimeLocked 按磁盘上的配置和规则集重新对齐运行配置（规则集回滚之后用），没变就不重启。
+func (a *App) resyncRuntimeLocked() {
+	if a.manager == nil || a.runtime == nil || a.runtime.State == nil {
+		return
+	}
+	if cfg, err := a.manager.Load(); err == nil {
+		_ = a.applyRuntimeConfigLocked(cfg, a.runtime.State.IsRunning(), true)
+	}
 }
 
 func (a *App) rollbackConfigAndRuntimeLocked(before config.Config, wasRunning bool) error {
@@ -1091,115 +1117,6 @@ func (a *App) checkReady(ctx context.Context) error {
 func fileExists(path string) bool {
 	info, err := os.Stat(path)
 	return err == nil && !info.IsDir()
-}
-
-func (a *App) ListRules() []rules.RuleInfo {
-	a.operationMu.Lock()
-	defer a.operationMu.Unlock()
-	if a.rulesManager == nil {
-		return nil
-	}
-	return a.rulesManager.List()
-}
-
-func (a *App) AddRuleSet(name, url, action string) error {
-	a.operationMu.Lock()
-	defer a.operationMu.Unlock()
-	if a.rulesManager == nil {
-		return errors.New("规则管理器未初始化")
-	}
-	if err := a.rulesManager.AddAndUpdate(name, url, action, a.validateRuleSet); err != nil {
-		return err
-	}
-	return a.reloadIfRunningLocked()
-}
-
-func (a *App) EditRuleSet(id, name, url, action string) error {
-	a.operationMu.Lock()
-	defer a.operationMu.Unlock()
-	if a.rulesManager == nil {
-		return errors.New("规则管理器未初始化")
-	}
-	if err := a.rulesManager.EditAndUpdate(id, name, url, action, a.validateRuleSet); err != nil {
-		return err
-	}
-	return a.reloadIfRunningLocked()
-}
-
-// SetRuleSetAction 修改用户规则集命中后的去向（屏蔽、代理、直连或节点/节点组等）。
-func (a *App) SetRuleSetAction(id, action string) error {
-	a.operationMu.Lock()
-	defer a.operationMu.Unlock()
-	if a.rulesManager == nil {
-		return errors.New("规则管理器未初始化")
-	}
-	if err := a.rulesManager.SetAction(id, action); err != nil {
-		return err
-	}
-	return a.reloadIfRunningLocked()
-}
-
-func (a *App) SetRuleEnabled(id string, enabled bool) error {
-	a.operationMu.Lock()
-	defer a.operationMu.Unlock()
-	if a.rulesManager == nil {
-		return errors.New("规则管理器未初始化")
-	}
-	if err := a.rulesManager.SetEnabled(id, enabled); err != nil {
-		return err
-	}
-	return a.reloadIfRunningLocked()
-}
-
-func (a *App) DeleteRuleSet(id string) error {
-	a.operationMu.Lock()
-	defer a.operationMu.Unlock()
-	if a.rulesManager == nil {
-		return errors.New("规则管理器未初始化")
-	}
-	if err := a.rulesManager.Delete(id); err != nil {
-		return err
-	}
-	return a.reloadIfRunningLocked()
-}
-
-func (a *App) RestoreDefaultRuleSets() error {
-	a.operationMu.Lock()
-	defer a.operationMu.Unlock()
-	if a.rulesManager == nil {
-		return errors.New("规则管理器未初始化")
-	}
-	restoreErr := a.rulesManager.RestoreDefaultsWithValidation(a.validateRuleSet)
-	reloadErr := a.reloadIfRunningLocked()
-	if restoreErr != nil {
-		return restoreErr
-	}
-	return reloadErr
-}
-
-func (a *App) UpdateRule(id string) error {
-	a.operationMu.Lock()
-	defer a.operationMu.Unlock()
-	if a.rulesManager == nil {
-		return errors.New("规则管理器未初始化")
-	}
-	if err := a.rulesManager.UpdateWithValidation(id, a.validateRuleSet); err != nil {
-		return err
-	}
-	return a.reloadIfRunningLocked()
-}
-
-func (a *App) UpdateAllRules() []error {
-	a.operationMu.Lock()
-	defer a.operationMu.Unlock()
-	if a.rulesManager == nil {
-		return []error{errors.New("规则管理器未初始化")}
-	}
-	errs := a.rulesManager.UpdateAllWithValidation(a.validateRuleSet)
-	if err := a.reloadIfRunningLocked(); err != nil {
-		errs = append(errs, err)
-	}
-	return errs
 }
 
 func (a *App) Ping() string { return "sbtun 运行正常" }
