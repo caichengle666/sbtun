@@ -14,18 +14,29 @@ import org.json.JSONObject
 // 页面通过 SbtunNative.call 调用 Go 后端或少量系统能力，结果经 window.__sbtunResolve 回传。
 class Bridge(private val activity: MainActivity, private val web: WebView) {
     private val pool = Executors.newCachedThreadPool()
+    @Volatile private var closed = false
 
+    // id 由页面生成（带页面加载标记），原样回传，页面重载后旧结果不会投给新请求。
     @JavascriptInterface
-    fun call(id: Int, kind: String, name: String, argsJson: String) {
+    fun call(id: String, kind: String, name: String, argsJson: String) {
         pool.execute {
             val result = try {
                 dispatch(kind, name, argsJson)
             } catch (e: Exception) {
                 fail(e.message ?: e.toString())
             }
-            web.post { web.evaluateJavascript("window.__sbtunResolve($id, ${JSONObject.quote(result)})", null) }
+            if (!closed) web.post { if (!closed) web.evaluateJavascript("window.__sbtunResolve(${js(id)}, ${js(result)})", null) }
         }
     }
+
+    // WebView 销毁时调用：不再回传结果，空闲线程随即退出。
+    fun close() {
+        closed = true
+        pool.shutdown()
+    }
+
+    // JSONObject.quote 不转义 U+2028/U+2029，旧 WebView（Chrome 66 以下）会当成换行而语法错误。
+    private fun js(s: String) = JSONObject.quote(s).replace("\u2028", "\\u2028").replace("\u2029", "\\u2029")
 
     @JavascriptInterface
     fun setTheme(dark: Boolean) = activity.runOnUiThread { activity.applyTheme(dark) }

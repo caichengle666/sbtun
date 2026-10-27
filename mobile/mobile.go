@@ -9,6 +9,7 @@ package mobile
 import (
 	"context"
 	"errors"
+	"net"
 	"net/url"
 	"strconv"
 	"sync"
@@ -32,6 +33,7 @@ var (
 
 	vpnMu      sync.Mutex
 	vpnRunning bool
+	vpnIPv6    bool // 当前 VPN 接口是否带 IPv6
 	tunDevice  device.Device
 	tunStack   *stack.Stack
 )
@@ -44,6 +46,7 @@ func Init(dataDir, binary string, p Platform) {
 	initOnce.Do(func() {
 		instance = app.New()
 		tun.Platform = vpnPlatform{}
+		tun.ReadyProbe = proxyReady
 		instance.StartupMobile(context.Background(), dataDir, binary)
 	})
 }
@@ -57,12 +60,10 @@ func Running() bool {
 
 type vpnPlatform struct{}
 
+// Start 建立 VPN；已建立时只在 IPv6 开关变化后重建接口（重载配置时 VPN 不断开）。
 func (vpnPlatform) Start() error {
 	vpnMu.Lock()
 	defer vpnMu.Unlock()
-	if vpnRunning {
-		return nil // 重载配置时 VPN 不断开
-	}
 	if platform == nil {
 		return errors.New("安卓 VPN 未初始化")
 	}
@@ -70,10 +71,20 @@ func (vpnPlatform) Start() error {
 	if err != nil {
 		return err
 	}
-	if err := openVPN(platform, cfg.IPv6Enabled, startNetstack); err != nil {
+	if vpnRunning && cfg.IPv6Enabled == vpnIPv6 {
+		return nil
+	}
+	// 重建时新接口先建立再换协议栈，期间流量不会绕过 VPN。
+	err = openVPN(platform, cfg.IPv6Enabled, func(fd int) error {
+		stopNetstack()
+		return startNetstack(fd)
+	})
+	if err != nil {
+		stopNetstack()
+		vpnRunning = false
 		return err
 	}
-	vpnRunning = true
+	vpnRunning, vpnIPv6 = true, cfg.IPv6Enabled
 	return nil
 }
 
@@ -126,15 +137,31 @@ func startNetstack(fd int) error {
 	return nil
 }
 
+// stopNetstack 先停协议栈（Wait 会摘掉网卡、停掉读包协程），最后才关 fd，
+// 免得 RST 等包写进被别处复用的同号 fd。
 func stopNetstack() {
-	if tunDevice != nil {
-		tunDevice.Close()
-	}
 	if tunStack != nil {
 		tunStack.Close()
 		tunStack.Wait()
 	}
+	if tunDevice != nil {
+		tunDevice.Close()
+	}
 	tunDevice, tunStack = nil, nil
+}
+
+// proxyReady 报告 sing-box 的本地入站是否已在监听，安卓用它判断内核就绪。
+func proxyReady() bool {
+	u, err := url.Parse(instance.MobileProxyURL())
+	if err != nil {
+		return false
+	}
+	conn, err := net.DialTimeout("tcp", u.Host, 200*time.Millisecond)
+	if err != nil {
+		return false
+	}
+	conn.Close()
+	return true
 }
 
 // tunMTU 要和安卓 VpnService.Builder.setMtu 一致。

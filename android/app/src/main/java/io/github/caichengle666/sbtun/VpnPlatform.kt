@@ -1,25 +1,28 @@
 package io.github.caichengle666.sbtun
 
 import android.content.Context
-import android.content.Intent
 import androidx.core.content.ContextCompat
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.TimeoutException
 import mobile.Platform
 
-// Go 在用户点击连接时从后台线程调用：拉起 VPN 服务并返回 TUN 文件描述符。
+// Go 在连接时从后台线程调用：拉起 VPN 服务并返回 TUN 文件描述符。
 class VpnPlatform(private val context: Context) : Platform {
     override fun openTun(ipv6: Boolean): Int {
-        val ready = SbtunVpnService.whenReady()
-        val intent = Intent(context, SbtunVpnService::class.java).putExtra(SbtunVpnService.EXTRA_FROM_APP, true)
-        ContextCompat.startForegroundService(context, intent)
+        // 服务已在运行（切换 IPv6 重建接口、系统拉起后自动连接）：直接建立，不再拉起前台服务。
+        SbtunVpnService.current?.let { return it.establishTun(ipv6) }
+        val (intent, ready) = SbtunVpnService.request(context)
         return try {
+            try {
+                ContextCompat.startForegroundService(context, intent)
+            } catch (e: IllegalStateException) { // 后台不允许启动服务（Android 8+，12+ 为其子类）
+                throw Exception("sbtun 在后台时系统不允许启动 VPN，请打开 sbtun 后再连接")
+            }
             ready.get(10, TimeUnit.SECONDS).establishTun(ipv6)
         } catch (e: Exception) {
-            // 失败时收掉前台服务和"已连接"通知；超时时服务可能稍后才起来，也一并停掉。
-            SbtunVpnService.current?.shutdown()
-            context.stopService(Intent(context, SbtunVpnService::class.java))
-            throw if (e is TimeoutException) Exception("VPN 服务启动超时") else e
+            // 不能 stopService：服务可能还欠一次 startForeground，被直接停掉系统会杀进程。
+            SbtunVpnService.abandon(intent)
+            throw if (e is TimeoutException) Exception("VPN 服务启动超时，请重试") else e
         }
     }
 

@@ -14,7 +14,11 @@ type AndroidPlatform interface {
 
 var Platform AndroidPlatform
 
-func interfaceExists(string) bool { return true }
+// ReadyProbe 由 APK 设置：sing-box 的本地入站可连接时返回 true。没有 TUN 网卡可等，
+// 就绪判断改为等入站端口，免得 VPN 在内核监听前就接管流量。
+var ReadyProbe func() bool
+
+func interfaceExists(string) bool { return ReadyProbe == nil || ReadyProbe() }
 
 func configurePlatform(string) error {
 	if Platform == nil {

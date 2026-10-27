@@ -2,11 +2,18 @@
 // 必须在页面主脚本之前加载（CI 把它插到 index.html 的 <head> 最前面）。
 (() => {
   const pending = new Map()
+  // 编号带本次页面加载的随机前缀：页面重载后，旧页面迟到的结果不会投给新页面的同号请求。
+  const page = Math.random().toString(36).slice(2)
   let seq = 0
+  const TIMEOUT = 5 * 60 * 1000 // 后端卡住时不让 Promise 永远挂着；扫码等用户操作不限时
 
   const native = (kind, name, args) => new Promise((resolve, reject) => {
-    const id = ++seq
-    pending.set(id, { resolve, reject })
+    const id = `${page}:${++seq}`
+    const timer = name === 'ScanQRCode' ? 0 : setTimeout(() => {
+      pending.delete(id)
+      reject(new Error(`调用超时：${name}`))
+    }, TIMEOUT)
+    pending.set(id, { resolve, reject, timer })
     SbtunNative.call(id, kind, name, JSON.stringify(args))
   })
 
@@ -14,6 +21,7 @@
     const p = pending.get(id)
     if (!p) return
     pending.delete(id)
+    clearTimeout(p.timer)
     let out
     try {
       out = JSON.parse(json)

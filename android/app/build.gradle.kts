@@ -3,9 +3,10 @@ plugins {
     id("org.jetbrains.kotlin.android")
 }
 
-// 版本号来自仓库根目录的 VERSION，versionCode = 主*10000 + 次*100 + 修订。
+// 版本号来自仓库根目录的 VERSION，versionCode = 主*1000000 + 次*1000 + 修订（每段 < 1000，避免撞号）。
 val appVersion = rootDir.parentFile.resolve("VERSION").readText().trim().removePrefix("v")
 val versionNumbers = appVersion.split(".").map { part -> part.takeWhile(Char::isDigit).toIntOrNull() ?: 0 } + listOf(0, 0, 0)
+require(versionNumbers[1] < 1000 && versionNumbers[2] < 1000) { "版本号每段须小于 1000: $appVersion" }
 val keystoreFile: String? = System.getenv("SBTUN_KEYSTORE_FILE")?.takeIf { it.isNotBlank() }
 
 android {
@@ -16,8 +17,10 @@ android {
         applicationId = "io.github.caichengle666.sbtun"
         minSdk = 24
         targetSdk = 35
-        versionCode = versionNumbers[0] * 10000 + versionNumbers[1] * 100 + versionNumbers[2]
+        versionCode = versionNumbers[0] * 1000000 + versionNumbers[1] * 1000 + versionNumbers[2]
         versionName = appVersion
+        // 构建时间：APK 自带的规则集在构建时下载，升级时比它新的规则文件是用户更新过的，不覆盖。
+        buildConfigField("long", "BUILD_TIME", "${System.currentTimeMillis()}L")
     }
 
     signingConfigs {

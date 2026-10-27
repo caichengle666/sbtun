@@ -9,7 +9,9 @@ import android.graphics.Color
 import android.net.VpnService
 import android.os.Build
 import android.os.Bundle
+import android.view.ViewGroup
 import android.webkit.JsResult
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebChromeClient
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
@@ -22,6 +24,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.lifecycle.Lifecycle
 import androidx.webkit.WebViewAssetLoader
 import com.journeyapps.barcodescanner.ScanContract
 import com.journeyapps.barcodescanner.ScanOptions
@@ -29,10 +32,12 @@ import java.util.concurrent.CompletableFuture
 
 class MainActivity : ComponentActivity() {
     private lateinit var web: WebView
+    private lateinit var bridge: Bridge
+    private lateinit var assetLoader: WebViewAssetLoader
+    private var darkTheme = true
+    private var pendingLoad = false // 渲染进程在后台被回收后重建的 WebView，回到前台再加载
     private var safeArea = "" // 最近一次计算出的安全区 JS，页面加载完后补发
     private var lastInsets: WindowInsetsCompat? = null
-    @Volatile private var vpnConsent: CompletableFuture<Boolean>? = null
-    @Volatile private var qrResult: CompletableFuture<String>? = null
 
     private val vpnPermission = registerForActivityResult(ActivityResultContracts.StartActivityForResult()) {
         vpnConsent?.complete(it.resultCode == RESULT_OK)
@@ -40,16 +45,33 @@ class MainActivity : ComponentActivity() {
     private val qrScanner = registerForActivityResult(ScanContract()) { qrResult?.complete(it.contents.orEmpty()) }
     private val notificationPermission = registerForActivityResult(ActivityResultContracts.RequestPermission()) {}
 
-    @SuppressLint("SetJavaScriptEnabled")
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
         WindowCompat.setDecorFitsSystemWindows(window, false)
 
         // 页面固定在 /，资源路径都是绝对的 /assets/...，统一映射到 APK 的 assets/web/。
-        val assets = WebViewAssetLoader.Builder()
+        assetLoader = WebViewAssetLoader.Builder()
             .addPathHandler("/", WebViewAssetLoader.AssetsPathHandler(this).let { h -> WebViewAssetLoader.PathHandler { h.handle("web/$it") } })
             .build()
 
+        onBackPressedDispatcher.addCallback(this) {
+            web.evaluateJavascript("window.__sbtunBack ? window.__sbtunBack() : false") { consumed ->
+                if (consumed != "true") moveTaskToBack(true)
+            }
+        }
+
+        createWebView()
+        applyTheme(true)
+        if (Build.VERSION.SDK_INT >= 33 &&
+            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
+        ) {
+            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
+        }
+        loadPage()
+    }
+
+    @SuppressLint("SetJavaScriptEnabled")
+    private fun createWebView() {
         web = WebView(this).apply {
             setBackgroundColor(DARK_BG)
             settings.javaScriptEnabled = true
@@ -57,10 +79,11 @@ class MainActivity : ComponentActivity() {
             settings.setSupportZoom(false)
             settings.builtInZoomControls = false
             settings.textZoom = 100
-            addJavascriptInterface(Bridge(this@MainActivity, this), "SbtunNative")
+            bridge = Bridge(this@MainActivity, this)
+            addJavascriptInterface(bridge, "SbtunNative")
             webViewClient = object : WebViewClient() {
                 override fun shouldInterceptRequest(view: WebView, request: WebResourceRequest): WebResourceResponse? =
-                    assets.shouldInterceptRequest(request.url)
+                    assetLoader.shouldInterceptRequest(request.url)
 
                 override fun onPageFinished(view: WebView, url: String?) {
                     if (safeArea.isNotEmpty()) view.evaluateJavascript(safeArea, null)
@@ -70,6 +93,12 @@ class MainActivity : ComponentActivity() {
                 override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
                     if (request.url.host == WebViewAssetLoader.DEFAULT_DOMAIN) return false
                     runCatching { startActivity(Intent(Intent.ACTION_VIEW, request.url)) }
+                    return true
+                }
+
+                // 渲染进程崩溃或被系统回收：默认会连带杀掉整个进程（VPN 一起断），这里只重建 WebView。
+                override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+                    if (view === web) recreateWebView()
                     return true
                 }
             }
@@ -93,20 +122,36 @@ class MainActivity : ComponentActivity() {
         web.addOnLayoutChangeListener { _, _, top, _, bottom, _, oldTop, _, oldBottom ->
             if (bottom - top != oldBottom - oldTop) pushSafeArea()
         }
+    }
 
-        onBackPressedDispatcher.addCallback(this) {
-            web.evaluateJavascript("window.__sbtunBack ? window.__sbtunBack() : false") { consumed ->
-                if (consumed != "true") moveTaskToBack(true)
-            }
-        }
+    private fun recreateWebView() {
+        bridge.close()
+        (web.parent as? ViewGroup)?.removeView(web)
+        web.destroy()
+        safeArea = ""
+        createWebView()
+        applyTheme(darkTheme)
+        // 后台时不立即加载，免得内存紧张时渲染进程刚起就又被回收。
+        if (lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)) loadPage() else pendingLoad = true
+    }
 
-        applyTheme(true)
-        if (Build.VERSION.SDK_INT >= 33 &&
-            ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS) != PackageManager.PERMISSION_GRANTED
-        ) {
-            notificationPermission.launch(Manifest.permission.POST_NOTIFICATIONS)
-        }
+    private fun loadPage() {
+        pendingLoad = false
         web.loadUrl("https://${WebViewAssetLoader.DEFAULT_DOMAIN}/index.html")
+    }
+
+    // 退到后台时暂停页面的定时轮询，回到前台恢复（轮询会马上同步后台期间的状态变化）。
+    override fun onStart() {
+        super.onStart()
+        web.resumeTimers()
+        web.onResume()
+        if (pendingLoad) loadPage()
+    }
+
+    override fun onStop() {
+        web.onPause()
+        web.pauseTimers()
+        super.onStop()
     }
 
     // 把系统栏和键盘真正盖住 WebView 的部分传给页面：WebView 已被系统缩短时不再重复留空。
@@ -136,14 +181,19 @@ class MainActivity : ComponentActivity() {
     }
 
     override fun onDestroy() {
-        vpnConsent?.complete(false) // 不让等待授权的后台线程永远卡住
-        qrResult?.complete("")
+        // 因配置变化或被系统回收而重建时，结果会交给新的 Activity，后台线程继续等；真正退出时才放弃。
+        if (isFinishing) {
+            vpnConsent?.complete(false)
+            qrResult?.complete("")
+        }
+        bridge.close()
         web.destroy()
         super.onDestroy()
     }
 
     // 系统栏图标深浅和窗口底色跟随页面主题。
     fun applyTheme(dark: Boolean) {
+        darkTheme = dark
         val bg = if (dark) DARK_BG else LIGHT_BG
         window.decorView.setBackgroundColor(bg)
         web.setBackgroundColor(bg)
@@ -168,7 +218,7 @@ class MainActivity : ComponentActivity() {
     fun ensureVpnPermission(): Boolean {
         val intent = VpnService.prepare(this) ?: return true
         val consent = CompletableFuture<Boolean>()
-        val pending = synchronized(this) { vpnConsent?.takeIf { !it.isDone } ?: consent.also { vpnConsent = it } }
+        val pending = synchronized(Companion) { vpnConsent?.takeIf { !it.isDone } ?: consent.also { vpnConsent = it } }
         if (pending !== consent) return pending.get()
         runOnUiThread {
             try {
@@ -184,7 +234,7 @@ class MainActivity : ComponentActivity() {
     // 扫码界面已打开时不重复打开，直接等同一个结果。
     fun scanQRCode(): String {
         val result = CompletableFuture<String>()
-        val pending = synchronized(this) { qrResult?.takeIf { !it.isDone } ?: result.also { qrResult = it } }
+        val pending = synchronized(Companion) { qrResult?.takeIf { !it.isDone } ?: result.also { qrResult = it } }
         if (pending !== result) return pending.get()
         runOnUiThread {
             try {
@@ -205,5 +255,8 @@ class MainActivity : ComponentActivity() {
     private companion object {
         val DARK_BG = Color.parseColor("#111617")
         val LIGHT_BG = Color.parseColor("#f2ede1")
+        // 放在 Activity 之外：授权框/扫码期间 Activity 重建，结果回到新实例时仍能交给等待的线程。
+        @Volatile var vpnConsent: CompletableFuture<Boolean>? = null
+        @Volatile var qrResult: CompletableFuture<String>? = null
     }
 }

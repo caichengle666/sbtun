@@ -47,9 +47,13 @@ var ErrProcessExited = errors.New("sing-box 启动后退出")
 func (m *Manager) WaitReady(timeout time.Duration, alive func() bool) error {
 	name := m.name()
 	deadline := time.Now().Add(timeout)
-	for !interfaceExists(name) {
+	for {
+		// 先看进程：安卓的就绪探测是连本地端口，端口被别的 App 占着时会误判就绪。
 		if alive != nil && !alive() {
 			return ErrProcessExited
+		}
+		if interfaceExists(name) {
+			break
 		}
 		if time.Now().After(deadline) {
 			return fmt.Errorf("TUN 网卡未出现: %s", name)

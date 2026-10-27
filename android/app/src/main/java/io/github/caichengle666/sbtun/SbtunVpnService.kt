@@ -4,6 +4,7 @@ import android.app.Notification
 import android.app.NotificationChannel
 import android.app.NotificationManager
 import android.app.PendingIntent
+import android.content.Context
 import android.content.Intent
 import android.content.pm.ServiceInfo
 import android.net.VpnService
@@ -16,8 +17,8 @@ import mobile.Mobile
 class SbtunVpnService : VpnService() {
     companion object {
         private const val ACTION_STOP = "io.github.caichengle666.sbtun.STOP"
-        // 只有应用自己（VpnPlatform）拉起服务时才带这个标记。
-        const val EXTRA_FROM_APP = "io.github.caichengle666.sbtun.FROM_APP"
+        // 应用自己（VpnPlatform）拉起服务时带上请求编号；系统拉起时没有。
+        private const val EXTRA_REQUEST = "io.github.caichengle666.sbtun.REQUEST"
         private const val NOTIFICATION_ID = 1
         private const val CHANNEL_ID = "vpn"
 
@@ -25,14 +26,30 @@ class SbtunVpnService : VpnService() {
         var current: SbtunVpnService? = null
             private set
         private var ready = CompletableFuture<SbtunVpnService>()
+        private var lastRequest = 0
+        private var wanted = 0 // 正在等待的请求编号，0 表示没有
 
+        // 登记一次启动请求，返回拉起服务用的 intent 和等服务就绪的 future。
         @Synchronized
-        fun whenReady(): CompletableFuture<SbtunVpnService> = ready
+        fun request(context: Context): Pair<Intent, CompletableFuture<SbtunVpnService>> {
+            wanted = ++lastRequest
+            return Intent(context, SbtunVpnService::class.java).putExtra(EXTRA_REQUEST, wanted) to ready
+        }
 
+        // 请求失败或超时：作废编号（服务稍后才起来时自己退出），已起来的服务直接收掉。
         @Synchronized
-        private fun attach(service: SbtunVpnService) {
+        fun abandon(intent: Intent) {
+            if (wanted == intent.getIntExtra(EXTRA_REQUEST, 0)) wanted = 0
+            current?.shutdown()
+        }
+
+        // 系统拉起（id 为 0）总是接上；应用的请求只接仍在等待的那个。
+        @Synchronized
+        private fun attach(service: SbtunVpnService, id: Int): Boolean {
+            if (id != 0 && id != wanted) return false
             current = service
             ready.complete(service)
+            return true
         }
 
         @Synchronized
@@ -43,23 +60,28 @@ class SbtunVpnService : VpnService() {
         }
     }
 
+    @Volatile private var established = false
+
     override fun onStartCommand(intent: Intent?, flags: Int, startId: Int): Int {
         if (intent?.action == ACTION_STOP) {
             stopAsync()
             return START_NOT_STICKY
         }
-        if (intent?.getBooleanExtra(EXTRA_FROM_APP, false) != true) {
-            // 系统拉起（始终开启的 VPN、在系统设置里点 sbtun）：Go 侧没有连接，不能挂"已连接"通知。
-            // 已经连接时忽略；否则满足前台期限后立即退出。
-            if (current !== this) {
-                runCatching { enterForeground() }
+        val id = intent?.getIntExtra(EXTRA_REQUEST, 0) ?: 0
+        val running = current === this
+        val attached = running || attach(this, id)
+        enterForeground() // 每次 startForegroundService 都要及时进入前台，作废的请求也一样
+        when {
+            !attached -> { // 应用已放弃这次请求（超时）；只在没有更新的请求时退出
                 ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
-                stopSelf()
+                stopSelfResult(startId)
             }
-            return START_NOT_STICKY
+            // 系统拉起（始终开启的 VPN、在系统设置里点 sbtun）：自动连接，没连上就退出。
+            id == 0 && !running -> Thread {
+                Mobile.call("Start", "[]")
+                if (current === this && !established) shutdown()
+            }.start()
         }
-        enterForeground()
-        attach(this)
         return START_NOT_STICKY
     }
 
@@ -88,13 +110,18 @@ class SbtunVpnService : VpnService() {
             .addDnsServer("172.19.0.2")
             .addDisallowedApplication(packageName) // 内置的 sing-box 进程与应用同 UID，必须绕过 VPN
             .setConfigureIntent(openAppIntent())
+        // 不开 IPv6 时不加任何 IPv6 地址/路由/DNS：系统默认把 IPv6 流量拦掉（不可达路由，立即返回
+        // ENETUNREACH），应用马上回落 IPv4，也不会绕过 VPN。别为此把 ::/0 收进隧道，那样 UDP 会黑洞到超时。
         if (ipv6) builder.addAddress("fdfe:dcba:9876::1", 126).addRoute("::", 0)
         if (Build.VERSION.SDK_INT >= 29) builder.setMetered(false)
         val tun = builder.establish() ?: throw Exception("无法建立 VPN，请确认已允许 VPN 权限")
+        established = true
+        getSystemService(NotificationManager::class.java).notify(NOTIFICATION_ID, notification())
         return tun.detachFd()
     }
 
     fun shutdown() {
+        established = false
         detach(this) // 立即重新连接时等新的服务实例，而不是这个正在退出的
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         stopSelf()
@@ -122,7 +149,7 @@ class SbtunVpnService : VpnService() {
         )
         return NotificationCompat.Builder(this, CHANNEL_ID)
             .setSmallIcon(R.drawable.ic_stat_sbtun)
-            .setContentTitle("sbtun 已连接")
+            .setContentTitle(if (established) "sbtun 已连接" else "sbtun 正在连接…")
             .setOngoing(true)
             .setCategory(NotificationCompat.CATEGORY_SERVICE)
             .setForegroundServiceBehavior(NotificationCompat.FOREGROUND_SERVICE_IMMEDIATE)
