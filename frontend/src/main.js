@@ -81,6 +81,7 @@ const state = {
   diagnostics: null,
   ipv6Status: null,
   captureStatus: null,
+  showConnections: localStorage.getItem('sbtun.showConnections') === '1',
   connections: [],
   connectionsError: '',
   connFilter: '',
@@ -443,8 +444,12 @@ function renderOverview() {
 
 // 连接：每个网站命中哪条规则、实际走哪个出口；可输入网站实际测一次走向。
 function renderConnectionsPanel() {
+  const toggle = `<label class="toggle-switch" title="显示连接"><input id="showConnectionsToggle" type="checkbox" ${state.showConnections ? 'checked' : ''}><span aria-hidden="true"></span></label>`
+  if (!state.showConnections) {
+    return `<section class="card conn-panel"><div class="section-heading conn-off"><h2>连接</h2><span class="conn-heading-side"><span class="muted">查看每个网站命中的规则和实际出口</span>${toggle}</span></div></section>`
+  }
   return `<section class="card conn-panel">
-      <div class="section-heading"><h2>连接</h2><span class="conn-heading-side"><span class="muted" id="connCount">${connCountText()}</span><button class="btn btn-ghost" id="closeAllConns" ${state.running ? '' : 'disabled'}>全部断开</button></span></div>
+      <div class="section-heading"><h2>连接</h2><span class="conn-heading-side"><span class="muted" id="connCount">${connCountText()}</span><button class="btn btn-ghost" id="closeAllConns" ${state.running ? '' : 'disabled'}>全部断开</button>${toggle}</span></div>
       <div class="conn-tools">
         <input id="routeTestInput" class="input" value="${escapeHtml(state.routeTestInput)}" placeholder="输入网站测试走向，例如 openai.com" />
         <button class="btn btn-primary" id="routeTestBtn" ${state.running && !state.routeTesting ? '' : 'disabled'}>${state.routeTesting ? '测试中…' : '测试走向'}</button>
@@ -493,7 +498,7 @@ function updateConnectionsView() {
 }
 
 async function refreshConnections() {
-  if (state.view !== 'overview' || document.hidden || state.connectionsLoading) return
+  if (!state.showConnections || state.view !== 'overview' || document.hidden || state.connectionsLoading) return
   if (!state.running) {
     state.connections = []
     updateConnectionsView()
@@ -1939,6 +1944,13 @@ function bindEvents() {
   })
   const quickNodeSelect = document.querySelector('#quickNodeSelect')
   if (quickNodeSelect) quickNodeSelect.addEventListener('change', () => selectNode(quickNodeSelect.value))
+  document.querySelector('#showConnectionsToggle')?.addEventListener('change', event => {
+    state.showConnections = event.target.checked
+    localStorage.setItem('sbtun.showConnections', state.showConnections ? '1' : '0')
+    if (!state.showConnections) { state.connections = []; state.routeTestResult = null }
+    renderApp()
+    refreshConnections()
+  })
   const routeTestInput = document.querySelector('#routeTestInput')
   if (routeTestInput) {
     routeTestInput.addEventListener('input', () => { state.routeTestInput = routeTestInput.value })

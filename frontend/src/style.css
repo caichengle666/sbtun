@@ -939,6 +939,7 @@ h2 { color: var(--text); letter-spacing: 0; }
 /* 运行概览 · 连接 */
 .conn-panel { margin-top: 13px; }
 .conn-panel .section-heading { margin-bottom: 10px; }
+.conn-panel .section-heading.conn-off { margin-bottom: 0; }
 .conn-heading-side { display: flex; align-items: center; gap: 10px; }
 .conn-tools { display: grid; grid-template-columns: minmax(0, 1.4fr) auto minmax(0, 1fr); gap: 8px; }
 .route-test-result { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 7px; background: var(--accent-bg); font-size: 12px; }
