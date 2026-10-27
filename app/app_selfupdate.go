@@ -33,6 +33,9 @@ const (
 // renamed (or its bundle replaced), and the restart must start the new one at the original path.
 var launchExecutable = resolveLaunchExecutable()
 
+// pendingVersion is the version installed by UpdateApp that has not been restarted into yet.
+var pendingVersion string
+
 func resolveLaunchExecutable() string {
 	exe, err := os.Executable()
 	if err != nil {
@@ -88,6 +91,12 @@ func (a *App) UpdateApp() (AppSelfUpdateResult, error) {
 		result.Message = "已是最新版本"
 		return result, nil
 	}
+	result.Message = "已更新到 v" + latest
+	if pendingVersion == latest {
+		// 已经装好、只是还没重启，不再重复下载。
+		result.Updated = true
+		return result, nil
+	}
 	asset, err := findReleaseAsset(release, assetName)
 	if err != nil {
 		return result, err
@@ -113,8 +122,8 @@ func (a *App) UpdateApp() (AppSelfUpdateResult, error) {
 	if err != nil {
 		return result, err
 	}
+	pendingVersion = latest
 	result.Updated = true
-	result.Message = "已更新到 v" + latest
 	return result, nil
 }
 

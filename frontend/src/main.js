@@ -1430,7 +1430,7 @@ async function checkAppUpdate() {
   }
 }
 
-// 下载新版替换程序文件，成功后启动新版本并退出当前进程（代理在运行时新版本会自动重连）。
+// 下载新版替换程序文件，问过用户后启动新版本并退出当前进程（代理在运行时新版本会自动重连）。
 async function updateApp() {
   if (state.appUpdating) return
   state.appUpdating = true
@@ -1442,7 +1442,13 @@ async function updateApp() {
       showToast(result.message || '已是最新版本', 'success')
       return
     }
-    showToast(result.message + '，正在重启…', 'success')
+    const hint = state.running ? '代理会断开几秒，重启后自动重连。' : ''
+    if (!window.confirm(`${result.message}，现在重启 sbtun 生效吗？${hint}`)) {
+      if (state.appUpdate) state.appUpdate.has_update = false
+      showToast(result.message + '，下次打开 sbtun 时生效', 'success')
+      return
+    }
+    showToast('正在重启…', 'success')
     await window.go.app.App.RestartApp()
   } catch (e) {
     showToast('更新程序失败：' + errorText(e), 'error')
