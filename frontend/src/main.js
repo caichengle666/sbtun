@@ -107,7 +107,12 @@ const state = {
   captureBodyScroll: {},
   captureSettingsOpen: localStorage.getItem('sbtun-ui-capture-settings-open') !== 'false',
   view: initialView,
-  statusRefreshing: false,
+  statusPromise: null,
+  statusError: false,
+  rulesError: '',
+  captureCertLevel: 'system',
+  // 按住鼠标/手指期间推迟重绘，否则按下和松开落在不同节点上，click 会丢
+  pointerHeld: false,
   configReading: 0,
   // 进行中的操作（防重复点击），render 里据此输出 disabled
   busy: new Set(),
@@ -313,9 +318,6 @@ function supportsFlexGap() {
 }
 if (!supportsFlexGap()) document.documentElement.classList.add('no-flex-gap')
 
-document.documentElement.dataset.theme = state.theme
-app.innerHTML = render()
-
 function render() {
   return `
     <main class="shell view-${state.view}">
@@ -492,7 +494,12 @@ function renderConnectionRows() {
 
 function updateConnectionsView() {
   const list = document.querySelector('#connList')
-  if (list) list.innerHTML = renderConnectionRows()
+  const html = renderConnectionRows()
+  const sel = getSelection()
+  if (list && list._rows !== html && !state.pointerHeld && (sel.isCollapsed || !list.contains(sel.anchorNode))) {
+    list.innerHTML = html
+    list._rows = html
+  }
   const count = document.querySelector('#connCount')
   if (count) count.textContent = connCountText()
 }
@@ -518,6 +525,7 @@ async function refreshConnections() {
 }
 
 async function runRouteTest() {
+  if (state.routeTesting || !state.running) return
   const target = state.routeTestInput.trim()
   if (!target) { showToast('请输入网站，例如 openai.com', 'error'); return }
   state.routeTesting = true
@@ -722,7 +730,7 @@ function renderRoutingPage() {
   const diagnostics = state.diagnostics
   return `<div class="page-stack"><section class="card"><h2>选择路由模式</h2><div class="mode-grid">${MODES.map(m => `<button class="mode-btn ${state.config?.routing_mode === m.id ? 'active' : ''}" data-mode="${m.id}">${m.name}<span class="mode-desc">${m.desc}</span></button>`).join('')}</div><div class="network-options"><div class="network-options-title">网络选项</div><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>节点失效自动切换</strong><small>当前节点连续两次测试失败时，切换到延迟最低的可用节点，优先同一订阅</small></span><span class="toggle-switch"><input id="autoSwitchToggle" type="checkbox" ${state.config?.auto_switch_disabled ? '' : 'checked'}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用 IPv6</strong><small>${escapeHtml(state.ipv6Status?.message || '正在检测设备 IPv6')}</small></span><span class="toggle-switch"><input id="ipv6Toggle" type="checkbox" ${state.config?.ipv6_enabled ? 'checked' : ''} ${busyAttr('ipv6')}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row" data-desktop-only><span class="setting-toggle-copy"><strong>启用 WebRTC 防泄漏</strong><small>防止 WebRTC 通过直连暴露真实 IPv4/IPv6</small></span><span class="toggle-switch"><input id="webrtcProtectionToggle" type="checkbox" ${state.config?.webrtc_protection_enabled ? 'checked' : ''} ${busyAttr('webrtc')}><span aria-hidden="true"></span></span></label><label class="setting-toggle-row"><span class="setting-toggle-copy"><strong>启用诊断信息</strong><small>显示当前 selector 和运行节点，仅用于排查问题</small></span><span class="toggle-switch"><input id="diagnosticsToggle" type="checkbox" ${state.config?.diagnostics_enabled ? 'checked' : ''} ${busyAttr('diagnostics')}><span aria-hidden="true"></span></span></label></div></section>${state.config?.diagnostics_enabled ? `<section class="card"><h2>运行诊断</h2><div class="diagnostics-grid"><span>当前配置节点</span><strong>${escapeHtml(diagnostics?.current_node_id || '未选择')}</strong><span>实际 selector</span><strong>${escapeHtml(diagnostics?.selector || '未读取')}</strong><span>状态</span><strong>${escapeHtml(diagnostics?.message || '读取中')}</strong></div></section>` : ''}
     ${renderNodeGroupsCard()}
-    ${`<section class="card"><div class="section-heading"><div><h2>我的分流规则</h2><p class="muted">${state.config?.routing_mode === 'direct' ? '全局直连模式下只有去向为“阻断”的规则生效。' : '优先于路由模式生效；规则集在“分流规则”页添加，也可以选去向。'}</p></div></div><div id="customRulesPanel">${renderCustomRules()}</div><div class="rule-editor ${state.customRuleForm.action === 'node' ? 'with-node' : ''}"><label class="rule-field"><span>匹配对象</span><select id="ruleMatchType" class="select">${RULE_MATCH_TYPES.map(item => `<option value="${item.id}" ${item.id === matchType.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-field"><span>匹配内容</span><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="${matchType.placeholder}" /></label><label class="rule-field"><span>去向</span>${renderRuleActionSelect()}</label>${state.customRuleForm.action === 'node' ? renderRuleNodeSelect() : ''}<button id="addRuleBtn" class="btn btn-primary" ${busyAttr('customRule')}>${state.editingCustomRule ? '保存修改' : '添加规则'}</button>${state.editingCustomRule ? '<button id="cancelEditRule" class="btn btn-ghost">取消</button>' : ''}<small class="rule-hint value-hint" id="ruleValueHint">${matchType.hint}</small><small class="rule-hint action-hint" id="ruleActionHint">${ruleActionHint(state.customRuleForm.action)}</small></div><details class="rule-import" open><summary>批量导入规则</summary><div class="rule-import-body"><textarea id="ruleImport" class="input" rows="3" placeholder="粘贴规则或填链接：Clash/Surge 配置、ACL4SSR 模板都行；引用的 RULE-SET 列表会各自变成一个规则集"></textarea><button id="importRuleBtn" class="btn btn-ghost" ${busyAttr('importRule')}>导入</button></div></details></section>`}
+    ${`<section class="card"><div class="section-heading"><div><h2>我的分流规则</h2><p class="muted">${state.config?.routing_mode === 'direct' ? '全局直连模式下只有去向为“阻断”的规则生效。' : '优先于路由模式生效；规则集在“分流规则”页添加，也可以选去向。'}</p></div></div><div id="customRulesPanel">${renderCustomRules()}</div><div class="rule-editor ${state.customRuleForm.action === 'node' ? 'with-node' : ''}"><label class="rule-field"><span>匹配对象</span><select id="ruleMatchType" class="select">${RULE_MATCH_TYPES.map(item => `<option value="${item.id}" ${item.id === matchType.id ? 'selected' : ''}>${item.label}</option>`).join('')}</select></label><label class="rule-field"><span>匹配内容</span><input id="ruleValue" class="input" value="${escapeHtml(state.customRuleForm.value)}" placeholder="${matchType.placeholder}" /></label><label class="rule-field"><span>去向</span>${renderRuleActionSelect()}</label>${state.customRuleForm.action === 'node' ? renderRuleNodeSelect() : ''}<button id="addRuleBtn" class="btn btn-primary" ${busyAttr('customRule')}>${state.editingCustomRule ? '保存修改' : '添加规则'}</button>${state.editingCustomRule ? '<button id="cancelEditRule" class="btn btn-ghost">取消</button>' : ''}<small class="rule-hint value-hint" id="ruleValueHint">${matchType.hint}</small><small class="rule-hint action-hint" id="ruleActionHint">${escapeHtml(ruleActionHint(state.customRuleForm.action))}</small></div><details class="rule-import" open><summary>批量导入规则</summary><div class="rule-import-body"><textarea id="ruleImport" class="input" rows="3" placeholder="粘贴规则或填链接：Clash/Surge 配置、ACL4SSR 模板都行；引用的 RULE-SET 列表会各自变成一个规则集"></textarea><button id="importRuleBtn" class="btn btn-ghost" ${busyAttr('importRule')}>导入</button></div></details></section>`}
   </div>`
 }
 
@@ -784,7 +792,7 @@ function renderCapturePage() {
       <summary class="capture-settings-summary"><div><h2>抓包规则与证书</h2><p class="muted">每行一个域名或关键词；输入 * 抓取全部 HTTP/HTTPS 请求。</p></div><span class="capture-settings-actions" aria-hidden="true">⌄</span></summary>
       <div class="capture-settings-content"><div class="section-heading"><span></span><button id="saveCapture" class="btn btn-primary" ${busyAttr('capture')}>保存并应用</button></div>
       <textarea id="captureDomains" class="input" rows="4" placeholder="例如 example.com、google；输入 * 抓取全部 HTTP/HTTPS">${escapeHtml(domains)}</textarea>
-      <div class="capture-settings-footer"><div class="capture-cert"><span class="badge ${status.certificate_installed ? 'direct' : ''}">${status.certificate_installed ? `证书已安装（${escapeHtml(status.certificate_level || '未知级别')}）` : '证书未安装'}</span>${status.user_certificate_supported ? '<select id="captureCertLevel" class="input capture-cert-level"><option value="system">系统级</option><option value="user">当前用户</option></select>' : '<span class="muted">Linux 使用系统级证书</span>'}<button id="installCaptureCA" class="btn btn-ghost" ${busyAttr('captureCA')}>安装系统证书</button><button id="uninstallCaptureCA" class="btn btn-ghost" ${busyAttr('captureCA')}>卸载系统证书</button></div><span class="capture-storage" title="${escapeHtml(status.storage_path || '')}">${escapeHtml(status.storage_path || 'capture.json')}</span></div>
+      <div class="capture-settings-footer"><div class="capture-cert"><span class="badge ${status.certificate_installed ? 'direct' : ''}">${status.certificate_installed ? `证书已安装（${escapeHtml(status.certificate_level || '未知级别')}）` : '证书未安装'}</span>${status.user_certificate_supported ? `<select id="captureCertLevel" class="input capture-cert-level">${[['system', '系统级'], ['user', '当前用户']].map(([v, label]) => `<option value="${v}" ${state.captureCertLevel === v ? 'selected' : ''}>${label}</option>`).join('')}</select>` : '<span class="muted">Linux 使用系统级证书</span>'}<button id="installCaptureCA" class="btn btn-ghost" ${busyAttr('captureCA')}>安装系统证书</button><button id="uninstallCaptureCA" class="btn btn-ghost" ${busyAttr('captureCA')}>卸载系统证书</button></div><span class="capture-storage" title="${escapeHtml(status.storage_path || '')}">${escapeHtml(status.storage_path || 'capture.json')}</span></div>
       </div>
     </details>
     <section class="card capture-records">
@@ -918,9 +926,21 @@ async function refreshBackupList() {
   if (state.backup === b) renderApp()
 }
 
-function closeBackup() {
-  state.backup = null
+// 关闭弹窗：key 是 state 里对应弹窗的字段
+function closeModal(key) {
+  state[key] = null
   renderApp()
+}
+
+// 关掉最上层的弹窗（安卓返回键、Esc）；没有弹窗时返回 false
+function closeTopModal() {
+  const menus = document.querySelectorAll('.rule-menu[open]')
+  if (menus.length) { menus.forEach(m => { m.open = false }); return true }
+  const key = ['captureBodyViewer', 'groupModal', 'backup', 'nodeQRCode'].find(k => state[k])
+  if (key) closeModal(key)
+  else if (state.nodeFormOpen || state.editingNodeId) closeNodeModal()
+  else return false
+  return true
 }
 
 async function runBackupAction(name, action) {
@@ -952,7 +972,7 @@ function bindBackupModal() {
   document.querySelector('#openBackup')?.addEventListener('click', openBackup)
   const b = state.backup
   if (!b) return
-  document.querySelectorAll('[data-close-backup]').forEach(element => element.addEventListener('click', closeBackup))
+  document.querySelectorAll('[data-close-backup]').forEach(element => element.addEventListener('click', () => closeModal('backup')))
   document.querySelectorAll('[data-backup-field]').forEach(input => input.addEventListener('input', () => {
     b.form[input.dataset.backupField] = input.value
   }))
@@ -1000,11 +1020,6 @@ function bindBackupModal() {
       showToast('已删除备份', 'success')
     })
   }))
-}
-
-function closeNodeQRCode() {
-  state.nodeQRCode = null
-  renderApp()
 }
 
 function renderCaptureBodyModal() {
@@ -1123,9 +1138,7 @@ function renderRuleSummary() {
 }
 
 function renderRules() {
-  if (!state.rules) {
-    return '<div class="empty">正在加载规则集信息...</div>'
-  }
+  if (!state.rules) return `<div class="empty">${state.rulesError ? '读取规则集失败：' + escapeHtml(state.rulesError) : '正在加载规则集信息...'}</div>`
   const filter = state.ruleFilter || 'all'
   const rules = state.rules.filter(rule => filter === 'all' || (filter === 'default' ? rule.source === 'default' : rule.source !== 'default'))
   if (!rules.length) return '<div class="empty">没有符合条件的规则集</div>'
@@ -1339,7 +1352,7 @@ async function selectNode(id) {
   try {
     await window.go.app.App.SelectNode(id)
     await refreshConfig()
-    await refreshStatus()
+    await refreshStatus(true)
     await refreshRules()
     showToast('已切换节点', 'success')
   } catch (e) {
@@ -1394,7 +1407,7 @@ async function runOnce(key, action, el) {
   }
 }
 
-// 用户正在输入（文本框、下拉框获得焦点）时，后台轮询不整页重绘，等失焦后再补
+// 用户正在输入（文本框、下拉框获得焦点）或按住鼠标/手指时，后台轮询不整页重绘，之后再补
 function userEditing() {
   const el = document.activeElement
   if (!el || !app.contains(el)) return false
@@ -1402,8 +1415,37 @@ function userEditing() {
 }
 
 function backgroundRender() {
-  if (userEditing()) state.renderPending = true
+  if (userEditing() || state.pointerHeld) state.renderPending = true
   else renderApp()
+}
+
+function flushPendingRender() {
+  if (state.renderPending && !userEditing() && !state.pointerHeld) renderApp()
+}
+
+// 按下到 click 派发完之前不重绘：失焦发生在 mousedown，若此时重绘，mouseup 落在新按钮上，click 就丢了。
+// 松开后等 click（触屏的 click 可能晚一拍），最多 300ms；按住超过 5 秒（拖选文字、下拉框弹层）也放行。
+function bindPointerHold() {
+  let timer = 0
+  const release = () => {
+    clearTimeout(timer)
+    document.removeEventListener('click', release, true)
+    state.pointerHeld = false
+    setTimeout(flushPendingRender)
+  }
+  document.addEventListener('pointerdown', () => {
+    clearTimeout(timer)
+    state.pointerHeld = true
+    timer = setTimeout(release, 5000)
+  }, true)
+  const up = () => {
+    if (!state.pointerHeld) return
+    clearTimeout(timer)
+    timer = setTimeout(release, 300)
+    document.addEventListener('click', release, true)
+  }
+  document.addEventListener('pointerup', up, true)
+  document.addEventListener('pointercancel', up, true)
 }
 
 // 配置读写序号：本地写入或发起新读取后，之前发出的读取结果作废，避免过期数据覆盖刚保存的值
@@ -1458,12 +1500,16 @@ function showToast(msg, type = '') {
   t._timer = setTimeout(() => { t.style.display = 'none' }, Math.min(10000, 3000 + msg.length * 80)) // 长提示多停留一会儿
 }
 
-async function refreshStatus() {
-  if (state.statusRefreshing) return
-  state.statusRefreshing = true
+// 已有请求在途时共用它；force（开关、切换节点之后）等它结束再拉一次，拿到操作后的状态
+function refreshStatus(force) {
+  if (state.statusPromise) return force === true ? state.statusPromise.then(() => refreshStatus()) : state.statusPromise
+  state.statusPromise = loadStatus().finally(() => { state.statusPromise = null })
+  return state.statusPromise
+}
+
+async function loadStatus() {
   try {
-    const previousNodeID = activeNodeID()
-    const previousSelectorSync = `${state.selectorSyncState}:${state.selectorSyncMessage}`
+    const previous = `${activeNodeID()}|${state.running}|${state.statusState}|${state.selectorSyncState}:${state.selectorSyncMessage}`
     const s = await window.go.app.App.GetStatus()
     state.version = s.version || state.version
     state.running = s.running
@@ -1475,13 +1521,14 @@ async function refreshStatus() {
     state.runtimeNodeID = s.running ? (s.current_node_id || '') : ''
     state.selectorSyncState = s.selector_sync_state || 'idle'
     state.selectorSyncMessage = s.selector_sync_message || ''
-    const selectorSyncChanged = previousSelectorSync !== `${state.selectorSyncState}:${state.selectorSyncMessage}`
-    if (previousNodeID !== activeNodeID() || selectorSyncChanged) backgroundRender()
+    state.statusError = false
+    // 运行状态变了，依赖它的按钮和文案（测试走向、全部断开、流量分析页等）要整页重绘
+    if (previous !== `${activeNodeID()}|${state.running}|${state.statusState}|${state.selectorSyncState}:${state.selectorSyncMessage}`) backgroundRender()
     updateStatusView()
   } catch (e) {
-    showToast('获取状态失败: ' + errorText(e), 'error')
-  } finally {
-    state.statusRefreshing = false
+    // 只在由成功转为失败时提示一次，避免每 2 秒刷屏
+    if (!state.statusError) showToast('获取状态失败: ' + errorText(e), 'error')
+    state.statusError = true
   }
 }
 
@@ -1736,11 +1783,14 @@ async function refreshDiagnostics() {
   if (JSON.stringify(state.diagnostics) !== previous) backgroundRender()
 }
 
+// 不在流量分析页时只读状态（概览要显示分析器是否运行）；数据有变化才重绘
 async function refreshCapture() {
+  const before = JSON.stringify([state.captureStatus, state.captureFlows, state.selectedCaptureFlow])
   try {
+    const onPage = state.view === 'capture'
     const [status, flows] = await Promise.all([
       window.go.app.App.GetCaptureStatus(),
-      window.go.app.App.GetCaptureFlows(),
+      onPage ? window.go.app.App.GetCaptureFlows() : state.captureFlows,
     ])
     state.captureStatus = status
     state.captureFlows = flows || []
@@ -1749,25 +1799,30 @@ async function refreshCapture() {
       state.selectedCaptureFlow = null
     }
     if (!state.selectedCaptureID && state.captureFlows.length) state.selectedCaptureID = state.captureFlows[0].id
-    if (state.selectedCaptureID && state.selectedCaptureFlow?.id !== state.selectedCaptureID) {
-      state.selectedCaptureFlow = await window.go.app.App.GetCaptureFlow(state.selectedCaptureID)
-    } else if (state.selectedCaptureFlow) {
-      const summary = state.captureFlows.find(flow => flow.id === state.selectedCaptureID)
+    const id = state.selectedCaptureID
+    if (onPage && id && state.selectedCaptureFlow?.id !== id) {
+      const flow = await window.go.app.App.GetCaptureFlow(id)
+      if (state.selectedCaptureID === id) state.selectedCaptureFlow = flow // 期间用户点了别的记录就丢弃
+    } else if (state.selectedCaptureFlow?.id === id) {
+      const summary = state.captureFlows.find(flow => flow.id === id)
       if (summary) state.selectedCaptureFlow = { ...state.selectedCaptureFlow, route: summary.route, error: summary.error, status_code: summary.status_code, duration_ms: summary.duration_ms }
     }
-    if (state.view === 'capture') backgroundRender()
+    if (JSON.stringify([state.captureStatus, state.captureFlows, state.selectedCaptureFlow]) !== before) backgroundRender()
   } catch (e) {
     console.error('capture refresh failed:', e)
   }
 }
 
+// 读取失败也要重绘：调用方的“更新中”状态已清掉，按钮要恢复；还没有列表时在列表处显示错误
 async function refreshRules() {
   try {
-    state.rules = await window.go.app.App.ListRules()
-    renderApp()
+    state.rules = await window.go.app.App.ListRules() || []
+    state.rulesError = ''
   } catch (e) {
-    console.error('list rules failed:', e)
+    state.rulesError = errorText(e)
+    if (state.rules) showToast('读取规则集失败: ' + state.rulesError, 'error')
   }
+  renderApp()
 }
 
 // 安卓扫码：识别到的内容放进“粘贴链接导入”，然后直接导入。
@@ -1847,14 +1902,11 @@ function syncNativeTheme() {
 
 // 安卓返回键：先关弹窗，再回到概览；都没有时返回 false，由 APK 把应用退到后台。
 window.__sbtunBack = () => {
-  if (state.backup) closeBackup()
-  else if (state.nodeQRCode) closeNodeQRCode()
-  else if (state.nodeFormOpen || state.editingNodeId) closeNodeModal()
-  else if (state.view !== 'overview') {
-    state.view = 'overview'
-    localStorage.setItem('sbtun-ui-view', state.view)
-    renderApp()
-  } else return false
+  if (closeTopModal()) return true
+  if (state.view === 'overview') return false
+  state.view = 'overview'
+  localStorage.setItem('sbtun-ui-view', state.view)
+  renderApp()
   return true
 }
 
@@ -1866,19 +1918,10 @@ function bindEvents() {
         if (!clickedMenu || menu !== clickedMenu) menu.open = false
       })
     })
-    document.addEventListener('keydown', event => {
-      if (event.key !== 'Escape') return
-      if (state.captureBodyViewer) {
-        state.captureBodyViewer = null
-        renderApp()
-      } else if (state.backup) closeBackup()
-      else if (state.nodeQRCode) closeNodeQRCode()
-      else if (state.nodeFormOpen || state.editingNodeId) closeNodeModal()
-    })
-    // 输入框失焦后补上被推迟的后台重绘
-    app.addEventListener('focusout', () => setTimeout(() => {
-      if (state.renderPending && !userEditing()) renderApp()
-    }))
+    document.addEventListener('keydown', event => { if (event.key === 'Escape') closeTopModal() })
+    // 输入框失焦后补上被推迟的后台重绘（正在点击时由 bindPointerHold 在 click 之后补）
+    app.addEventListener('focusout', () => setTimeout(flushPendingRender))
+    bindPointerHold()
     state.documentEventsBound = true
   }
   document.querySelector('#appUpdate')?.addEventListener('click', () => {
@@ -1959,7 +2002,9 @@ function bindEvents() {
   document.querySelector('#routeTestBtn')?.addEventListener('click', runRouteTest)
   const connFilter = document.querySelector('#connFilter')
   if (connFilter) onTextInput(connFilter, () => { state.connFilter = connFilter.value; updateConnectionsView() })
-  document.querySelector('#connList')?.addEventListener('click', async event => {
+  const connList = document.querySelector('#connList')
+  if (connList) connList._rows = renderConnectionRows() // 记下当前内容，轮询数据没变就不替换
+  connList?.addEventListener('click', async event => {
     const id = event.target.closest('[data-conn-close]')?.dataset.connClose
     if (!id) return
     try { await window.go.app.App.CloseConnection(id) } catch (e) { showToast('断开失败: ' + errorText(e), 'error') }
@@ -2033,11 +2078,6 @@ function bindEvents() {
     localStorage.setItem('sbtun-ui-node-region', state.nodeRegion)
     renderApp()
   }))
-  document.querySelectorAll('.route-to-node').forEach(btn => btn.addEventListener('click', () => {
-    Object.assign(state.customRuleForm, { action: 'node', node_id: btn.dataset.id })
-    state.view = 'routing'
-    renderApp()
-  }))
   const addRuleBtn = document.querySelector('#addRuleBtn')
   if (addRuleBtn) addRuleBtn.addEventListener('click', () => {
     const { match_type: matchType, node_id: nodeID } = state.customRuleForm
@@ -2107,7 +2147,7 @@ function bindEvents() {
         if (state.running) await window.go.app.App.Stop()
         else await window.go.app.App.Start()
       } finally {
-        await refreshStatus()
+        await refreshStatus(true)
       }
     })
   }))
@@ -2222,8 +2262,8 @@ function bindEvents() {
       showToast(enabled && !state.captureStatus?.running ? '配置已保存，开启 TUN 后开始分析' : '分析配置已应用', 'success')
     }, saveCapture)
   })
-  const captureCertLevel = document.querySelector('#captureCertLevel')
-  const certLevel = () => captureCertLevel?.value || 'system'
+  document.querySelector('#captureCertLevel')?.addEventListener('change', event => { state.captureCertLevel = event.target.value })
+  const certLevel = () => state.captureCertLevel
   document.querySelector('#installCaptureCA')?.addEventListener('click', event => runOnce('captureCA', async () => {
     const level = certLevel()
     await window.go.app.App.InstallCaptureCertificate(level)
@@ -2250,9 +2290,12 @@ function bindEvents() {
     showToast('抓包已保存为 JSON', 'success')
   }, event.currentTarget))
   document.querySelectorAll('[data-capture-id]').forEach(row => row.addEventListener('click', async () => {
-    state.selectedCaptureID = Number(row.dataset.captureId)
-    try { state.selectedCaptureFlow = await window.go.app.App.GetCaptureFlow(state.selectedCaptureID) }
+    const id = state.selectedCaptureID = Number(row.dataset.captureId)
+    let flow
+    try { flow = await window.go.app.App.GetCaptureFlow(id) }
     catch (e) { return showToast(errorText(e), 'error') }
+    if (state.selectedCaptureID !== id) return // 已经点了别的记录
+    state.selectedCaptureFlow = flow
     renderApp()
   }))
   const captureSearch = document.querySelector('#captureSearch')
@@ -2287,10 +2330,7 @@ function bindEvents() {
     }
     renderApp()
   }))
-  document.querySelectorAll('[data-close-capture-body]').forEach(element => element.addEventListener('click', () => {
-    state.captureBodyViewer = null
-    renderApp()
-  }))
+  document.querySelectorAll('[data-close-capture-body]').forEach(element => element.addEventListener('click', () => closeModal('captureBodyViewer')))
   document.querySelectorAll('[data-capture-body-mode]').forEach(button => button.addEventListener('click', () => {
     if (!state.captureBodyViewer) return
     state.captureBodyViewer.mode = button.dataset.captureBodyMode
@@ -2429,7 +2469,7 @@ function bindEvents() {
       renderApp()
     })
   })
-  document.querySelectorAll('[data-close-node-qrcode]').forEach(element => element.addEventListener('click', closeNodeQRCode))
+  document.querySelectorAll('[data-close-node-qrcode]').forEach(element => element.addEventListener('click', () => closeModal('nodeQRCode')))
   bindBackupModal()
   document.querySelector('#copyNodeQRCodeLink')?.addEventListener('click', async () => {
     if (!state.nodeQRCode) return
@@ -2626,6 +2666,7 @@ function bindEvents() {
       showToast(hours ? `订阅将每 ${hours} 小时自动更新` : '已关闭订阅自动更新', 'success')
     } catch (e) {
       showToast('设置失败：' + errorText(e), 'error')
+      renderApp() // 下拉框回到实际配置的值
     }
   })
 
@@ -2785,6 +2826,12 @@ function bindNodeList(root) {
       state.nodeQRCode = { name: node.name, link: qr.link, image: qr.image }
     }, btn)
   }))
+  root.querySelectorAll('.route-to-node').forEach(btn => btn.addEventListener('click', () => {
+    Object.assign(state.customRuleForm, { action: 'node', node_id: btn.dataset.id })
+    state.view = 'routing'
+    localStorage.setItem('sbtun-ui-view', state.view)
+    renderApp()
+  }))
   root.querySelectorAll('.test-node').forEach(btn => btn.addEventListener('click', async () => {
     await testNodes([btn.dataset.id])
     const latency = nodeLatency(btn.dataset.id)
@@ -2859,28 +2906,30 @@ async function setupTitlebar() {
   syncMaximise()
 }
 
+// 轮询：上一轮结束后才排下一轮，后端慢时请求不会叠加、乱序覆盖
+function poll(fn, ms) {
+  const tick = () => Promise.resolve().then(fn).catch(e => console.error(e)).then(() => setTimeout(tick, ms))
+  setTimeout(tick, ms)
+}
+
 // Wails runtime ready
 window.addEventListener('DOMContentLoaded', async () => {
   setupTitlebar()
   if (window.go?.app?.App) {
-    await refreshStatus()
-    await refreshConfig()
-    await refreshSingBoxVersion()
-    await refreshIPv6Status()
-    await refreshRules()
-    await refreshDiagnostics()
-    if (!IS_ANDROID) await refreshCapture()
-    setInterval(refreshStatus, 2000)
-    setInterval(() => { if (!state.configReading) refreshConfig() }, 1500)
-    setInterval(refreshDiagnostics, 1500)
-    if (!IS_ANDROID) setInterval(refreshCapture, 1500)
-    setInterval(refreshAutoSwitch, 2000)
-    setInterval(refreshConnections, 2000)
+    // 各项读取函数自己处理错误，并行发出
+    await Promise.all([refreshStatus(), refreshConfig(), refreshSingBoxVersion(), refreshIPv6Status(), refreshRules(), IS_ANDROID || refreshCapture()])
+    await refreshDiagnostics() // 依赖配置里的诊断开关
+    backgroundRender()
+    poll(refreshStatus, 2000)
+    poll(() => state.configReading || refreshConfig(), 1500)
+    poll(refreshDiagnostics, 1500)
+    if (!IS_ANDROID) poll(refreshCapture, 1500)
+    poll(refreshAutoSwitch, 2000)
+    poll(refreshConnections, 2000)
     checkAppUpdate()
     setInterval(checkAppUpdate, APP_UPDATE_INTERVAL)
   } else {
     showToast('Wails 运行时未加载', 'error')
-    renderApp()
   }
 })
 
@@ -2921,10 +2970,14 @@ function renderGroupModal() {
         <div class="group-dim"><span>协议</span><div class="filter-row">${protocols.map(pr => chip('protocols', pr, escapeHtml(protocolLabel(pr)), nodes.filter(n => n.protocol === pr).length)).join('')}</div></div>
         <div class="group-keywords"><label class="rule-field"><span>名称包含</span><input id="groupKeyword" class="input" value="${escapeHtml(m.keyword)}" placeholder="IPLC 解锁（任一即可）" /></label><label class="rule-field"><span>名称排除</span><input id="groupExclude" class="input" value="${escapeHtml(m.exclude)}" placeholder="过期 剩余 官网" /></label></div>
         <p class="muted modal-hint">不选的项表示不限；同一项里选多个是“任一”，不同项之间是“同时满足”。订阅更新后组里的节点会自动增减。</p>
-        <div class="group-preview"><div class="group-preview-head">匹配 <strong>${matched.length}</strong> 个节点</div>${matched.slice(0, 12).map(n => `<span class="group-node">${n.country ? regionFlag(n.country) + ' ' : ''}${escapeHtml(n.name)} <span class="muted">${escapeHtml(protocolLabel(n.protocol))}</span></span>`).join('')}${matched.length > 12 ? `<span class="muted">… 还有 ${matched.length - 12} 个</span>` : ''}</div>
+        <div class="group-preview" id="groupPreview">${groupPreviewHTML(matched)}</div>
       </div>
       <footer class="modal-footer">${m.id ? '<button class="btn btn-ghost danger" id="deleteGroupBtn">删除</button>' : ''}<button class="btn btn-ghost" data-close-group>取消</button><button class="btn btn-primary" id="saveGroupBtn" ${matched.length ? '' : 'disabled'}>${m.fromRule ? '保存并用于这条规则' : '保存'}</button></footer>
     </section></div>`
+}
+
+function groupPreviewHTML(matched) {
+  return `<div class="group-preview-head">匹配 <strong>${matched.length}</strong> 个节点</div>${matched.slice(0, 12).map(n => `<span class="group-node">${n.country ? regionFlag(n.country) + ' ' : ''}${escapeHtml(n.name)} <span class="muted">${escapeHtml(protocolLabel(n.protocol))}</span></span>`).join('')}${matched.length > 12 ? `<span class="muted">… 还有 ${matched.length - 12} 个</span>` : ''}`
 }
 
 function bindGroupEvents() {
@@ -2932,7 +2985,7 @@ function bindGroupEvents() {
   document.querySelectorAll('[data-edit-group]').forEach(btn => btn.addEventListener('click', () => openGroupModal(btn.dataset.editGroup)))
   const m = state.groupModal
   if (!m) return
-  document.querySelectorAll('[data-close-group]').forEach(el => el.addEventListener('click', () => { state.groupModal = null; renderApp() }))
+  document.querySelectorAll('[data-close-group]').forEach(el => el.addEventListener('click', () => closeModal('groupModal')))
   document.querySelectorAll('[data-group-chip]').forEach(btn => btn.addEventListener('click', () => {
     const list = m[btn.dataset.groupChip], value = btn.dataset.value
     list.includes(value) ? list.splice(list.indexOf(value), 1) : list.push(value)
@@ -2940,9 +2993,14 @@ function bindGroupEvents() {
   }))
   for (const [sel, field] of [['#groupName', 'name'], ['#groupKeyword', 'keyword'], ['#groupExclude', 'exclude']]) {
     const input = document.querySelector(sel)
-    // 关键词改动要刷新预览：失焦时重绘，输入时只记值，避免打字时丢焦点
-    input?.addEventListener('input', () => { m[field] = input.value })
-    if (field !== 'name') input?.addEventListener('change', () => renderApp())
+    // 关键词改动只局部刷新预览和保存按钮，不整页重绘（不丢焦点，也不吞掉紧接着的“保存”点击）
+    input?.addEventListener('input', () => {
+      m[field] = input.value
+      if (field === 'name') return
+      const matched = groupNodes(m)
+      document.querySelector('#groupPreview').innerHTML = groupPreviewHTML(matched)
+      document.querySelector('#saveGroupBtn').disabled = !matched.length
+    })
   }
   document.querySelector('#saveGroupBtn')?.addEventListener('click', () => runOnce('group', async () => {
     const name = m.name.trim()
@@ -2965,3 +3023,6 @@ function bindGroupEvents() {
     showToast('节点组已删除，用它的规则暂走代理', 'success')
   }))
 }
+
+// 所有顶层声明之后再首次渲染（不受暂时性死区影响），并立即绑定事件，启动读取期间界面也能点
+renderApp()

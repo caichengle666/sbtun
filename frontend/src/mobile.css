@@ -141,8 +141,8 @@
 
   /* 弹窗改成底部抽屉 */
   .modal { z-index: 40; align-items: end; padding: 0; }
-  .modal-panel, .backup-modal, .qrcode-modal {
-    width: 100%; max-height: calc(100vh - var(--safe-top) - 24px);
+  .modal-panel, .backup-modal, .qrcode-modal, .group-modal {
+    width: 100%; min-width: 0; max-width: none; max-height: calc(100vh - var(--safe-top) - 24px);
     padding-bottom: var(--bottom-pad); border-width: 1px 0 0; border-radius: 20px 20px 0 0;
     animation: sheet-up .22s ease-out;
   }
@@ -152,6 +152,7 @@
   .modal-body { padding: 16px; }
   .modal-footer { padding: 12px 16px; }
   .modal-footer .btn { flex: 1; }
+  .group-dim .filter-btn { max-width: 100%; overflow: hidden; text-overflow: ellipsis; }
   .qrcode-image { width: 260px; height: 260px; max-width: 70vw; max-height: 70vw; }
 
   .toast { bottom: calc(var(--tabbar-h) + var(--safe-bottom) + 16px); max-width: calc(100vw - 32px); border-radius: 12px; text-align: center; }
@@ -195,6 +196,17 @@
 .no-flex-gap .node-info > :not(:last-child) { margin-bottom: 2px; }
 .no-flex-gap .node-list > :not(:last-child) { margin-bottom: 4px; }
 .no-flex-gap .qrcode-body > :not(:last-child) { margin-bottom: 12px; }
+/* 节点组、连接、DNS 过滤、备份列表 */
+.no-flex-gap .group-row > :not(:last-child) { margin-right: 14px; }
+.no-flex-gap .group-title > :not(:last-child), .no-flex-gap .conn-heading-side > :not(:last-child) { margin-right: 10px; }
+.no-flex-gap .group-best > :not(:last-child) { margin-right: 8px; }
+.no-flex-gap .group-keywords > :not(:last-child) { margin-right: 12px; }
+.no-flex-gap .dns-filter-actions > :not(:last-child) { margin-right: 6px; }
+.no-flex-gap .group-conds > *, .no-flex-gap .group-dim .filter-row > *, .no-flex-gap .group-preview > :not(.group-preview-head) { margin: 0 6px 6px 0; }
+.no-flex-gap .route-test-result > * { margin: 0 18px 6px 0; }
+.no-flex-gap .group-form > :not(:last-child) { margin-bottom: 14px; }
+.no-flex-gap .backup-list .node-row > * { margin-bottom: 2px; }
+@media (max-width: 640px) { .no-flex-gap .group-keywords > :not(:last-child) { margin: 0 0 12px; } }
 @media (min-width: 761px) and (max-width: 1000px) { .no-flex-gap .nav-icon { margin-right: 0; } }
 @media (max-width: 760px) {
   .no-flex-gap .nav-icon { margin: 0 0 4px; }
