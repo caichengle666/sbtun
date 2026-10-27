@@ -81,6 +81,12 @@ const state = {
   diagnostics: null,
   ipv6Status: null,
   captureStatus: null,
+  connections: [],
+  connectionsError: '',
+  connFilter: '',
+  routeTestInput: '',
+  routeTestResult: null,
+  routeTesting: false,
   captureFlows: [],
   captureDraft: '',
   captureDraftDirty: false,
@@ -431,7 +437,95 @@ function renderOverview() {
       <section class="card overview-route-panel"><span class="section-kicker">当前路由</span><strong>${escapeHtml(mode?.name || '未设置')}</strong><div class="route-line"><span>路由策略</span><b>${escapeHtml(mode?.desc || '请先选择路由模式')}</b></div><div class="route-line"><span>IPv6</span><b class="${state.config?.ipv6_enabled ? 'good' : ''}">${state.config?.ipv6_enabled ? '已启用' : '未启用'}</b></div><button class="btn btn-ghost overview-route-btn" data-view="routing">更改路由模式</button></section>
       <section class="card traffic-panel"><div class="section-heading"><h2>实时流量</h2><span class="muted">最近 60 秒</span></div><div class="traffic-numbers"><span>上行<strong id="trafficUp">${formatBytes(state.traffic.up)}/s</strong></span><span>下行<strong id="trafficDown">${formatBytes(state.traffic.down)}/s</strong></span></div><div class="traffic-chart" id="trafficChart" role="img" aria-label="最近 60 秒实时流量">${renderTrafficChart()}</div><div class="traffic-chart-label"><span>60 秒前</span><span>现在</span></div></section>
     </div>
-    <div class="overview-quick"><button data-view="nodes"><span>可用节点</span><strong>${nodes.length} 个　›</strong></button><button data-view="rules"><span>规则集</span><strong>已启用 ${enabledRules} / ${rules.length}　›</strong></button>${IS_ANDROID ? '' : `<button data-view="capture"><span>流量分析</span><strong>${state.captureStatus?.running ? '分析器运行中' : '分析器已停止'}　›</strong></button>`}</div>`
+    <div class="overview-quick"><button data-view="nodes"><span>可用节点</span><strong>${nodes.length} 个　›</strong></button><button data-view="rules"><span>规则集</span><strong>已启用 ${enabledRules} / ${rules.length}　›</strong></button>${IS_ANDROID ? '' : `<button data-view="capture"><span>流量分析</span><strong>${state.captureStatus?.running ? '分析器运行中' : '分析器已停止'}　›</strong></button>`}</div>
+    ${renderConnectionsPanel()}`
+}
+
+// 连接：每个网站命中哪条规则、实际走哪个出口；可输入网站实际测一次走向。
+function renderConnectionsPanel() {
+  return `<section class="card conn-panel">
+      <div class="section-heading"><h2>连接</h2><span class="conn-heading-side"><span class="muted" id="connCount">${connCountText()}</span><button class="btn btn-ghost" id="closeAllConns" ${state.running ? '' : 'disabled'}>全部断开</button></span></div>
+      <div class="conn-tools">
+        <input id="routeTestInput" class="input" value="${escapeHtml(state.routeTestInput)}" placeholder="输入网站测试走向，例如 openai.com" />
+        <button class="btn btn-primary" id="routeTestBtn" ${state.running && !state.routeTesting ? '' : 'disabled'}>${state.routeTesting ? '测试中…' : '测试走向'}</button>
+        <input id="connFilter" class="input" value="${escapeHtml(state.connFilter)}" placeholder="筛选网站、规则或节点" />
+      </div>
+      <div id="routeTestResult">${renderRouteTestResult()}</div>
+      <div class="conn-list" id="connList">${renderConnectionRows()}</div>
+    </section>`
+}
+
+function connCountText() {
+  return state.running ? `${state.connections.length} 个` : ''
+}
+
+function connTargetHTML(c) {
+  return `<span class="conn-target ${escapeHtml(c.kind || 'proxy')}">${escapeHtml(c.target || '—')}</span>${c.via ? `<small>${escapeHtml(c.via)}</small>` : ''}`
+}
+
+function renderRouteTestResult() {
+  const r = state.routeTestResult
+  if (!r) return ''
+  if (r.error) return `<div class="route-test-result error">${escapeHtml(r.error)}</div>`
+  return `<div class="route-test-result"><strong>${escapeHtml(r.host)}</strong><span>命中 <b>${escapeHtml(r.rule)}</b></span><span>出口 ${connTargetHTML(r)}</span></div>`
+}
+
+function renderConnectionRows() {
+  if (!state.running) return '<div class="empty conn-empty">代理未运行，开启后这里会显示每个连接命中的规则和实际出口</div>'
+  if (state.connectionsError) return `<div class="empty conn-empty">${escapeHtml(state.connectionsError)}</div>`
+  const keyword = state.connFilter.trim().toLowerCase()
+  const list = keyword ? state.connections.filter(c => `${c.host} ${c.rule} ${c.target} ${c.via}`.toLowerCase().includes(keyword)) : state.connections
+  if (!list.length) return `<div class="empty conn-empty">${keyword ? '没有匹配的连接' : '暂时没有连接'}</div>`
+  return list.slice(0, 100).map(c => `<div class="conn-row">
+      <span class="conn-host" title="${escapeHtml(c.host + ':' + c.port)}">${escapeHtml(c.host)}<small>${escapeHtml((c.network || '').toUpperCase())} ${escapeHtml(c.port)}</small></span>
+      <span class="conn-rule" title="${escapeHtml(c.rule)}">${escapeHtml(c.rule)}</span>
+      <span class="conn-out">${connTargetHTML(c)}</span>
+      <span class="conn-bytes">↑${formatBytes(c.upload)} ↓${formatBytes(c.download)}</span>
+      <button class="conn-close" data-conn-close="${escapeHtml(c.id)}" title="断开这个连接" aria-label="断开这个连接">×</button>
+    </div>`).join('')
+}
+
+function updateConnectionsView() {
+  const list = document.querySelector('#connList')
+  if (list) list.innerHTML = renderConnectionRows()
+  const count = document.querySelector('#connCount')
+  if (count) count.textContent = connCountText()
+}
+
+async function refreshConnections() {
+  if (state.view !== 'overview' || document.hidden || state.connectionsLoading) return
+  if (!state.running) {
+    state.connections = []
+    updateConnectionsView()
+    return
+  }
+  state.connectionsLoading = true
+  try {
+    state.connections = await window.go.app.App.GetConnections() || []
+    state.connectionsError = ''
+  } catch (e) {
+    state.connections = []
+    state.connectionsError = errorText(e)
+  } finally {
+    state.connectionsLoading = false
+  }
+  updateConnectionsView()
+}
+
+async function runRouteTest() {
+  const target = state.routeTestInput.trim()
+  if (!target) { showToast('请输入网站，例如 openai.com', 'error'); return }
+  state.routeTesting = true
+  renderApp()
+  try {
+    state.routeTestResult = await window.go.app.App.TestRoute(target)
+  } catch (e) {
+    state.routeTestResult = { error: errorText(e) }
+  } finally {
+    state.routeTesting = false
+    renderApp()
+    refreshConnections()
+  }
 }
 
 // 手机竖屏的概览顶部：大号连接按钮 + 状态 + 实时速度（宽屏时由 CSS 隐藏）。
@@ -1845,6 +1939,25 @@ function bindEvents() {
   })
   const quickNodeSelect = document.querySelector('#quickNodeSelect')
   if (quickNodeSelect) quickNodeSelect.addEventListener('change', () => selectNode(quickNodeSelect.value))
+  const routeTestInput = document.querySelector('#routeTestInput')
+  if (routeTestInput) {
+    routeTestInput.addEventListener('input', () => { state.routeTestInput = routeTestInput.value })
+    routeTestInput.addEventListener('keydown', event => { if (event.key === 'Enter' && !event.isComposing) runRouteTest() })
+  }
+  document.querySelector('#routeTestBtn')?.addEventListener('click', runRouteTest)
+  const connFilter = document.querySelector('#connFilter')
+  if (connFilter) onTextInput(connFilter, () => { state.connFilter = connFilter.value; updateConnectionsView() })
+  document.querySelector('#connList')?.addEventListener('click', async event => {
+    const id = event.target.closest('[data-conn-close]')?.dataset.connClose
+    if (!id) return
+    try { await window.go.app.App.CloseConnection(id) } catch (e) { showToast('断开失败: ' + errorText(e), 'error') }
+    refreshConnections()
+  })
+  document.querySelector('#closeAllConns')?.addEventListener('click', async () => {
+    if (!window.confirm('断开全部连接？正在进行的下载和网页会中断后重新连接。')) return
+    try { await window.go.app.App.CloseConnection('') } catch (e) { showToast('断开失败: ' + errorText(e), 'error') }
+    refreshConnections()
+  })
   const testCurrentNode = document.querySelector('#testCurrentNode')
   if (testCurrentNode) testCurrentNode.addEventListener('click', () => testNodes([activeNodeID()].filter(Boolean)))
   document.querySelectorAll('[data-rules-tab]').forEach(button => button.addEventListener('click', () => {
@@ -2750,6 +2863,7 @@ window.addEventListener('DOMContentLoaded', async () => {
     setInterval(refreshDiagnostics, 1500)
     if (!IS_ANDROID) setInterval(refreshCapture, 1500)
     setInterval(refreshAutoSwitch, 2000)
+    setInterval(refreshConnections, 2000)
     checkAppUpdate()
     setInterval(checkAppUpdate, APP_UPDATE_INTERVAL)
   } else {

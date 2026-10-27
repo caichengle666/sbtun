@@ -259,6 +259,8 @@ func main() {
 		err = runKernelCommand(application, commandArgs)
 	case "upgrade":
 		err = runUpgradeCommand(application)
+	case "conns":
+		err = runConnsCommand(application, commandArgs)
 	}
 	if err != nil {
 		fmt.Fprintln(os.Stderr, err)
@@ -316,6 +318,8 @@ func cliUsage(command string, args []string) string {
 		return "sbtun rules [list|add <名称> <链接> [去向]|edit <ID> <名称> <链接> [去向]|action <ID> <去向>|delete <ID>|enable <ID>|disable <ID>|restore|update <ID>|update-all]"
 	case "subs":
 		return "sbtun subs [list|update [编号]|delete <编号>|auto <小时|off>]"
+	case "conns":
+		return "sbtun conns [关键词|test <域名>|close <编号|all>]"
 	case "capture":
 		if len(args) > 0 {
 			switch args[0] {
@@ -482,6 +486,8 @@ func validateCLIArgs(command string, args []string) error {
 		}
 	case "capture":
 		return validateCaptureArgs(args)
+	case "conns":
+		return validateConnsArgs(args)
 	case "kernel":
 		return validateKernelArgs(args)
 	case "backup":
@@ -595,6 +601,9 @@ func printHelp() {
 	printHelpGroup("路由与规则", []helpEntry{
 		{"route <模式>", "设置路由: smart（国内直连）/global（全部代理）/direct（全部直连）；自己的规则在 smart、global 下优先，direct 下只保留屏蔽"},
 		{"auto-switch <on|off>", "开启或关闭节点失效自动切换"},
+		{"conns [关键词]", "查看当前连接：网站、命中的规则、实际出口"},
+		{"conns test <域名>", "实际连一次，看这个网站命中哪条规则、走哪个出口"},
+		{"conns close <编号|all>", "断开指定连接或全部连接"},
 		{"set ipv6 <on|off>", "开启或关闭 IPv6"},
 		{"set webrtc <on|off>", "开启或关闭 WebRTC 防泄漏"},
 		{"set diagnostics <on|off>", "开启或关闭诊断信息"},
@@ -656,6 +665,7 @@ func printHelp() {
   sbtun custom add domain_suffix example.com direct
   sbtun groups add "美国 hy2" region=US proto=hy2
   sbtun custom add domain_suffix openai.com "美国 hy2"
+  sbtun conns test openai.com
   sbtun edit 2
   sbtun edit 2 "vless://UUID@1.2.3.4:443?..."
 
@@ -819,7 +829,7 @@ func runRulesCommand(application *app.App, args []string) error {
 			}
 			target := "内置"
 			if rule.Source != "default" {
-				target = describeAction(cfg, rule.Action)
+				target = app.DescribeAction(cfg, rule.Action)
 			}
 			fmt.Printf("%s\t%s\t%s\t%s\n", rule.ID, rule.Name, target, state)
 		}
@@ -867,7 +877,7 @@ func runRulesCommand(application *app.App, args []string) error {
 		if err := application.SetRuleSetAction(args[1], action); err != nil {
 			return err
 		}
-		fmt.Println("规则集去向已改为", describeAction(cfg, action))
+		fmt.Println("规则集去向已改为", app.DescribeAction(cfg, action))
 		return nil
 	case "delete":
 		if err := application.DeleteRuleSet(args[1]); err != nil {

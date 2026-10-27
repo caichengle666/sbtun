@@ -209,3 +209,13 @@
   .no-flex-gap .row > :not(:last-child) { margin: 0 0 10px; }
   .no-flex-gap .setting-field > :not(:last-child) { margin: 0 0 5px; }
 }
+
+/* 连接：窄屏两行显示 */
+@media (max-width: 760px) {
+  .conn-tools { grid-template-columns: minmax(0, 1fr) auto; }
+  .conn-tools #connFilter { grid-column: 1 / -1; }
+  .conn-row { grid-template-columns: minmax(0, 1fr) auto 22px; gap: 2px 8px; }
+  .conn-rule { grid-column: 1 / 2; grid-row: 2; font-size: 11px; }
+  .conn-out { grid-column: 2 / 4; grid-row: 2; text-align: right; }
+  .conn-bytes { grid-column: 2; grid-row: 1; }
+}

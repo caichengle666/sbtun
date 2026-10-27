@@ -935,3 +935,30 @@ h2 { color: var(--text); letter-spacing: 0; }
 :root[data-theme="light"] ::-webkit-scrollbar-thumb:hover { background-color: rgba(88, 120, 183, .7); }
 :root[data-theme="glass"] ::-webkit-scrollbar-thumb { background-color: rgba(255, 255, 255, .22); }
 :root[data-theme="glass"] ::-webkit-scrollbar-thumb:hover { background-color: rgba(255, 255, 255, .4); }
+
+/* 运行概览 · 连接 */
+.conn-panel { margin-top: 13px; }
+.conn-panel .section-heading { margin-bottom: 10px; }
+.conn-heading-side { display: flex; align-items: center; gap: 10px; }
+.conn-tools { display: grid; grid-template-columns: minmax(0, 1.4fr) auto minmax(0, 1fr); gap: 8px; }
+.route-test-result { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 18px; margin-top: 10px; padding: 10px 12px; border: 1px solid var(--accent); border-radius: 7px; background: var(--accent-bg); font-size: 12px; }
+.route-test-result span { color: var(--muted); }
+.route-test-result b { color: var(--text); font-weight: 600; }
+.route-test-result small, .conn-out small { margin-left: 6px; color: var(--quiet); font-size: 10px; }
+.route-test-result.error { border-color: var(--red); background: transparent; color: var(--red); }
+.conn-list { display: grid; margin-top: 10px; max-height: 360px; overflow-y: auto; }
+.conn-row { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1.2fr) minmax(0, 1.1fr) 130px 22px; align-items: center; gap: 10px; padding: 7px 4px; border-bottom: 1px solid var(--border); font-size: 12px; }
+.conn-row:last-child { border-bottom: 0; }
+.conn-host, .conn-rule, .conn-out { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.conn-host { color: var(--text); font-weight: 600; }
+.conn-host small { margin-left: 6px; color: var(--quiet); font-size: 10px; font-weight: 400; }
+.conn-rule { color: var(--muted); }
+.conn-bytes { color: var(--quiet); font-size: 11px; text-align: right; white-space: nowrap; }
+.conn-target { font-weight: 600; }
+.conn-target.direct { color: var(--green); }
+.conn-target.proxy { color: var(--accent); }
+.conn-target.block { color: var(--red); }
+.conn-target.capture { color: var(--amber); }
+.conn-close { width: 22px; height: 22px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--quiet); font-size: 15px; line-height: 1; cursor: pointer; }
+.conn-close:hover { background: var(--raised); color: var(--red); }
+.conn-empty { padding: 18px 0; color: var(--quiet); font-size: 12px; }

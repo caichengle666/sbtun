@@ -21,8 +21,6 @@ var ruleMatchLabels = map[string]string{
 	"port":           "端口",
 }
 
-var ruleActionLabels = map[string]string{"proxy": "代理", "direct": "直连", "block": "阻断"}
-
 func onOff(enabled bool) string {
 	if enabled {
 		return "开启"
@@ -108,7 +106,7 @@ func runRuleListCommand(application *app.App, args []string, filter bool) error 
 			return nil
 		}
 		for i, rule := range rules {
-			fmt.Printf("%d\t%s\t%s\t%s\n", i+1, ruleMatchLabels[rule.MatchType], rule.Value, describeAction(cfg, rule.Action))
+			fmt.Printf("%d\t%s\t%s\t%s\n", i+1, ruleMatchLabels[rule.MatchType], rule.Value, app.DescribeAction(cfg, rule.Action))
 		}
 		return nil
 	}

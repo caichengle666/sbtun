@@ -29,49 +29,6 @@ func cliRuleTarget(cfg config.Config, text string) (string, error) {
 	return action, config.ValidateAction(action)
 }
 
-// describeAction 把去向写成人能看懂的样子，目标没了时提示暂走代理。
-func describeAction(cfg config.Config, action string) string {
-	if config.IsBasicAction(action) {
-		kind, _ := config.SplitAction(action)
-		return ruleActionLabels[kind]
-	}
-	kind, arg := config.SplitAction(action)
-	name := ""
-	switch kind {
-	case config.TargetNode:
-		for _, n := range cfg.Nodes {
-			if n.ID == arg {
-				name = "节点 " + n.Name
-			}
-		}
-	case config.TargetGroup:
-		for _, g := range cfg.NodeGroups {
-			if g.ID == arg {
-				name = "节点组 " + g.Name
-			}
-		}
-	case config.TargetSub:
-		for _, s := range cfg.Subscriptions {
-			if s.ID == arg {
-				name = "订阅 " + s.Name
-			}
-		}
-	case config.TargetRegion:
-		name = "地区 " + arg
-	case config.TargetProto:
-		name = "协议 " + arg
-	}
-	if name == "" {
-		return action + "（目标已删除，暂走代理）"
-	}
-	if count := len(cfg.TargetNodes(action)); count == 0 {
-		return name + "（没有匹配节点，暂走代理）"
-	} else if count > 1 {
-		return fmt.Sprintf("%s（%d 个节点，自动选最快）", name, count)
-	}
-	return name
-}
-
 func validateGroupsArgs(args []string) error {
 	switch {
 	case len(args) == 0, len(args) == 1 && args[0] == "list":
