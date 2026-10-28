@@ -2,7 +2,6 @@ package app
 
 import (
 	"bytes"
-	"context"
 	"crypto/aes"
 	"crypto/cipher"
 	"crypto/pbkdf2"
@@ -63,7 +62,7 @@ func (a *App) SaveWebDAVSettings(s config.WebDAVSettings) error {
 	s.URL = strings.TrimSpace(s.URL)
 	s.Username = strings.TrimSpace(s.Username)
 	if s.URL != "" {
-		if _, err := newWebDAVClient(s); err != nil {
+		if _, err := newWebDAVClient(nil, s); err != nil {
 			return err
 		}
 	}
@@ -84,10 +83,11 @@ func (a *App) SaveWebDAVSettings(s config.WebDAVSettings) error {
 
 // TestWebDAV 检查地址和账号能否访问，目录不存在时会尝试创建。
 func (a *App) TestWebDAV(s config.WebDAVSettings) error {
-	client, err := newWebDAVClient(s)
+	client, err := newWebDAVClient(a, s)
 	if err != nil {
 		return err
 	}
+	defer client.close()
 	if err := client.ensureDir(); err != nil {
 		return err
 	}
@@ -105,7 +105,7 @@ func (a *App) BackupToWebDAV() (string, error) {
 	if err != nil {
 		return "", err
 	}
-	name, err := uploadBackup(settings, payload)
+	name, err := a.uploadBackup(settings, payload)
 	if err != nil {
 		return "", err
 	}
@@ -119,10 +119,11 @@ func (a *App) ListWebDAVBackups() ([]WebDAVBackupDTO, error) {
 	if err != nil {
 		return nil, err
 	}
-	client, err := newWebDAVClient(settings)
+	client, err := newWebDAVClient(a, settings)
 	if err != nil {
 		return nil, err
 	}
+	defer client.close()
 	return client.list()
 }
 
@@ -135,10 +136,11 @@ func (a *App) DeleteWebDAVBackup(name string) error {
 	if err != nil {
 		return err
 	}
-	client, err := newWebDAVClient(settings)
+	client, err := newWebDAVClient(a, settings)
 	if err != nil {
 		return err
 	}
+	defer client.close()
 	return client.delete(name)
 }
 
@@ -149,11 +151,12 @@ func (a *App) RestoreFromWebDAV(name string) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	client, err := newWebDAVClient(settings)
+	client, err := newWebDAVClient(a, settings)
 	if err != nil {
 		return "", err
 	}
 	data, err := client.get(name)
+	client.close()
 	if err != nil {
 		return "", err
 	}
@@ -375,7 +378,7 @@ func (a *App) autoBackupTick(pending string) string {
 	if hash != pending {
 		return hash // 等下一次确认改动已经结束，避免连续修改时传很多份
 	}
-	if _, err := uploadBackup(settings, payload); err != nil {
+	if _, err := a.uploadBackup(settings, payload); err != nil {
 		return hash // 上传失败下次再试
 	}
 	a.saveBackupHash(hash)
@@ -384,11 +387,12 @@ func (a *App) autoBackupTick(pending string) string {
 
 // ---------- 备份文件编码 ----------
 
-func uploadBackup(settings config.WebDAVSettings, payload backupPayload) (string, error) {
-	client, err := newWebDAVClient(settings)
+func (a *App) uploadBackup(settings config.WebDAVSettings, payload backupPayload) (string, error) {
+	client, err := newWebDAVClient(a, settings)
 	if err != nil {
 		return "", err
 	}
+	defer client.close()
 	now := time.Now()
 	payload.CreatedAt = now.Format(time.RFC3339)
 	data, err := encodeBackup(payload, settings.EncryptPassword)
@@ -505,10 +509,12 @@ type webdavClient struct {
 	base     *url.URL
 	username string
 	password string
+	fetcher  *proxiedFetcher // 直连不通时经已有节点重试（安卓上 App 自身不走 VPN）
 	http     *http.Client
 }
 
-func newWebDAVClient(s config.WebDAVSettings) (*webdavClient, error) {
+// newWebDAVClient 创建客户端；用完要 close，关掉可能启动的临时节点代理。
+func newWebDAVClient(a *App, s config.WebDAVSettings) (*webdavClient, error) {
 	u, err := url.Parse(strings.TrimSpace(s.URL))
 	if err != nil || (u.Scheme != "http" && u.Scheme != "https") || u.Host == "" {
 		return nil, errors.New("WebDAV 地址无效，应以 http:// 或 https:// 开头")
@@ -517,18 +523,19 @@ func newWebDAVClient(s config.WebDAVSettings) (*webdavClient, error) {
 		u.Path += "/"
 	}
 	u.RawPath = ""
-	return &webdavClient{base: u, username: s.Username, password: s.Password, http: &http.Client{Timeout: 30 * time.Second}}, nil
+	fetcher := &proxiedFetcher{app: a, timeout: 30 * time.Second}
+	return &webdavClient{base: u, username: s.Username, password: s.Password, fetcher: fetcher, http: &http.Client{Transport: fetcher}}, nil
 }
+
+func (c *webdavClient) close() { c.fetcher.close() }
 
 func (c *webdavClient) do(method, name string, body []byte, headers map[string]string) (*http.Response, error) {
 	target := *c.base
 	if name != "" {
 		target.Path = path.Join(c.base.Path, name)
 	}
-	ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
-	req, err := http.NewRequestWithContext(ctx, method, target.String(), bytes.NewReader(body))
+	req, err := http.NewRequestWithContext(c.fetcher.app.baseContext(), method, target.String(), bytes.NewReader(body))
 	if err != nil {
-		cancel()
 		return nil, err
 	}
 	if c.username != "" || c.password != "" {
@@ -539,22 +546,9 @@ func (c *webdavClient) do(method, name string, body []byte, headers map[string]s
 	}
 	resp, err := c.http.Do(req)
 	if err != nil {
-		cancel()
 		return nil, fmt.Errorf("连接 WebDAV 失败: %w", err)
 	}
-	resp.Body = cancelOnClose{resp.Body, cancel}
 	return resp, nil
-}
-
-type cancelOnClose struct {
-	io.ReadCloser
-	cancel context.CancelFunc
-}
-
-func (c cancelOnClose) Close() error {
-	err := c.ReadCloser.Close()
-	c.cancel()
-	return err
 }
 
 func webdavStatusError(action string, resp *http.Response) error {

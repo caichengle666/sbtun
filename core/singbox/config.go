@@ -35,10 +35,10 @@ const (
 )
 
 // BuildConfigWithAuth 将用户配置转换为 sing-box 运行配置，并用本地凭据保护
-// clash API 和抓包代理端口。resolved 是域名节点当前解析出的地址。
+// clash API 和抓包代理端口。resolved 是节点域名（小写）当前解析出的地址。
 // 三种模式只决定内置的国内直连规则集开不开、匹配不到时走代理还是直连；
 // 自己的规则（分流规则、规则集）在智能和全局下优先生效，直连模式下只保留屏蔽类。
-func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth, resolved []netip.Addr) ([]byte, error) {
+func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth, resolved map[string][]netip.Addr) ([]byte, error) {
 	if err := config.Validate(cfg); err != nil {
 		return nil, err
 	}
@@ -76,9 +76,9 @@ func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth, resol
 	if runtime.GOOS == "windows" || runtime.GOOS == "linux" {
 		tunInbound["interface_name"] = tun.InterfaceName
 	}
-	// Node servers bypass TUN at the OS routing level, so Ping/TCPing from
-	// sbtun reach each node directly instead of going through the current node.
-	if exclude := nodeBypassPrefixes(cfg.Nodes, resolved, cfg.IPv6Enabled); len(exclude) > 0 {
+	// 直连型节点的 IP 在系统路由层绕过 TUN，Ping/TCPing 测的是节点本身，不经当前节点。
+	exclude, shared := nodeAddrs(cfg.Nodes, resolved, cfg.IPv6Enabled)
+	if len(exclude) > 0 {
 		tunInbound["route_exclude_address"] = exclude
 	}
 	if runtime.GOOS == "android" {
@@ -106,7 +106,7 @@ func BuildConfigWithAuth(cfg config.Config, exeDir string, auth LocalAuth, resol
 		Inbounds:  inbounds,
 		Outbounds: outbounds,
 		Endpoints: endpoints,
-		Route:     routeForMode(cfg, ruleSets, targets, exeDir),
+		Route:     routeForMode(cfg, ruleSets, targets, exeDir, shared),
 		Experimental: map[string]any{
 			"cache_file": map[string]any{"enabled": true},
 			"clash_api":  clashAPI,
@@ -215,13 +215,17 @@ func buildDNS(mode config.DNSMode, routeMode config.RoutingMode, nodeDomains []s
 	return map[string]any{"servers": servers, "rules": rules, "final": final, "strategy": "prefer_ipv4"}
 }
 
-func routeForMode(cfg config.Config, ruleSets []configuredRuleSet, targets map[string]string, exeDir string) map[string]any {
+// shared 是走 CDN 的节点 IP：不能整体绕过 TUN，只让发往它们的 Ping（ICMP）直连，代理出站转发不了 ICMP。
+func routeForMode(cfg config.Config, ruleSets []configuredRuleSet, targets map[string]string, exeDir string, shared []string) map[string]any {
 	mode, captureEnabled, captureDomains := cfg.RoutingMode, cfg.CaptureEnabled, cfg.CaptureDomains
 	private := map[string]any{"ip_is_private": true, "outbound": "direct"}
 	dns := map[string]any{"protocol": "dns", "action": "hijack-dns"}
 	base := []map[string]any{
 		{"inbound": []string{"tun-in"}, "action": "sniff", "timeout": "1s"},
 		dns,
+	}
+	if len(shared) > 0 && runtime.GOOS != "android" {
+		base = append(base, map[string]any{"network": "icmp", "ip_cidr": shared, "outbound": "direct"})
 	}
 	domains, keywords := splitCapturePatterns(captureDomains)
 	if captureEnabled {
@@ -454,7 +458,7 @@ func buildOutbound(n config.Node) (map[string]any, error) {
 func buildStandardOutbound(protocol string, n config.Node) map[string]any {
 	out := map[string]any{"type": protocol, "tag": "proxy", "server": n.Server, "server_port": n.Port, "domain_resolver": "dns-local"}
 	// TLS 类参数只在 tls 开关打开时生效：security=none 的链接常带着 sni/fp，不能因此开 TLS。
-	tlsOn := protocol == "tuic" || protocol == "anytls" || settingOn(n.Settings["tls"]) || n.Settings["reality_public_key"] != ""
+	tlsOn := tlsEnabled(protocol, n.Settings)
 	for k, v := range n.Settings {
 		if strings.HasPrefix(k, "transport_") || isTLSKey(k) && !tlsOn {
 			continue
@@ -486,6 +490,10 @@ func buildStandardOutbound(protocol string, n config.Node) map[string]any {
 }
 
 func settingOn(v string) bool { return v == "1" || strings.EqualFold(v, "true") }
+
+func tlsEnabled(protocol string, settings map[string]string) bool {
+	return protocol == "tuic" || protocol == "anytls" || settingOn(settings["tls"]) || settings["reality_public_key"] != ""
+}
 
 func isTLSKey(k string) bool {
 	switch k {
@@ -831,28 +839,73 @@ func literalIP(server string) (netip.Addr, bool) {
 	return addr, err == nil
 }
 
-// nodeBypassPrefixes lists node server IPs (literal or resolved) as host
-// prefixes. Private and loopback addresses never enter TUN and are skipped.
-func nodeBypassPrefixes(nodes []config.Node, resolved []netip.Addr, ipv6Enabled bool) []string {
-	addrs := append([]netip.Addr(nil), resolved...)
+// cloudflareRanges 是 Cloudflare 公布的网段（https://www.cloudflare.com/ips-v4 、ips-v6）。
+var cloudflareRanges = func() []netip.Prefix {
+	var out []netip.Prefix
+	for _, s := range strings.Fields(`173.245.48.0/20 103.21.244.0/22 103.22.200.0/22 103.31.4.0/22 141.101.64.0/18
+		108.162.192.0/18 190.93.240.0/20 188.114.96.0/20 197.234.240.0/22 198.41.128.0/17 162.158.0.0/15
+		104.16.0.0/13 104.24.0.0/14 172.64.0.0/13 131.0.72.0/22 2400:cb00::/32 2606:4700::/32 2803:f800::/32
+		2405:b500::/32 2405:8100::/32 2a06:98c0::/29 2c0f:f248::/32`) {
+		out = append(out, netip.MustParsePrefix(s))
+	}
+	return out
+}()
+
+// BypassesTUN 报告运行中发往节点地址 addr 的流量是否绕过 TUN：内网地址本来就不进 TUN；
+// 公网地址只有直连型节点才写进 route_exclude_address。走 CDN 的节点（ws/httpupgrade/grpc/xhttp 加 TLS，或 IP 在
+// Cloudflare 网段）的 IP 是很多网站共用的，排除会让这些网站的流量全部绕过分流和屏蔽规则。
+func BypassesTUN(node config.Node, addr netip.Addr) bool {
+	addr = addr.Unmap().WithZone("")
+	if !entersTUN(addr) {
+		return true
+	}
+	switch firstNonEmpty(node.Settings["transport_type"], node.Settings["transport"]) {
+	case "ws", "httpupgrade", "grpc", "xhttp", "splithttp":
+		if tlsEnabled(strings.ToLower(strings.TrimSpace(node.Protocol)), node.Settings) {
+			return false
+		}
+	}
+	for _, prefix := range cloudflareRanges {
+		if prefix.Contains(addr) {
+			return false
+		}
+	}
+	return true
+}
+
+// entersTUN 报告地址会不会被 TUN 接管：内网、回环、链路本地地址不会。
+func entersTUN(addr netip.Addr) bool {
+	return addr.IsValid() && !addr.IsLoopback() && !addr.IsPrivate() && !addr.IsUnspecified() && !addr.IsLinkLocalUnicast()
+}
+
+// nodeAddrs 把节点 IP（字面 IP 或解析结果）分成两组主机前缀：exclude 写进 route_exclude_address，
+// shared 是走 CDN 的节点 IP。不进 TUN 的地址跳过；IPv6 关闭时跳过 IPv6。
+// 同一个 IP 两组都有时按 shared 算，宁可测速多绕一层也不漏掉网站流量。
+func nodeAddrs(nodes []config.Node, resolved map[string][]netip.Addr, ipv6Enabled bool) (exclude, shared []string) {
+	bypass := make(map[netip.Addr]bool)
 	for _, node := range nodes {
+		addrs := resolved[strings.ToLower(strings.TrimSpace(node.Server))]
 		if addr, ok := literalIP(node.Server); ok {
-			addrs = append(addrs, addr)
+			addrs = []netip.Addr{addr}
+		}
+		for _, addr := range addrs {
+			addr = addr.Unmap().WithZone("")
+			if !entersTUN(addr) || (addr.Is6() && !ipv6Enabled) {
+				continue
+			}
+			ok, seen := bypass[addr]
+			bypass[addr] = BypassesTUN(node, addr) && (ok || !seen)
 		}
 	}
-	seen := make(map[netip.Addr]struct{})
-	var prefixes []string
-	for _, addr := range addrs {
-		addr = addr.Unmap().WithZone("")
-		if !addr.IsValid() || addr.IsLoopback() || addr.IsPrivate() || addr.IsUnspecified() || addr.IsLinkLocalUnicast() || (addr.Is6() && !ipv6Enabled) {
-			continue
+	for addr, ok := range bypass {
+		prefix := netip.PrefixFrom(addr, addr.BitLen()).String()
+		if ok {
+			exclude = append(exclude, prefix)
+		} else {
+			shared = append(shared, prefix)
 		}
-		if _, ok := seen[addr]; ok {
-			continue
-		}
-		seen[addr] = struct{}{}
-		prefixes = append(prefixes, netip.PrefixFrom(addr, addr.BitLen()).String())
 	}
-	sort.Strings(prefixes)
-	return prefixes
+	sort.Strings(exclude)
+	sort.Strings(shared)
+	return exclude, shared
 }

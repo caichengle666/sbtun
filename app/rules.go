@@ -31,7 +31,7 @@ type fetchedRuleSet struct {
 
 func (f *proxiedFetcher) fetchRule(rawURL string) ([]byte, error) {
 	var data []byte
-	err := f.do(func(client *http.Client) error {
+	err := f.do(f.app.baseContext(), func(client *http.Client) error {
 		var err error
 		data, err = rules.Fetch(f.app.baseContext(), client, rawURL)
 		return err

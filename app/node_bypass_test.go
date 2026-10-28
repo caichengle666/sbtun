@@ -22,7 +22,7 @@ func TestNodeResolverCachesAndKeepsStaleAnswers(t *testing.T) {
 		return []netip.Addr{netip.MustParseAddr("198.51.100.9")}, nil
 	}}
 	nodes := []config.Node{{Server: "node.example.com"}, {Server: "203.0.113.7"}}
-	if got := r.resolve(nodes); len(got) != 1 || got[0].String() != "198.51.100.9" {
+	if got := r.resolve(nodes); len(got) != 1 || len(got["node.example.com"]) != 1 || got["node.example.com"][0].String() != "198.51.100.9" {
 		t.Fatalf("resolved=%v", got)
 	}
 	r.resolve(nodes)

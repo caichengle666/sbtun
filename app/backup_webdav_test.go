@@ -76,7 +76,7 @@ func TestWebDAVBackupSkipsSubscriptionNodesAndRestores(t *testing.T) {
 			}
 
 			// 备份内容里没有订阅节点
-			client, _ := newWebDAVClient(settings)
+			client, _ := newWebDAVClient(nil, settings)
 			data, err := client.get(name)
 			if err != nil {
 				t.Fatal(err)
@@ -167,7 +167,7 @@ func TestBackupFingerprintIgnoresSubscriptionNodes(t *testing.T) {
 func TestWebDAVBackupKeepsLatestTen(t *testing.T) {
 	dav, puts := newWebDAVTestServer(t)
 	settings := config.WebDAVSettings{URL: dav.URL + "/keep/", Username: "u", Password: "p"}
-	client, _ := newWebDAVClient(settings)
+	client, _ := newWebDAVClient(nil, settings)
 	if err := client.ensureDir(); err != nil {
 		t.Fatal(err)
 	}
@@ -178,7 +178,7 @@ func TestWebDAVBackupKeepsLatestTen(t *testing.T) {
 	}
 	a := newBackupTestApp(t)
 	payload, _, _ := a.buildBackup()
-	name, err := uploadBackup(settings, payload)
+	name, err := a.uploadBackup(settings, payload)
 	if err != nil {
 		t.Fatal(err)
 	}
@@ -194,7 +194,7 @@ func TestWebDAVWrongPassword(t *testing.T) {
 	if err == nil || !strings.Contains(err.Error(), "账号或密码") {
 		t.Fatalf("err=%v", err)
 	}
-	if _, err := newWebDAVClient(config.WebDAVSettings{URL: "ftp://x"}); err == nil {
+	if _, err := newWebDAVClient(nil, config.WebDAVSettings{URL: "ftp://x"}); err == nil {
 		t.Fatal("ftp url accepted")
 	}
 }
@@ -274,7 +274,7 @@ func TestRestoreRollsBackRuleSetsWhenConfigFails(t *testing.T) {
 	if err := os.WriteFile(filepath.Join(dir, "rules", "ads.srs"), []byte("x"), 0o644); err != nil {
 		t.Fatal(err)
 	}
-	name, err := uploadBackup(settings, backupPayload{App: "sbtun", Version: 1, Config: cfg,
+	name, err := (*App)(nil).uploadBackup(settings, backupPayload{App: "sbtun", Version: 1, Config: cfg,
 		RuleSets: []rules.RuleSet{{ID: "ads", Name: "ads", URL: "https://example.com/ads.srs", Path: "ads.srs", Enabled: true}}})
 	if err != nil {
 		t.Fatal(err)

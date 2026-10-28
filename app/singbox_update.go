@@ -74,7 +74,9 @@ func (a *App) UpdateSingBox() (SingBoxUpdateResult, error) {
 			return SingBoxUpdateResult{}, fmt.Errorf("读取当前 sing-box 版本失败: %w", err)
 		}
 	}
-	client := &http.Client{Timeout: 5 * time.Minute}
+	fetcher := &proxiedFetcher{app: a, timeout: 5 * time.Minute}
+	defer fetcher.close()
+	client := &http.Client{Transport: fetcher}
 	release, err := latestGitHubRelease(ctx, client, singBoxLatestReleaseURL, "sing-box")
 	if err != nil {
 		return SingBoxUpdateResult{}, err
@@ -95,6 +97,7 @@ func (a *App) UpdateSingBox() (SingBoxUpdateResult, error) {
 		}
 	}
 	candidate, err := downloadSingBoxAsset(ctx, client, release, runtime.GOOS, runtime.GOARCH)
+	fetcher.close() // 临时代理用的正是要替换的内核，替换前先停掉（Windows 上运行中的 exe 不能覆盖）
 	if err != nil {
 		return result, err
 	}

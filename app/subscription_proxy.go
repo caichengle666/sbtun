@@ -1,9 +1,11 @@
 package app
 
 import (
+	"bytes"
 	"context"
 	"errors"
 	"fmt"
+	"io"
 	"net"
 	"net/http"
 	"net/url"
@@ -13,7 +15,7 @@ import (
 	"github.com/caichengle666/sbtun/config"
 )
 
-// 直连下载（订阅、规则集）失败（被墙、连接被重置）时，最多换几个已有节点代理下载。
+// 直连请求（订阅、规则集、新版本检查与下载、WebDAV 备份）网络不通（被墙、连接被重置）时，最多换几个已有节点代理。
 const subscriptionProxyTries = 3
 
 // parseSubscription 和包级同名函数一样，但订阅地址直连不通时会经已有节点下载，
@@ -42,7 +44,7 @@ type proxiedFetcher struct {
 
 func (f *proxiedFetcher) fetch(link, userAgent string) (string, error) {
 	var body string
-	err := f.do(func(client *http.Client) error {
+	err := f.do(f.app.baseContext(), func(client *http.Client) error {
 		var err error
 		body, f.usage, err = fetchURLWith(client, link, userAgent)
 		return err
@@ -60,13 +62,14 @@ func needsProxy(err error) bool {
 	return errors.As(err, &urlErr) || errors.As(err, &netErr)
 }
 
-func (f *proxiedFetcher) do(request func(*http.Client) error) error {
+// do 用直连或节点代理的 client 执行 request，每次尝试各有 f.timeout；ctx 已结束（取消、超时）就不再经节点重试。
+func (f *proxiedFetcher) do(ctx context.Context, request func(*http.Client) error) error {
 	f.mu.Lock()
 	direct := f.direct
 	f.mu.Unlock()
 	if direct == nil {
 		err := request(&http.Client{Timeout: f.timeout})
-		if !needsProxy(err) {
+		if !needsProxy(err) || ctx.Err() != nil {
 			return err
 		}
 		direct = err
@@ -79,7 +82,7 @@ func (f *proxiedFetcher) do(request func(*http.Client) error) error {
 	if f.proxy != nil {
 		return request(f.proxy.client)
 	}
-	if f.tried || f.app == nil {
+	if f.tried || f.app == nil || ctx.Err() != nil {
 		return f.direct
 	}
 	f.tried = true
@@ -106,6 +109,43 @@ func (f *proxiedFetcher) do(request func(*http.Client) error) error {
 		return f.direct
 	}
 	return fmt.Errorf("%v；经节点下载也失败（%s）", f.direct, last)
+}
+
+// RoundTrip 让任意 http.Client 用上同样的兜底（WebDAV 的 PUT/PROPFIND、带认证的请求都行）：
+// 每次尝试都重放请求体；重定向不在这里跟随，交给外层 client，它的 CheckRedirect 照常生效。
+func (f *proxiedFetcher) RoundTrip(req *http.Request) (*http.Response, error) {
+	getBody := req.GetBody
+	if req.Body != nil && req.Body != http.NoBody {
+		if getBody == nil {
+			data, err := io.ReadAll(req.Body)
+			if err != nil {
+				req.Body.Close()
+				return nil, err
+			}
+			getBody = func() (io.ReadCloser, error) { return io.NopCloser(bytes.NewReader(data)), nil }
+		}
+		req.Body.Close()
+	}
+	var response *http.Response
+	err := f.do(req.Context(), func(client *http.Client) error {
+		attempt := req.Clone(req.Context())
+		if getBody != nil {
+			body, err := getBody()
+			if err != nil {
+				return err
+			}
+			attempt.Body = body
+		}
+		once := *client
+		once.CheckRedirect = func(*http.Request, []*http.Request) error { return http.ErrUseLastResponse }
+		var err error
+		response, err = once.Do(attempt)
+		return err
+	})
+	if urlErr, ok := err.(*url.Error); ok {
+		err = urlErr.Err // 外层 client 会再包一层 url.Error
+	}
+	return response, err
 }
 
 func (f *proxiedFetcher) close() {

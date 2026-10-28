@@ -615,7 +615,7 @@ func TestNodeServersBypassTUNAndResolveLocally(t *testing.T) {
 		config.Node{ID: "dn", Name: "dn", Protocol: "socks", Server: "Node.Example.com", Port: 1080},
 		config.Node{ID: "dn2", Name: "dn2", Protocol: "socks", Server: "node.example.com", Port: 1081},
 	)
-	resolved := []netip.Addr{netip.MustParseAddr("198.51.100.9"), netip.MustParseAddr("203.0.113.7")}
+	resolved := map[string][]netip.Addr{"node.example.com": {netip.MustParseAddr("198.51.100.9"), netip.MustParseAddr("203.0.113.7")}}
 	data, err := BuildConfigWithAuth(cfg, t.TempDir(), LocalAuth{}, resolved)
 	if err != nil {
 		t.Fatal(err)
@@ -650,6 +650,58 @@ func TestNodeServersBypassTUNAndResolveLocally(t *testing.T) {
 		}
 		if output, err := exec.Command(binary, "check", "-c", path).CombinedOutput(); err != nil {
 			t.Fatalf("sing-box check failed: %v\n%s\n%s", err, output, data)
+		}
+	}
+}
+
+// 走 CDN 的节点（ws/grpc 等加 TLS，或 IP 在 Cloudflare 网段）的 IP 不进 route_exclude_address，
+// 否则共用这些 IP 的网站都会绕过 TUN；只让发往它们的 ICMP 直连，Ping 仍能测。
+func TestCDNNodesStayInTUN(t *testing.T) {
+	uuid := "00000000-0000-0000-0000-000000000001"
+	ws := map[string]string{"uuid": uuid, "tls": "true", "transport_type": "ws", "transport_path": "/ws"}
+	cfg := testConfig(config.RoutingSmart)
+	cfg.Nodes = append(cfg.Nodes,
+		config.Node{ID: "cdn", Name: "cdn", Protocol: "vless", Server: "cdn.example.com", Port: 443, Settings: ws},
+		config.Node{ID: "grpc", Name: "grpc", Protocol: "trojan", Server: "203.0.113.60", Port: 443, Settings: map[string]string{"password": "p", "tls": "1", "transport_type": "grpc", "transport_service_name": "g"}},
+		config.Node{ID: "cf", Name: "cf", Protocol: "socks", Server: "104.16.1.1", Port: 1080},
+		config.Node{ID: "plainws", Name: "plainws", Protocol: "vless", Server: "203.0.113.50", Port: 80, Settings: map[string]string{"uuid": uuid, "transport_type": "ws"}},
+		config.Node{ID: "direct", Name: "direct", Protocol: "socks", Server: "direct.example.com", Port: 1080},
+	)
+	resolved := map[string][]netip.Addr{
+		"cdn.example.com":    {netip.MustParseAddr("198.51.100.20")},
+		"direct.example.com": {netip.MustParseAddr("198.51.100.30"), netip.MustParseAddr("198.51.100.20"), netip.MustParseAddr("2606:4700::1")},
+	}
+	cfg.IPv6Enabled = true
+	data, err := BuildConfigWithAuth(cfg, t.TempDir(), LocalAuth{}, resolved)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var parsed RuntimeConfig
+	if err := json.Unmarshal(data, &parsed); err != nil {
+		t.Fatal(err)
+	}
+	// 198.51.100.20 同时属于直连节点和 CDN 节点，按 CDN 算；2606:4700::/32 是 Cloudflare 网段。
+	if got := fmt.Sprint(parsed.Inbounds[0]["route_exclude_address"]); got != "[198.51.100.30/32 203.0.113.50/32]" {
+		t.Fatalf("route_exclude_address=%v", got)
+	}
+	rules, _ := parsed.Route["rules"].([]any)
+	icmp, _ := rules[2].(map[string]any)
+	if runtime.GOOS != "android" && (icmp["network"] != "icmp" || icmp["outbound"] != "direct" ||
+		fmt.Sprint(icmp["ip_cidr"]) != "[104.16.1.1/32 198.51.100.20/32 203.0.113.60/32 2606:4700::1/128]") {
+		t.Fatalf("icmp rule=%v", icmp)
+	}
+	for addr, want := range map[string]bool{"203.0.113.60": false, "192.168.1.1": true} {
+		if got := BypassesTUN(cfg.Nodes[2], netip.MustParseAddr(addr)); got != want {
+			t.Errorf("BypassesTUN(grpc, %s)=%v", addr, got)
+		}
+	}
+	if binary := os.Getenv("SING_BOX_BINARY"); binary != "" {
+		path := filepath.Join(t.TempDir(), "cdn.json")
+		if err := os.WriteFile(path, data, 0o600); err != nil {
+			t.Fatal(err)
+		}
+		if output, err := exec.Command(binary, "check", "-c", path).CombinedOutput(); err != nil {
+			t.Fatalf("sing-box check failed: %v\n%s", err, output)
 		}
 	}
 }

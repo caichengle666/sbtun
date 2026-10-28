@@ -2,6 +2,7 @@ package singbox
 
 import (
 	"encoding/json"
+	"runtime"
 
 	"github.com/caichengle666/sbtun/config"
 )
@@ -24,7 +25,8 @@ func BuildHealthConfig(node config.Node, listenPort int, username, password stri
 			"users": []map[string]any{{"username": username, "password": password}},
 		}},
 		"outbounds": append(outbounds, map[string]any{"type": "direct", "tag": "direct"}, map[string]any{"type": "block", "tag": "block"}),
-		"route":     map[string]any{"final": "proxy", "default_domain_resolver": "dns-local"},
+		// 绑定物理网卡：TUN 运行时走 CDN 的节点 IP 不再绕过 TUN，临时代理（查落地、经节点下载）要自己避开。
+		"route": map[string]any{"final": "proxy", "default_domain_resolver": "dns-local", "auto_detect_interface": runtime.GOOS != "android"},
 	}
 	if len(endpoints) > 0 {
 		result["endpoints"] = endpoints

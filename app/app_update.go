@@ -19,11 +19,13 @@ type AppUpdateDTO struct {
 	ReleaseURL     string `json:"release_url"`
 }
 
-// CheckAppUpdate asks GitHub for the latest sbtun release tag.
+// CheckAppUpdate asks GitHub for the latest sbtun release tag. 直连 15 秒不通就经已有节点再查。
 func (a *App) CheckAppUpdate() (AppUpdateDTO, error) {
-	ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+	ctx, cancel := context.WithTimeout(a.baseContext(), 45*time.Second)
 	defer cancel()
-	return checkAppUpdate(ctx, http.DefaultTransport, appLatestReleaseURL, Version())
+	fetcher := &proxiedFetcher{app: a, timeout: 15 * time.Second}
+	defer fetcher.close()
+	return checkAppUpdate(ctx, fetcher, appLatestReleaseURL, Version())
 }
 
 // The releases/latest page redirects to .../releases/tag/vX.Y.Z, which avoids

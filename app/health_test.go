@@ -6,6 +6,7 @@ import (
 	"net"
 	"net/http"
 	"net/http/httptest"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -151,4 +152,25 @@ func TestTestNodeUsesUDPForHysteria2(t *testing.T) {
 // testNode runs the checks without a sing-box binary (Ping and port only).
 func testNode(ctx context.Context, node config.Node) NodeHealthDTO {
 	return testNodeWithBinary(ctx, node, "")
+}
+
+// TUN 运行时走 CDN 的节点 TCPing 会被本机协议栈直接握手，不测；直连型节点照常测。
+func TestProbeRunningPortSkipsCDNNodes(t *testing.T) {
+	if runtime.GOOS == "android" {
+		t.Skip("安卓上 App 不走 VPN，照常测")
+	}
+	got := probeRunningPort(context.Background(), config.Node{Server: "104.16.1.1", Port: 443}, "tcp")
+	if got.OK || !strings.Contains(got.Message, "CDN") {
+		t.Fatalf("cdn node probed: %+v", got)
+	}
+	listener, err := net.Listen("tcp", "127.0.0.1:0")
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer listener.Close()
+	port := uint16(listener.Addr().(*net.TCPAddr).Port)
+	ws := map[string]string{"tls": "1", "transport_type": "ws"}
+	if got := probeRunningPort(context.Background(), config.Node{Protocol: "vless", Server: "127.0.0.1", Port: port, Settings: ws}, "tcp"); !got.OK {
+		t.Fatalf("local node not probed: %+v", got)
+	}
 }

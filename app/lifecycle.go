@@ -46,7 +46,7 @@ type RuntimeCoordinator struct {
 	activeData      []byte // 正在运行的 sing-box 配置内容，用来判断重载是否真有必要
 	// activeResolved 是生成 activeData 时节点域名的解析结果。判断配置是否变化时沿用它，
 	// DNS 轮换或缓存过期换了 IP 不会被当成配置变化而重启、断开所有连接。
-	activeResolved []netip.Addr
+	activeResolved map[string][]netip.Addr
 	// LocalAuth protects the clash API and capture proxy ports.
 	LocalAuth singbox.LocalAuth
 	resolver  nodeResolver
@@ -297,10 +297,10 @@ func captureConfigChanged(before, after config.Config) bool {
 // builtConfig 是一份生成好的 sing-box 配置和生成时用到的节点解析结果。
 type builtConfig struct {
 	data     []byte
-	resolved []netip.Addr
+	resolved map[string][]netip.Addr
 }
 
-func (r *RuntimeCoordinator) buildConfig(cfg config.Config, resolved []netip.Addr) ([]byte, error) {
+func (r *RuntimeCoordinator) buildConfig(cfg config.Config, resolved map[string][]netip.Addr) ([]byte, error) {
 	return singbox.BuildConfigWithAuth(cfg, r.resourceDir(), r.LocalAuth, resolved)
 }
 

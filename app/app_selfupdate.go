@@ -80,7 +80,9 @@ func (a *App) UpdateApp() (AppSelfUpdateResult, error) {
 	}
 	ctx, cancel := context.WithTimeout(ctx, 15*time.Minute)
 	defer cancel()
-	client := &http.Client{Timeout: 15 * time.Minute}
+	fetcher := &proxiedFetcher{app: a, timeout: 15 * time.Minute}
+	defer fetcher.close()
+	client := &http.Client{Transport: fetcher}
 	release, err := latestGitHubRelease(ctx, client, appLatestReleaseAPI, "sbtun")
 	if err != nil {
 		return result, err

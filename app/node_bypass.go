@@ -29,7 +29,8 @@ type nodeResolver struct {
 	lookup func(ctx context.Context, host string) ([]netip.Addr, error)
 }
 
-func (r *nodeResolver) resolve(nodes []config.Node) []netip.Addr {
+// resolve 返回节点域名到解析结果的映射；查不到的域名沿用上次的结果，从没查到过就没有这一项。
+func (r *nodeResolver) resolve(nodes []config.Node) map[string][]netip.Addr {
 	domains := singbox.NodeDomains(nodes)
 	now := time.Now()
 	r.mu.Lock()
@@ -73,9 +74,11 @@ func (r *nodeResolver) resolve(nodes []config.Node) []netip.Addr {
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
-	var result []netip.Addr
+	result := make(map[string][]netip.Addr, len(domains))
 	for _, domain := range domains {
-		result = append(result, r.cache[domain].addrs...)
+		if addrs := r.cache[domain].addrs; len(addrs) > 0 {
+			result[domain] = addrs
+		}
 	}
 	return result
 }

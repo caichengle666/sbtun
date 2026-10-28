@@ -1348,7 +1348,9 @@ func sortedSettingKeys(settings map[string]string) []string {
 }
 
 func printAppUpdate() {
-	result, err := app.New().CheckAppUpdate()
+	application := app.New()
+	application.StartupCLI(context.Background()) // 读到节点，直连 GitHub 不通时才能经节点重试
+	result, err := application.CheckAppUpdate()
 	switch {
 	case err != nil:
 		fmt.Fprintln(os.Stderr, err)

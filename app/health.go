@@ -11,7 +11,9 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strconv"
+	"strings"
 	"sync"
 	"time"
 
@@ -71,7 +73,7 @@ func testNodeOnRunningInstance(ctx context.Context, node config.Node) NodeHealth
 	}
 	result := newNodeHealth(node)
 	result.Ping = pingNode(ctx, node.Server)
-	result.Port = probePort(ctx, net.JoinHostPort(node.Server, strconv.Itoa(int(node.Port))), result.Transport)
+	result.Port = probeRunningPort(ctx, node, result.Transport)
 	result.URL = probeURLViaClash(ctx, node)
 	result.Healthy = result.URL.OK
 	if result.Healthy {
@@ -115,6 +117,25 @@ func probePort(ctx context.Context, address, transport string) HealthCheckDTO {
 		return HealthCheckDTO{OK: true, Message: "UDP 可发送", Latency: time.Since(started).Milliseconds()}
 	}
 	return HealthCheckDTO{OK: true, Message: "TCPing 成功", Latency: time.Since(started).Milliseconds()}
+}
+
+// probeRunningPort 是 TUN 运行时的 TCPing。走 CDN 的节点 IP 不绕过 TUN，连接由本机协议栈直接握手，
+// 测出的不是节点延迟，这类节点只看 URL 延迟。安卓上 App 自身不走 VPN，照常测。
+func probeRunningPort(ctx context.Context, node config.Node, transport string) HealthCheckDTO {
+	port := strconv.Itoa(int(node.Port))
+	if runtime.GOOS == "android" || transport != "tcp" {
+		return probePort(ctx, net.JoinHostPort(node.Server, port), transport)
+	}
+	lookupCtx, cancel := context.WithTimeout(ctx, nodeHealthTimeout)
+	addrs, err := net.DefaultResolver.LookupNetIP(lookupCtx, "ip", strings.Trim(node.Server, "[]"))
+	cancel()
+	if err != nil || len(addrs) == 0 {
+		return HealthCheckDTO{Message: fmt.Sprintf("TCPing 失败: 解析节点地址失败: %v", err)}
+	}
+	if !singbox.BypassesTUN(node, addrs[0]) {
+		return HealthCheckDTO{Message: "走 CDN 的节点运行中不测 TCPing，以 URL 延迟为准"}
+	}
+	return probePort(ctx, net.JoinHostPort(addrs[0].String(), port), transport)
 }
 
 func transportLabel(transport string) string {
