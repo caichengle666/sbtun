@@ -20,7 +20,9 @@ var trayIcon []byte
 func main() {
 	releaseInstance, err := app.AcquireSingleInstanceAfterUpdate()
 	if err != nil {
-		app.ShowSingleInstanceMessage()
+		if !app.ActivateRunningInstance() {
+			app.ShowSingleInstanceMessage()
+		}
 		return
 	}
 	defer releaseInstance()

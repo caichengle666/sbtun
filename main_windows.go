@@ -3,6 +3,7 @@
 package main
 
 import (
+	"github.com/caichengle666/sbtun/app"
 	"github.com/wailsapp/wails/v2/pkg/options"
 	"github.com/wailsapp/wails/v2/pkg/options/windows"
 )
@@ -13,5 +14,6 @@ func configurePlatformOptions(appOptions *options.App) {
 		WebviewIsTransparent: false,
 		WindowIsTranslucent:  false,
 		DisableWindowIcon:    false,
+		WindowClassName:      app.WindowClassName,
 	}
 }
