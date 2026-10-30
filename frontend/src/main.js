@@ -38,6 +38,7 @@ const state = {
   appUpdating: false,
   autoSwitch: null,
   singBoxUpdating: false,
+  downloadPercent: { app: null, kernel: null },
   statusState: 'stopped',
   statusMessage: '',
   runtimeNodeID: '',
@@ -334,8 +335,8 @@ function render() {
             <span class="app-version" title="sing-box 内核版本 ${state.singBoxVersion ? 'v' + escapeHtml(state.singBoxVersion) : '读取中'}">内核 ${state.singBoxVersion ? 'v' + escapeHtml(state.singBoxVersion) : '--'}</span>
           </div>
           ${IS_ANDROID ? '' : `<div class="update-actions">
-            <button id="updateApp" class="btn btn-ghost kernel-update-btn" title="下载 sbtun 最新版并自动重启（同 sbtun upgrade）" ${state.appUpdating ? 'disabled' : ''}>${state.appUpdating ? '正在更新…' : '更新程序'}</button>
-            <button id="updateSingBox" class="btn btn-ghost kernel-update-btn" title="检查 sing-box 官方稳定版并更新（同 sbtun kernel update）" ${state.singBoxUpdating ? 'disabled' : ''}>${state.singBoxUpdating ? '正在更新…' : '更新内核'}</button>
+            <button id="updateApp" class="btn btn-ghost kernel-update-btn" title="下载 sbtun 最新版并自动重启（同 sbtun upgrade）" ${state.appUpdating ? 'disabled' : ''}>${state.appUpdating ? updatingLabel('app') : '更新程序'}</button>
+            <button id="updateSingBox" class="btn btn-ghost kernel-update-btn" title="检查 sing-box 官方稳定版并更新（同 sbtun kernel update）" ${state.singBoxUpdating ? 'disabled' : ''}>${state.singBoxUpdating ? updatingLabel('kernel') : '更新内核'}</button>
           </div>`}
         </div>
       </aside>
@@ -347,7 +348,7 @@ function render() {
             <h1>${viewTitle(state.view)}</h1>
           </div>
           <div class="topbar-actions">
-            ${state.appUpdate?.has_update ? `<button id="appUpdate" class="update-pill" type="button" title="当前 v${escapeHtml(state.appUpdate.current_version)}，${IS_ANDROID ? '点击打开下载页' : '点击下载并自动重启'}" ${state.appUpdating ? 'disabled' : ''}><span class="update-dot" aria-hidden="true"></span>${state.appUpdating ? '正在更新…' : '新版本 v' + escapeHtml(state.appUpdate.latest_version)}</button>` : ''}
+            ${state.appUpdate?.has_update ? `<button id="appUpdate" class="update-pill" type="button" title="当前 v${escapeHtml(state.appUpdate.current_version)}，${IS_ANDROID ? '点击打开下载页' : '点击下载并自动重启'}" ${state.appUpdating ? 'disabled' : ''}><span class="update-dot" aria-hidden="true"></span>${state.appUpdating ? updatingLabel('app') : '新版本 v' + escapeHtml(state.appUpdate.latest_version)}</button>` : ''}
             <button id="themeToggle" class="theme-toggle" type="button" aria-label="切换主题" title="切换到${nextTheme().name}主题">${THEME_ICONS[nextTheme().id]}</button>
             <button id="power" data-power class="switch ${state.running ? 'on' : ''}" ${busyAttr('power')}>${powerLabel()}</button>
           </div>
@@ -1600,7 +1601,27 @@ async function updateApp() {
     showToast('更新程序失败：' + errorText(e), 'error')
   } finally {
     state.appUpdating = false
+    state.downloadPercent.app = null
     renderApp()
+  }
+}
+
+function updatingLabel(kind) {
+  const percent = state.downloadPercent[kind]
+  return percent == null ? '正在更新…' : `下载中 ${percent}%`
+}
+
+// 下载进度只改按钮文字，不整页重绘（避免打断正在进行的输入/点击）。
+function onDownloadProgress(kind, done, total) {
+  if (!(kind in state.downloadPercent) || !(total > 0)) return
+  state.downloadPercent[kind] = Math.min(100, Math.floor(done * 100 / total))
+  const ids = kind === 'app' ? ['updateApp', 'appUpdate'] : ['updateSingBox']
+  for (const id of ids) {
+    const button = document.getElementById(id)
+    if (!button?.disabled) continue
+    const text = button.lastChild // 新版本按钮前面还有个圆点 span，只换文字
+    if (text?.nodeType === Node.TEXT_NODE) text.textContent = updatingLabel(kind)
+    else button.textContent = updatingLabel(kind)
   }
 }
 
@@ -2034,6 +2055,7 @@ function bindEvents() {
       showToast('更新内核失败：' + errorText(e), 'error')
     } finally {
       state.singBoxUpdating = false
+      state.downloadPercent.kernel = null
       renderApp()
     }
   })
@@ -2885,6 +2907,7 @@ const RESTORE_ICON = '<svg viewBox="0 0 10 10"><path d="M2.5 2.5V.5h7v7h-2" /><r
 async function setupTitlebar() {
   const runtime = window.runtime
   if (!runtime) return
+  runtime.EventsOn?.('download-progress', onDownloadProgress)
   const platform = (await runtime.Environment().catch(() => ({}))).platform || ''
   document.documentElement.dataset.platform = platform
   if (platform === 'darwin' || platform === 'android') return

@@ -115,7 +115,7 @@ func (a *App) UpdateApp() (AppSelfUpdateResult, error) {
 		}
 		installDir = filepath.Dir(installDir)
 	}
-	archive, err := downloadAppArchive(ctx, client, asset, installDir)
+	archive, err := a.downloadAppArchive(ctx, client, asset, installDir)
 	if err != nil {
 		return result, err
 	}
@@ -196,7 +196,7 @@ func appAssetName(goos, goarch string) (string, error) {
 
 // downloadAppArchive streams the asset into dir (same volume as the install,
 // so later renames stay atomic) and checks its SHA-256.
-func downloadAppArchive(ctx context.Context, client *http.Client, asset githubAsset, dir string) (string, error) {
+func (a *App) downloadAppArchive(ctx context.Context, client *http.Client, asset githubAsset, dir string) (string, error) {
 	request, err := http.NewRequestWithContext(ctx, http.MethodGet, asset.BrowserDownloadURL, nil)
 	if err != nil {
 		return "", err
@@ -215,7 +215,7 @@ func downloadAppArchive(ctx context.Context, client *http.Client, asset githubAs
 		return "", fmt.Errorf("程序目录不可写，无法更新: %w", err)
 	}
 	hash := sha256.New()
-	size, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(response.Body, maxAppArchiveSize+1))
+	size, copyErr := io.Copy(io.MultiWriter(file, hash), io.LimitReader(a.trackDownload("app", response.Body, response.ContentLength), maxAppArchiveSize+1))
 	closeErr := file.Close()
 	fail := func(err error) (string, error) {
 		os.Remove(file.Name())

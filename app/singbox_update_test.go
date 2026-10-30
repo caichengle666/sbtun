@@ -201,6 +201,6 @@ func downloadSingBox(ctx context.Context, client *http.Client, releaseURL, goos,
 		return nil, "", err
 	}
 	version := strings.TrimPrefix(strings.TrimSpace(release.TagName), "v")
-	binary, err := downloadSingBoxAsset(ctx, client, release, goos, goarch)
+	binary, err := New().downloadSingBoxAsset(ctx, client, release, goos, goarch)
 	return binary, version, err
 }

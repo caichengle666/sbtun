@@ -163,14 +163,14 @@ func TestDownloadAppArchiveChecksDigest(t *testing.T) {
 	sum := sha256.Sum256(body)
 	dir := t.TempDir()
 	good := githubAsset{Name: "a.zip", BrowserDownloadURL: server.URL, Digest: "sha256:" + hex.EncodeToString(sum[:])}
-	path, err := downloadAppArchive(context.Background(), server.Client(), good, dir)
+	path, err := New().downloadAppArchive(context.Background(), server.Client(), good, dir)
 	if err != nil || readTestFile(t, path) != "package" {
 		t.Fatalf("download failed: %v", err)
 	}
 	os.Remove(path)
 	bad := good
 	bad.Digest = "sha256:" + hex.EncodeToString(make([]byte, 32))
-	if _, err := downloadAppArchive(context.Background(), server.Client(), bad, dir); err == nil {
+	if _, err := New().downloadAppArchive(context.Background(), server.Client(), bad, dir); err == nil {
 		t.Fatal("expected digest error")
 	}
 	if entries, _ := os.ReadDir(dir); len(entries) != 0 {

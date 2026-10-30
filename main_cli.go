@@ -957,7 +957,9 @@ func runKernelCommand(application *app.App, args []string) error {
 		if status := application.GetStatus(); status.Running {
 			return errors.New("检测到 sing-box 正在运行，请先执行 sbtun stop 再更新内核")
 		}
+		application.SetDownloadProgress(printDownloadProgress)
 		result, err := application.UpdateSingBox()
+		endDownloadProgress()
 		if err != nil {
 			return err
 		}
@@ -969,8 +971,10 @@ func runKernelCommand(application *app.App, args []string) error {
 }
 
 func runUpgradeCommand(application *app.App) error {
-	fmt.Println("正在下载新版本…")
+	fmt.Println("正在检查新版本…")
+	application.SetDownloadProgress(printDownloadProgress)
 	result, err := application.UpdateApp()
+	endDownloadProgress()
 	if err != nil {
 		return err
 	}
@@ -980,6 +984,25 @@ func runUpgradeCommand(application *app.App) error {
 	}
 	fmt.Printf("%s。正在运行的 sbtun（界面或 sbtun run）重新打开后生效\n", result.Message)
 	return nil
+}
+
+var downloadProgressShown bool
+
+// printDownloadProgress 在同一行刷新下载进度，endDownloadProgress 收尾换行。
+func printDownloadProgress(_ string, done, total int64) {
+	downloadProgressShown = true
+	if total > 0 {
+		fmt.Printf("\r下载中 %d%%（%.1f / %.1f MB）  ", done*100/total, float64(done)/(1<<20), float64(total)/(1<<20))
+	} else {
+		fmt.Printf("\r下载中 %.1f MB  ", float64(done)/(1<<20))
+	}
+}
+
+func endDownloadProgress() {
+	if downloadProgressShown {
+		fmt.Println()
+		downloadProgressShown = false
+	}
 }
 
 func runCaptureCommand(application *app.App, args []string) error {

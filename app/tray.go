@@ -4,6 +4,12 @@ package app
 
 import "github.com/wailsapp/wails/v2/pkg/runtime"
 
+func (a *App) emitDownloadProgress(kind string, done, total int64) {
+	if a.ctx != nil {
+		runtime.EventsEmit(a.ctx, "download-progress", kind, done, total)
+	}
+}
+
 func (a *App) HideToTray() {
 	if a.ctx != nil {
 		runtime.WindowHide(a.ctx)

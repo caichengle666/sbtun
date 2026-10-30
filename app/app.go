@@ -22,31 +22,33 @@ import (
 )
 
 type App struct {
-	ctx             context.Context
-	workDir         string
-	binary          string
-	manager         *config.Manager
-	runtime         *RuntimeCoordinator
-	rulesManager    *rules.Manager
-	trayIcon        []byte
-	trayEnd         atomic.Pointer[func()] // 托盘协程写、Shutdown 读，用原子指针避免数据竞争
-	closing         bool                   // Shutdown 已开始，由 operationMu 保护；之后不再启动或重载代理
-	shutdownOnce    sync.Once
-	operationMu     sync.Mutex
-	kernelUpdateMu  sync.Mutex // 内核下载在 operationMu 外进行，靠它防止并发更新
-	appUpdateMu     sync.Mutex // 程序自更新同一时间只允许一个
-	trafficMu       sync.RWMutex
-	failoverMu      sync.Mutex
-	failover        failoverState
-	selectorSyncMu  sync.Mutex
-	selectorSyncEnd context.CancelFunc
-	selectorSyncSeq uint64
-	selectorState   string
-	selectorMessage string
-	uploadRate      uint64
-	downloadRate    uint64
-	uploadTotal     uint64
-	downloadTotal   uint64
+	ctx              context.Context
+	workDir          string
+	binary           string
+	manager          *config.Manager
+	runtime          *RuntimeCoordinator
+	rulesManager     *rules.Manager
+	trayIcon         []byte
+	trayEnd          atomic.Pointer[func()] // 托盘协程写、Shutdown 读，用原子指针避免数据竞争
+	closing          bool                   // Shutdown 已开始，由 operationMu 保护；之后不再启动或重载代理
+	shutdownOnce     sync.Once
+	operationMu      sync.Mutex
+	kernelUpdateMu   sync.Mutex // 内核下载在 operationMu 外进行，靠它防止并发更新
+	appUpdateMu      sync.Mutex // 程序自更新同一时间只允许一个
+	trafficMu        sync.RWMutex
+	failoverMu       sync.Mutex
+	failover         failoverState
+	selectorSyncMu   sync.Mutex
+	selectorSyncEnd  context.CancelFunc
+	selectorSyncSeq  uint64
+	selectorState    string
+	selectorMessage  string
+	uploadRate       uint64
+	downloadRate     uint64
+	uploadTotal      uint64
+	downloadTotal    uint64
+	gui              bool             // 由 Startup 设置；CLI 没有 Wails 界面，不能发事件
+	downloadProgress DownloadProgress // CLI 设置的下载进度回调
 }
 
 var clashAPIBaseURL = "http://127.0.0.1:9090"
@@ -58,6 +60,7 @@ func (a *App) SetTrayIcon(icon []byte) {
 }
 
 func (a *App) Startup(ctx context.Context) {
+	a.gui = true
 	a.startupCore(ctx)
 	// The GUI holds the single-instance lock, so leftovers from a killed run
 	// (system DNS on macOS, an orphaned sing-box) can be undone before TUN is turned on.

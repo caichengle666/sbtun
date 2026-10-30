@@ -96,7 +96,7 @@ func (a *App) UpdateSingBox() (SingBoxUpdateResult, error) {
 			return result, fmt.Errorf("当前版本 %s 高于官方最新稳定版 %s，已跳过降级", current, latest)
 		}
 	}
-	candidate, err := downloadSingBoxAsset(ctx, client, release, runtime.GOOS, runtime.GOARCH)
+	candidate, err := a.downloadSingBoxAsset(ctx, client, release, runtime.GOOS, runtime.GOARCH)
 	fetcher.close() // 临时代理用的正是要替换的内核，替换前先停掉（Windows 上运行中的 exe 不能覆盖）
 	if err != nil {
 		return result, err
@@ -182,7 +182,7 @@ func (a *App) UpdateSingBox() (SingBoxUpdateResult, error) {
 	return result, nil
 }
 
-func downloadSingBoxAsset(ctx context.Context, client *http.Client, release githubRelease, goos, goarch string) ([]byte, error) {
+func (a *App) downloadSingBoxAsset(ctx context.Context, client *http.Client, release githubRelease, goos, goarch string) ([]byte, error) {
 	assetSuffix, binaryName, archiveType, err := singBoxAssetTarget(goos, goarch)
 	if err != nil {
 		return nil, err
@@ -218,7 +218,7 @@ func downloadSingBoxAsset(ctx context.Context, client *http.Client, release gith
 	if archiveResponse.StatusCode != http.StatusOK {
 		return nil, fmt.Errorf("下载 sing-box 失败: HTTP %d", archiveResponse.StatusCode)
 	}
-	archiveData, err := io.ReadAll(io.LimitReader(archiveResponse.Body, maxSingBoxArchiveSize+1))
+	archiveData, err := io.ReadAll(io.LimitReader(a.trackDownload("kernel", archiveResponse.Body, archiveResponse.ContentLength), maxSingBoxArchiveSize+1))
 	if err != nil {
 		return nil, fmt.Errorf("读取 sing-box 下载文件失败: %w", err)
 	}
