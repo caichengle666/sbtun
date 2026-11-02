@@ -1,0 +1,34 @@
+# 源码仓库（私有）的构建会把安装包推成 incoming/* 临时分支，这里据此创建/更新 Release，然后删掉分支。
+name: 发布安装包
+
+on:
+  push:
+    branches: ['incoming/**']
+
+permissions:
+  contents: write
+
+jobs:
+  publish:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: 创建或更新 Release
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set -euo pipefail
+          tag="$(cat TAG)"
+          notes="$(cat NOTES)"
+          files=$(find . -maxdepth 1 -type f ! -name TAG ! -name NOTES -printf '%P\n')
+          if gh release view "$tag" >/dev/null 2>&1; then
+            gh release upload "$tag" $files --clobber
+          else
+            # 各平台并行推送；别的分支先建好了 Release 就改为上传。
+            gh release create "$tag" $files --target main --title "sbtun $tag" --notes "$notes" || gh release upload "$tag" $files --clobber
+          fi
+
+      - name: 删除临时分支
+        if: always()
+        run: git push origin --delete "$GITHUB_REF_NAME"
