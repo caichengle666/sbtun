@@ -19,6 +19,7 @@ jobs:
           GH_TOKEN: ${{ github.token }}
         run: |
           set -euo pipefail
+          cd incoming
           tag="$(cat TAG)"
           notes="$(cat NOTES)"
           files=$(find . -maxdepth 1 -type f ! -name TAG ! -name NOTES -printf '%P\n')
